@@ -61,13 +61,26 @@ jobs:
           tests/bats/run-in-image.sh "$TEST_IMAGE"
       - name: Container tests (offline)
         run: IMAGE="$TEST_IMAGE" tests/container/run.sh
-      - name: Trivy (fail on fixable CRITICAL/HIGH)
+      - name: Trivy gate (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.TEST_IMAGE }}
           format: sarif
           output: trivy.sarif
           exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # OS packages are what this image can patch. IBKR's bundled jars are reported by the
+          # next step but not gated: see docs/limitations.md L08.
+          vuln-type: os
+      - name: Trivy report of IBKR-bundled jars (not gated, docs/limitations.md L08)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.TEST_IMAGE }}
+          vuln-type: library
+          format: table
+          exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
       - name: Upload Trivy SARIF

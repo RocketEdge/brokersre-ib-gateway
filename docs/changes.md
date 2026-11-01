@@ -5,6 +5,26 @@ Next step.
 
 ## Change History
 
+### 2026-11-01 — Second CI run: secrets directory permissions and the Trivy gate scope
+
+- **What changed:** the container harness makes its temporary secrets directory traversable
+  (`chmod 0755`); the Trivy gate in `ci.yml` and `publish.yml` covers OS packages
+  (`vuln-type: os`) and a second, non-gating step prints the findings in IBKR's bundled jars;
+  limitation L08 records them.
+- **Result:** Trivy 0.70.0 locally on image 653f1201000a: 0 fixable OS findings; 12 fixable HIGH
+  findings in vendor jars (jackson-core 2.12.3: CVE-2025-52999, CVE-2026-68494, CVE-2026-89425;
+  jackson-databind 2.12.3: CVE-2020-36518, CVE-2021-46877, CVE-2022-42003, CVE-2022-42004,
+  CVE-2026-54512, CVE-2026-54513, CVE-2026-91776, CVE-2026-91777; commons-io 2.11.0:
+  CVE-2024-47554). The harness change is host-side and was not re-run locally; the CI run after
+  this commit is its evidence.
+- **What did NOT work / root cause:** (1) in CI every container test that needs credentials
+  failed with `secret_unreadable`: `mktemp -d` creates a 0700 directory owned by the runner
+  user (uid 1001) and Linux bind mounts keep host permissions, so uid 1000 inside the container
+  could not traverse it; Docker Desktop on the Windows development host masks host permissions
+  and hid the bug. (2) The publish Trivy gate failed on the vendor jars above, which this image
+  cannot replace without modifying IBKR's application.
+- **Next step:** watch the rerun, `cosign verify` the stable digest, record the run ids.
+
 ### 2026-11-01 — First CI and publish runs: four set-up failures fixed
 
 - **What changed:** `ci.yml` names its test image `TEST_IMAGE`; `publish.yml` re-exports the bake

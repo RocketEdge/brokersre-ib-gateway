@@ -21,7 +21,9 @@ fail() {
 secrets_dir="$(mktemp -d)"
 printf 'dummyuser' >"${secrets_dir}/ib-username"
 printf 'dummypassword-not-real' >"${secrets_dir}/ib-password"
-chmod 0644 "${secrets_dir}"/*
+# mktemp -d creates a 0700 directory; uid 1000 inside the container must be able to traverse it
+# (bind mounts keep host permissions on Linux hosts such as the CI runner).
+chmod 0755 "${secrets_dir}" && chmod 0644 "${secrets_dir}"/*
 host_secrets="${secrets_dir}"
 if command -v cygpath >/dev/null 2>&1; then host_secrets="$(cygpath -m "${secrets_dir}")"; fi
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap

@@ -103,13 +103,26 @@ jobs:
             -R RocketEdge/brokersre-ib-gateway-archive --pattern '*.sh' --dir downloads || echo "archive miss; relying on IBKR's channel URL"
       - name: Build amd64 and load for scanning
         run: docker buildx bake ${{ matrix.channel }} --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
-      - name: Trivy gate before anything is pushed
+      - name: Trivy gate before anything is pushed (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
           format: sarif
           output: trivy.sarif
           exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # OS packages are what this image can patch. IBKR's bundled jars are reported by the
+          # next step but not gated: see docs/limitations.md L08.
+          vuln-type: os
+      - name: Trivy report of IBKR-bundled jars (not gated, docs/limitations.md L08)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
+          vuln-type: library
+          format: table
+          exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
       - name: Upload Trivy SARIF
