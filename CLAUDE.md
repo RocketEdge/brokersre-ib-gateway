@@ -56,7 +56,7 @@ rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl,
 schemas/log-event.v1.schema.json
 tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
 compose/docker-compose.example.yml
-.github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release, codeql
+.github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
 

@@ -46,7 +46,8 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     env:
-      IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+      # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
+      TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: docker/setup-buildx-action@v4.4.1
@@ -57,13 +58,13 @@ jobs:
       - name: Unit suite inside the image (bats)
         run: |
           git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
-          tests/bats/run-in-image.sh "$IMAGE"
+          tests/bats/run-in-image.sh "$TEST_IMAGE"
       - name: Container tests (offline)
-        run: tests/container/run.sh
+        run: IMAGE="$TEST_IMAGE" tests/container/run.sh
       - name: Trivy (fail on fixable CRITICAL/HIGH)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.IMAGE }}
+          image-ref: ${{ env.TEST_IMAGE }}
           format: sarif
           output: trivy.sarif
           exit-code: "1"

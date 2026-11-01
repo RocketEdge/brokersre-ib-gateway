@@ -3,7 +3,7 @@
 - [x] Repository design per BrokerSRE plan section 5.3 (2026-11-01)
 - [x] Dockerfile, bake, versions.json, rootfs scripts, templates, patterns, schema
 - [x] bats unit suite (classify, render, healthcheck, ibc-cmd) and container test script
-- [x] Workflows: ci, publish, rebuild, detect-releases, detect-ibc-release, codeql
+- [x] Workflows: ci, publish, rebuild, detect-releases, detect-ibc-release; CodeQL via GitHub default setup (advanced workflow removed 2026-11-01: default setup rejects it)
 - [x] Docs: README, SECURITY, NOTICE, LICENSE, ADRs 0001-0008, env-vars, log-contract, upgrade policy, migration guide, limitations
 - [ ] Local build of stable (amd64) green; bats and container tests green
 - [ ] First push; `ci.yml` green

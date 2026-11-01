@@ -5,6 +5,25 @@ Next step.
 
 ## Change History
 
+### 2026-11-01 — First CI and publish runs: four set-up failures fixed
+
+- **What changed:** `ci.yml` names its test image `TEST_IMAGE`; `publish.yml` re-exports the bake
+  variables into `GITHUB_ENV` unquoted; the advanced `codeql.yml` was removed because the
+  organisation's default CodeQL setup already covers this repository; `trivy-action` is pinned
+  to the existing `v0.36.0` tag.
+- **Result:** no script changed, so the local evidence of the previous entry stands (bats 25/25,
+  container suite 28/28); the CI and publish runs after this change are the next evidence.
+- **What did NOT work / root cause:** (1) `aquasecurity/trivy-action@0.36.0` does not exist (the
+  tag is `v0.36.0`), so every job referencing it failed at set-up. (2) `docker buildx bake` reads
+  a variable named `IMAGE` from the environment; the CI job exported `IMAGE=...:stable` for the
+  test harness and bake built tags such as `...:stable:10.50.1f`. (3) `GITHUB_ENV` takes
+  `NAME=value` literally; piping the `export NAME='value'` lines of `scripts/bake-env.sh`
+  through `sed 's/^export //'` kept the quotes and produced the tag `...:'10.51.1e'`. (4) GitHub's
+  default CodeQL setup is enabled on this repository by the organisation security configuration
+  and rejects SARIF from an advanced workflow.
+- **Next step:** watch `ci.yml` and `publish.yml`, then `cosign verify` the stable digest and
+  record the run ids.
+
 ### 2026-11-01 — Read-only hardening: tmpfs ownership, structured fail-fast, harness fixes
 
 - **What changed:** The entrypoint verifies that `LOG_DIR`, `RUN_DIR` and `TWS_SETTINGS_PATH` are

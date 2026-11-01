@@ -88,8 +88,10 @@ jobs:
           echo "REBUILD_SUFFIX=$suffix" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}-${ch}${suffix}" >> "$GITHUB_OUTPUT"
-          scripts/bake-env.sh >> "$GITHUB_ENV"
-          sed -i 's/^export //' "$GITHUB_ENV"
+          # GITHUB_ENV takes NAME=value literally (no shell quoting), so re-export the evaluated values.
+          for v in UBUNTU_DIGEST IBC_VERSION IBC_RELEASE_TAG IBC_SHA256 STABLE_VERSION STABLE_MINOR STABLE_SHA256_X64 STABLE_SHA256_ARM LATEST_VERSION LATEST_MINOR LATEST_SHA256_X64 LATEST_SHA256_ARM SOURCE_REVISION CREATED; do
+            echo "$v=${!v}" >> "$GITHUB_ENV"
+          done
       - name: Pre-fetch archived installers when IBKR has moved on (optional)
         # Only needed when rebuilding a version IBKR no longer serves at its channel URL. The
         # private archive needs ARCHIVE_READ_TOKEN; without it the Dockerfile uses IBKR's URL.
