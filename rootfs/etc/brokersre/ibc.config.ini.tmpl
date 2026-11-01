@@ -1,0 +1,56 @@
+# IBC configuration rendered by render-config.sh into /run/brokersre/config.ini (tmpfs, 0600).
+# Keys follow the IBC 3.24 user guide. Defaults chosen for unattended, observable operation:
+# relogin after a 2FA timeout (the IB Key holder is paged), existing session treated as
+# primary, incoming API connections rejected unless trusted, command server on loopback.
+FIX=no
+IbLoginId=${TWS_USERID}
+IbPassword=${TWS_PASSWORD}
+FIXLoginId=
+FIXPassword=
+SecondFactorDevice=${TWOFA_DEVICE}
+ReloginAfterSecondFactorAuthenticationTimeout=${RELOGIN_AFTER_TWOFA_TIMEOUT}
+SecondFactorAuthenticationExitInterval=${TWOFA_EXIT_INTERVAL}
+SecondFactorAuthenticationTimeout=180
+ExitAfterSecondFactorAuthenticationTimeout=no
+TradingMode=${TRADING_MODE}
+AcceptNonBrokerageAccountWarning=yes
+LoginDialogDisplayTimeout=60
+IbDir=
+StoreSettingsOnServer=
+MinimizeMainWindow=no
+ExistingSessionDetectedAction=${EXISTING_SESSION_DETECTED_ACTION}
+OverrideTwsApiPort=
+OverrideTwsMasterClientID=${TWS_MASTER_CLIENT_ID}
+ReadOnlyLogin=no
+ReadOnlyApi=${READ_ONLY_API}
+BypassOrderPrecautions=${BYPASS_WARNING}
+BypassBondWarning=${BYPASS_WARNING}
+BypassNegativeYieldToWorstConfirmation=${BYPASS_WARNING}
+BypassCalledBondWarning=${BYPASS_WARNING}
+BypassSameActionPairTradeWarning=${BYPASS_WARNING}
+BypassPriceBasedVolatilityRiskWarning=${BYPASS_WARNING}
+BypassUSStocksMarketDataInSharesWarning=${BYPASS_WARNING}
+BypassRedirectOrderWarning=${BYPASS_WARNING}
+BypassNoOverfillProtectionPrecaution=${BYPASS_WARNING}
+AcceptBidAskLastSizeDisplayUpdateNotification=accept
+SendMarketDataInLotsForUSstocks=
+TrustedTwsApiClientIPs=
+ResetOrderIdsAtStart=
+ConfirmOrderIdReset=
+AutoLogoffTime=${AUTO_LOGOFF_TIME}
+AutoRestartTime=${AUTO_RESTART_TIME}
+ColdRestartTime=
+ClosedownAt=
+AcceptIncomingConnectionAction=${TWS_ACCEPT_INCOMING}
+AllowBlindTrading=${ALLOW_BLIND_TRADING}
+SaveTwsSettingsAt=${SAVE_TWS_SETTINGS}
+ConfirmCryptoCurrencyOrders=transmit
+DismissPasswordExpiryWarning=no
+DismissNSEComplianceNotice=yes
+CommandServerPort=${IBC_COMMAND_SERVER_PORT}
+ControlFrom=127.0.0.1
+BindAddress=127.0.0.1
+CommandPrompt=
+SuppressInfoMessages=${IBC_SUPPRESS_INFO_MESSAGES}
+LogStructureScope=known
+LogStructureWhen=never

@@ -1,0 +1,23 @@
+# Base image digest and GitHub Actions. IB Gateway and IBC versions are NOT Dependabot's job:
+# detect-releases.yml and detect-ibc-release.yml update versions.json with checksums.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "build(base)"
+    labels: [dependencies, base-image]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+    labels: [dependencies, ci]

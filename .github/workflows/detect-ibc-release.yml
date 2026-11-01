@@ -1,0 +1,54 @@
+# Daily: when RocketEdge/ibc publishes a new <upstream>-rocketedge.N release, compute the Linux
+# zip's SHA-256, update versions.json and open a pull request.
+name: Detect IBC releases
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Compare the newest fork release with versions.json
+        id: cmp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest=$(gh release list -R RocketEdge/ibc --exclude-drafts --exclude-pre-releases --limit 20 --json tagName --jq '[.[] | .tagName | select(test("-rocketedge\\.[0-9]+$"))] | first')
+          current=$(jq -r .ibc.release_tag versions.json)
+          echo "latest=$latest current=$current"
+          { echo "latest=$latest"; echo "current=$current"; if [ -n "$latest" ] && [ "$latest" != "$current" ]; then echo "update=true"; else echo "update=false"; fi; } >> "$GITHUB_OUTPUT"
+      - name: Download the Linux zip and update versions.json
+        if: steps.cmp.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.cmp.outputs.latest }}"
+          version="${tag%-rocketedge.*}"
+          gh release download "$tag" -R RocketEdge/ibc --pattern "IBCLinux-${version}.zip" --dir /tmp/ibc
+          sha=$(sha256sum "/tmp/ibc/IBCLinux-${version}.zip" | cut -d' ' -f1)
+          jq --arg v "$version" --arg t "$tag" --arg s "$sha" '.ibc.version=$v | .ibc.release_tag=$t | .ibc.sha256=$s' versions.json > versions.json.new
+          mv versions.json.new versions.json
+          echo "sha=$sha" >> "$GITHUB_ENV"
+          git diff --stat
+      - uses: peter-evans/create-pull-request@v8.1.1
+        if: steps.cmp.outputs.update == 'true'
+        with:
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: update-ibc-to-${{ steps.cmp.outputs.latest }}
+          title: "build(ibc): IBC ${{ steps.cmp.outputs.current }} -> ${{ steps.cmp.outputs.latest }}"
+          commit-message: "build(ibc): pin IBC ${{ steps.cmp.outputs.latest }} with its SHA-256"
+          labels: ibc-update
+          body: |
+            RocketEdge/ibc published `${{ steps.cmp.outputs.latest }}` (Linux zip SHA-256 `${{ env.sha }}`).
+            Merging publishes new images for both channels (publish.yml).

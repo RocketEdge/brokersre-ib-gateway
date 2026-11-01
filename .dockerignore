@@ -1,0 +1,9 @@
+# Only the Dockerfile inputs reach the build context.
+*
+!Dockerfile
+!downloads/
+!rootfs/
+!scripts/fetch-installer.sh
+downloads/*
+!downloads/.gitkeep
+!downloads/*.sh

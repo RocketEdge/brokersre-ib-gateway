@@ -1,0 +1,6 @@
+# hadolint configuration. DL3008 (pin apt versions) is ignored on purpose: Ubuntu security
+# updates would otherwise force a version bump on every rebuild; the monthly rebuild plus Trivy
+# cover that risk. Everything else is enforced.
+ignored:
+  - DL3008
+failure-threshold: warning

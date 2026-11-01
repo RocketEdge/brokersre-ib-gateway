@@ -1,0 +1,14 @@
+# IBC log classification (log contract v1). Tab-separated: event<TAB>extended-regex<TAB>phase<TAB>level
+# Lines starting with # are comments. The regex is matched against the whole IBC log line with
+# bash's [[ =~ ]] (POSIX ERE). An empty phase means "no phase change".
+# Wording is taken from IBC 3.24.x; VERIFY against scrubbed logs from this image in Phase 0.
+twofa_initiated	IBC: Second Factor Authentication initiated	2fa-pending	warn
+twofa_dialog	detected (dialog|frame) entitled: Second Factor Authentication; event=(Opened|Activated)	2fa-pending	warn
+login_completed	IBC: Login has completed	logged-in	info
+login_failed	IBC: Login failed	login	error
+login_failed_dialog	detected dialog entitled: Unrecognized Username or Password	login	error
+existing_session	detected dialog entitled: Existing session detected	existing-session	warn
+relogin_required	detected dialog entitled: Re-login (is required|to session)	login	warn
+daily_restart	IBC: autorestart file found	restarting	info
+login_dialog	detected frame entitled: (IB Gateway|Login); event=Opened	login	info
+ibc_version	IBC: version	login	info

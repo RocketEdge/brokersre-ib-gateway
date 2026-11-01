@@ -1,0 +1,92 @@
+# Daily: read IBKR's version.json for each channel; when a new build appears, download both
+# installers, compute SHA-256, archive them in the PRIVATE archive repository (when the token is
+# present), update versions.json and open a pull request. A human merges; publish.yml then builds.
+# RocketEdge never redistributes IBKR binaries from this public repository (ADR 0007).
+name: Detect IB Gateway releases
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        channel: [stable, latest]
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Compare IBKR's manifest with versions.json
+        id: cmp
+        run: |
+          res=$(curl -sSfL "https://download2.interactivebrokers.com/installers/ibgateway/${{ matrix.channel }}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
+          remote=$(jq -r .buildVersion <<< "$res")
+          remote_dt=$(jq -r .buildDateTime <<< "$res")
+          local_v=$(jq -r '.channels["${{ matrix.channel }}"].version' versions.json)
+          echo "remote=$remote local=$local_v"
+          {
+            echo "remote=$remote"; echo "remote_dt=$remote_dt"; echo "local=$local_v"
+            if [ "$remote" != "$local_v" ]; then echo "update=true"; else echo "update=false"; fi
+          } >> "$GITHUB_OUTPUT"
+      - name: Download both installers and compute checksums
+        if: steps.cmp.outputs.update == 'true'
+        id: dl
+        run: |
+          set -euo pipefail
+          mkdir -p archive
+          for arch in x64 arm; do
+            url="https://download2.interactivebrokers.com/installers/ibgateway/${{ matrix.channel }}-standalone/ibgateway-${{ matrix.channel }}-standalone-linux-${arch}.sh"
+            dest="archive/ibgateway-${{ steps.cmp.outputs.remote }}-standalone-linux-${arch}.sh"
+            curl -sSfL --retry 3 "$url" -o "$dest"
+            sha256sum "$dest" | cut -d' ' -f1 > "$dest.sha256"
+            echo "sha_${arch}=$(cat "$dest.sha256")" >> "$GITHUB_OUTPUT"
+          done
+          ls -la archive
+      - name: Archive installers privately (needs ARCHIVE_WRITE_TOKEN)
+        if: steps.cmp.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_WRITE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::ARCHIVE_WRITE_TOKEN not set; installers not archived (reproducible rebuilds of this version will depend on IBKR keeping the URL)"; exit 0; fi
+          tag="ibgateway-${{ matrix.channel }}@${{ steps.cmp.outputs.remote }}"
+          if gh release view "$tag" -R RocketEdge/brokersre-ib-gateway-archive >/dev/null 2>&1; then
+            gh release upload "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --clobber
+          else
+            gh release create "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --title "IB Gateway ${{ matrix.channel }} ${{ steps.cmp.outputs.remote }}" \
+              --notes "Installer archive for reproducible builds of brokersre-ib-gateway. SHA-256 computed by RocketEdge on $(date -u +%Y-%m-%d). Build ${{ steps.cmp.outputs.remote_dt }}."
+          fi
+      - name: Update versions.json
+        if: steps.cmp.outputs.update == 'true'
+        run: |
+          jq --arg ch "${{ matrix.channel }}" --arg v "${{ steps.cmp.outputs.remote }}" --arg dt "${{ steps.cmp.outputs.remote_dt }}" \
+             --arg x64 "${{ steps.dl.outputs.sha_x64 }}" --arg arm "${{ steps.dl.outputs.sha_arm }}" \
+             '.channels[$ch] = {version:$v, build_datetime:$dt, sha256:{x64:$x64, arm:$arm}}' versions.json > versions.json.new
+          mv versions.json.new versions.json
+          rm -rf archive
+          git diff --stat
+      - uses: peter-evans/create-pull-request@v8.1.1
+        if: steps.cmp.outputs.update == 'true'
+        with:
+          # BOT_TOKEN (fine-grained PAT) lets CI run on the PR; GITHUB_TOKEN-authored PRs do not trigger workflows.
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: update-${{ matrix.channel }}-to-${{ steps.cmp.outputs.remote }}
+          title: "build(${{ matrix.channel }}): IB Gateway ${{ steps.cmp.outputs.local }} -> ${{ steps.cmp.outputs.remote }}"
+          commit-message: "build(${{ matrix.channel }}): pin IB Gateway ${{ steps.cmp.outputs.remote }} with RocketEdge-computed SHA-256"
+          labels: gateway-update,channel:${{ matrix.channel }}
+          body: |
+            IBKR published **${{ steps.cmp.outputs.remote }}** on the `${{ matrix.channel }}` channel (build ${{ steps.cmp.outputs.remote_dt }}).
+
+            - x64 SHA-256: `${{ steps.dl.outputs.sha_x64 }}`
+            - arm SHA-256: `${{ steps.dl.outputs.sha_arm }}`
+
+            Merging publishes the new image (publish.yml). Downstream, BrokerSRE's `image-pin.yml` picks the
+            new digest up only after `cosign verify` and the operator-run paper regression (runbook R10).

@@ -1,0 +1,15 @@
+# SYNTHETIC FIXTURE - not a real log. Wording modelled on IBC 3.24.x; replace with scrubbed real lines in Phase 0.
+2026-11-01 09:00:00:001 IBC: version 3.24.2
+2026-11-01 09:00:00:120 IBC: Starting IBC
+2026-11-01 09:00:03:400 IBC: detected frame entitled: IB Gateway; event=Opened
+2026-11-01 09:00:03:450 IBC: Login dialog WINDOW_OPENED: Username=ABC123 Password=hunter2hunter2
+2026-11-01 09:00:05:000 IBC: Second Factor Authentication initiated
+2026-11-01 09:00:05:010 IBC: detected dialog entitled: Second Factor Authentication; event=Opened
+2026-11-01 09:03:05:000 IBC: detected dialog entitled: Second Factor Authentication; event=Closed
+2026-11-01 09:03:07:000 IBC: Login has completed
+2026-11-02 00:15:00:000 IBC: autorestart file found
+2026-11-02 00:15:40:000 IBC: Login has completed
+2026-11-03 10:00:00:000 IBC: detected dialog entitled: Existing session detected; event=Opened
+2026-11-03 10:00:00:500 IBC: detected dialog entitled: Re-login is required; event=Opened
+2026-11-04 10:00:00:000 IBC: detected dialog entitled: Unrecognized Username or Password; event=Opened
+2026-11-04 10:00:00:100 IBC: Login failed

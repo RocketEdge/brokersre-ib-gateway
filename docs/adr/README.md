@@ -1,0 +1,15 @@
+# Architecture Decision Records
+
+| ADR | Title | Status |
+|---|---|---|
+| [0001](0001-derive-from-gnzsnz-under-mit.md) | Derive from gnzsnz/ib-gateway-docker under MIT with attribution | Accepted (2026-11-01) |
+| [0002](0002-single-dockerfile-bake-versions-json.md) | One Dockerfile + docker-bake + versions.json; every input verified by SHA-256 | Accepted (2026-11-01) |
+| [0003](0003-no-sudo-read-only-filesystem.md) | No sudo, uid 1000, read-only root filesystem | Accepted (2026-11-01) |
+| [0004](0004-remove-ssh-dual-mode-tws.md) | Remove SSH tunnel, dual mode and the TWS desktop image | Accepted (2026-11-01) |
+| [0005](0005-command-server-on-loopback.md) | IBC command server enabled on loopback for a namespace-sharing sidecar | Accepted (2026-11-01) |
+| [0006](0006-json-log-contract-and-phase-file.md) | JSON log contract on stdout, raw logs on a volume, phase file | Accepted (2026-11-01) |
+| [0007](0007-ibc-from-rocketedge-fork-no-ibkr-redistribution.md) | IBC from the RocketEdge fork; IBKR binaries never redistributed | Accepted (2026-11-01) |
+| [0008](0008-tagging-and-rebuild-policy.md) | Tagging: channel + version tags, no Docker latest, monthly -rDATE rebuilds | Accepted (2026-11-01) |
+
+Template: Status, Context (with sources), Decision, Consequences (positive and negative),
+Revisit trigger. Never renumber or delete; supersede with a new record.

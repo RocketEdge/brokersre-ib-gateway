@@ -1,0 +1,5 @@
+# shellcheck configuration for rootfs scripts and tests.
+shell=bash
+# SC1091: sourced files are resolved at runtime via BROKERSRE_LIB; shellcheck cannot follow them.
+disable=SC1091
+enable=require-variable-braces,quote-safe-variables

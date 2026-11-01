@@ -1,0 +1,10 @@
+# markdownlint configuration (also used by the pre-commit hook). Line length is not a quality
+# signal here (tables and commands are long by nature); structure rules stay on.
+default: true
+MD013: false
+MD024:
+  siblings_only: true
+MD033: false
+MD034: false
+MD041: false
+MD060: false

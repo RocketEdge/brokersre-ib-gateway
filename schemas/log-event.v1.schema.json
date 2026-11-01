@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RocketEdge/brokersre-ib-gateway/schemas/log-event.v1.schema.json",
+  "title": "brokersre-ib-gateway container stdout event (log contract v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ts", "src", "level", "event", "msg"],
+  "properties": {
+    "ts": { "type": "string", "description": "UTC timestamp, ISO-8601 with milliseconds and Z suffix", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+    "src": { "type": "string", "enum": ["entrypoint", "ibc", "xvfb", "vnc", "socat", "healthcheck"] },
+    "level": { "type": "string", "enum": ["info", "warn", "error"] },
+    "event": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "msg": { "type": "string", "description": "Human-readable text. Never a raw IBC or Gateway log line and never a credential." }
+  }
+}

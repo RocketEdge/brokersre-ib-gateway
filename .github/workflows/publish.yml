@@ -1,0 +1,177 @@
+# Build, scan, push, sign and attest both channels whenever an image input changes on main, or on
+# demand (also used for monthly OS-patch rebuilds with a -rYYYYMMDD suffix). Each channel gets a
+# git tag v<version>-<channel>[-rDATE] and a GitHub release carrying digests.json and the SBOM.
+# The scan runs on the amd64 build BEFORE anything is pushed, so a vulnerable build never moves a tag.
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - versions.json
+      - Dockerfile
+      - docker-bake.hcl
+      - rootfs/**
+      - scripts/fetch-installer.sh
+      - .github/workflows/publish.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: OS-patch rebuild of the pinned versions (adds -rYYYYMMDD tags, re-points channel tags)
+        type: boolean
+        default: false
+      channels:
+        description: Channels to publish (space separated)
+        type: string
+        default: "stable latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      channels: ${{ steps.plan.outputs.channels }}
+    steps:
+      - id: plan
+        run: |
+          raw="${{ inputs.channels || 'stable latest' }}"
+          json=$(printf '%s\n' $raw | jq -R . | jq -sc .)
+          echo "channels=$json" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: ${{ fromJson(needs.plan.outputs.channels) }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-qemu-action@v4.4.0
+        with:
+          platforms: linux/amd64,linux/arm64
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve build variables
+        id: vars
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          ch="${{ matrix.channel }}"
+          case "$ch" in
+            stable) version="$STABLE_VERSION" ;;
+            latest) version="$LATEST_VERSION" ;;
+            *) echo "unknown channel $ch"; exit 1 ;;
+          esac
+          suffix=""
+          if [ "${{ inputs.rebuild }}" = "true" ]; then suffix="-r$(date -u +%Y%m%d)"; fi
+          echo "REBUILD_SUFFIX=$suffix" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-${ch}${suffix}" >> "$GITHUB_OUTPUT"
+          scripts/bake-env.sh >> "$GITHUB_ENV"
+          sed -i 's/^export //' "$GITHUB_ENV"
+      - name: Pre-fetch archived installers when IBKR has moved on (optional)
+        # Only needed when rebuilding a version IBKR no longer serves at its channel URL. The
+        # private archive needs ARCHIVE_READ_TOKEN; without it the Dockerfile uses IBKR's URL.
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "no ARCHIVE_READ_TOKEN; relying on IBKR's channel URL"; exit 0; fi
+          gh release download "ibgateway-${{ matrix.channel }}@${{ steps.vars.outputs.version }}" \
+            -R RocketEdge/brokersre-ib-gateway-archive --pattern '*.sh' --dir downloads || echo "archive miss; relying on IBKR's channel URL"
+      - name: Build amd64 and load for scanning
+        run: docker buildx bake ${{ matrix.channel }} --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
+      - name: Trivy gate before anything is pushed
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
+          format: sarif
+          output: trivy.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload Trivy SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4.39.1
+        with:
+          sarif_file: trivy.sarif
+      - name: Build multi-arch and push
+        id: push
+        run: |
+          docker buildx bake ${{ matrix.channel }} --set '*.cache-from=type=gha' --push --metadata-file meta.json
+          digest=$(jq -r '.["${{ matrix.channel }}"]["containerimage.digest"]' meta.json)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "pushed $IMAGE@$digest"
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.channel }}.cdx.json
+          upload-artifact: true
+          upload-release-assets: false
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: Sign and attest (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.channel }}.cdx.json" "$IMAGE@$DIGEST"
+      - uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: digests.json
+        run: |
+          jq -n --arg channel "${{ matrix.channel }}" --arg version "${{ steps.vars.outputs.version }}" \
+                --arg digest "${{ steps.push.outputs.digest }}" --arg image "$IMAGE" --arg tag "${{ steps.vars.outputs.tag }}" \
+                --arg ibc "$IBC_RELEASE_TAG" --arg base "$UBUNTU_DIGEST" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{channel:$channel, gateway_version:$version, image:$image, digest:$digest, pinned_ref:($image+"@"+$digest), git_tag:$tag, ibc_release:$ibc, base_digest:$base, created:$created}' \
+                > "digests-${{ matrix.channel }}.json"
+          cat "digests-${{ matrix.channel }}.json"
+          echo "### ${{ matrix.channel }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "$IMAGE@${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag -a "$TAG" -m "brokersre-ib-gateway ${{ steps.vars.outputs.version }} (${{ matrix.channel }})"
+            git push origin "$TAG"
+          fi
+          # Built with printf so every line stays indented inside this YAML block scalar.
+          notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "IB Gateway ${{ steps.vars.outputs.version }} (IBKR ${{ matrix.channel }} channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
+            "Pin this exact build: \`$IMAGE@${{ steps.push.outputs.digest }}\`" \
+            "Verify: \`cosign verify $IMAGE@${{ steps.push.outputs.digest }} --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'\`" \
+            "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers.")"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --clobber
+          else
+            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --title "$TAG" --notes "$notes"
+          fi

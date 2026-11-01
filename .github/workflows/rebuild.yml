@@ -1,0 +1,22 @@
+# Monthly OS-patch rebuild of the pinned Gateway/IBC versions. Delegates to publish.yml with
+# rebuild=true, which adds -rYYYYMMDD tags and re-points the channel tags; consumers that pin by
+# digest (constraint C6 in BrokerSRE) see the new digest through their image-pin workflow.
+name: Rebuild (monthly)
+
+on:
+  schedule:
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml -R "$GITHUB_REPOSITORY" -f rebuild=true -f channels="stable latest"

@@ -1,0 +1,77 @@
+# Lint, build the stable channel for amd64, run the unit suite inside the image, run the
+# container tests offline, scan with Trivy. No IBKR credentials exist here and the IBC smoke test
+# runs with --network none, so nothing ever contacts IBKR's login servers.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck --version | head -2
+          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh
+      - name: shfmt (diff only)
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/bats/run-in-image.sh
+      - name: versions.json sanity
+        run: |
+          jq -e '.schema_version == 1' versions.json
+          jq -e '[.ibc.sha256, .channels.stable.sha256.x64, .channels.stable.sha256.arm, .channels.latest.sha256.x64, .channels.latest.sha256.arm] | all(test("^[0-9a-f]{64}$"))' versions.json
+          jq -e '.base.digest | test("^sha256:[0-9a-f]{64}$")' versions.json
+          jq -e '[.channels.stable.version, .channels.latest.version] | all(test("^10\\.[0-9]+\\.[0-9]+[a-z]?$"))' versions.json
+      - name: bake definition resolves
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          docker buildx bake --print stable latest > /dev/null
+
+  build-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Build stable (amd64) and load
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          docker buildx bake stable --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
+      - name: Unit suite inside the image (bats)
+        run: |
+          git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
+          tests/bats/run-in-image.sh "$IMAGE"
+      - name: Container tests (offline)
+        run: tests/container/run.sh
+      - name: Trivy (fail on fixable CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload Trivy SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4.39.1
+        with:
+          sarif_file: trivy.sarif

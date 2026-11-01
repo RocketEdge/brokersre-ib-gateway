@@ -1,0 +1,15 @@
+# Installers are never committed: fetched at build time and verified by SHA-256.
+# The operator's global gitignore excludes bin/, lib/ and downloads/; this image needs them.
+!rootfs/usr/local/bin/
+!rootfs/usr/local/lib/
+!downloads/
+downloads/*
+!downloads/.gitkeep
+# bats-core is cloned on demand for the unit suite.
+tests/.bats-core/
+# Local evaluation secrets for the compose example.
+compose/secrets/
+*.log
+!tests/fixtures/
+!tests/fixtures/*.log
+.DS_Store
