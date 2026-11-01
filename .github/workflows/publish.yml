@@ -153,6 +153,17 @@ jobs:
         run: |
           cosign sign --yes "$IMAGE@$DIGEST"
           cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.channel }}.cdx.json" "$IMAGE@$DIGEST"
+      - name: Verify the signature and attestation just published (evidence in this log)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@${{ github.ref }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$IDENTITY" --output text
+          cosign verify-attestation --type cyclonedx "$IMAGE@$DIGEST" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$IDENTITY" > /dev/null && echo "cyclonedx attestation verified for $IMAGE@$DIGEST"
       - uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
