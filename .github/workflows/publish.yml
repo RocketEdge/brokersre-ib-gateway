@@ -173,20 +173,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.vars.outputs.tag }}
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            git tag -a "$TAG" -m "brokersre-ib-gateway ${{ steps.vars.outputs.version }} (${{ matrix.channel }})"
-            git push origin "$TAG"
-          fi
           # Built with printf so every line stays indented inside this YAML block scalar.
           notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
             "IB Gateway ${{ steps.vars.outputs.version }} (IBKR ${{ matrix.channel }} channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
             "Pin this exact build: \`$IMAGE@${{ steps.push.outputs.digest }}\`" \
             "Verify: \`cosign verify $IMAGE@${{ steps.push.outputs.digest }} --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'\`" \
             "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers.")"
+          # The tag is created server-side by the release API: GITHUB_TOKEN may not `git push` a ref
+          # whose commit contains workflow files ("refusing to allow a GitHub App to create or update workflow").
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --clobber
           else
-            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --title "$TAG" --notes "$notes"
+            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
           fi
