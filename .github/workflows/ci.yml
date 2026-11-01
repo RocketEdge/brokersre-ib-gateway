@@ -45,6 +45,10 @@ jobs:
   build-test:
     needs: lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # Trivy SARIF upload
+      actions: read          # upload-sarif reads the run for telemetry
     env:
       # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
       TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
