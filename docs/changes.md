@@ -5,6 +5,34 @@ Next step.
 
 ## Change History
 
+### 2026-11-01 — First successful publish of both channels
+
+- **What changed:** `publish.yml` creates the release tag through the release API
+  (`gh release create --target`) and verifies the keyless signature and the CycloneDX
+  attestation inside the job right after signing; `ci.yml` grants `security-events: write` to
+  the job that uploads Trivy SARIF.
+- **Result:** CI green on `2f109b8`; Publish run 41285824630 green for
+  both channels. Trivy gate: 0 fixable CRITICAL/HIGH in OS packages; vendor jars reported (L08).
+  Signature and attestation verified in-job against identity
+  `https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main`.
+  Releases `v10.50.1f-stable` and `v10.51.1e-latest` carry `digests-<channel>.json` and the SBOM.
+
+  | Channel | Gateway | Digest |
+  |---|---|---|
+  | stable | 10.50.1f | `sha256:a35fcafed0ee2c6857970aef230dfe5df0277cfafe24ef927503a54d0716b885` |
+  | latest | 10.51.1e | `sha256:8fb845fbc6298b8dc51d0a09b95bed837eedfc1bbaa19033c5488c79868c0774` |
+
+- **What did NOT work / root cause:** (1) `git push` of the release tag from the job was
+  rejected ("refusing to allow a GitHub App to create or update workflow ... without `workflows`
+  permission"): `GITHUB_TOKEN` cannot push a ref whose commit carries workflow files, so the
+  tag is now created server-side by the release API. (2) Verification from a workstation fails
+  with `DENIED` while the GHCR package is private; in-job verification uses the workflow token
+  and records the evidence in the run log. (3) Signing identity is the branch ref
+  (`@refs/heads/main`), not a tag ref, because publish runs on pushes to main; the monorepo's
+  `image-pin.yml` was corrected to match.
+- **Next step:** owner makes the GHCR package public (L07); then anonymous `docker pull` and a
+  workstation `cosign verify`; BrokerSRE `image-pin.yml` pins the stable digest.
+
 ### 2026-11-01 — Second CI run: secrets directory permissions and the Trivy gate scope
 
 - **What changed:** the container harness makes its temporary secrets directory traversable
