@@ -102,7 +102,7 @@ jobs:
       - name: Build amd64 and load for scanning
         run: docker buildx bake ${{ matrix.channel }} --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
       - name: Trivy gate before anything is pushed
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
           format: sarif
