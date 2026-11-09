@@ -10,3 +10,7 @@
 - [x] First `publish.yml` run green (41285824630); in-job cosign verify of signature + SBOM attestation; stable sha256:a35fcafe..., latest sha256:8fb845fb...
 - [x] GHCR package public (owner, 2026-11-01): anonymous pull and credential-free `cosign verify` / `verify-attestation` of both digests pass
 - [ ] Operator-gated: add `BOT_TOKEN`, `ARCHIVE_WRITE_TOKEN`, `ARCHIVE_READ_TOKEN` secrets; Phase-0 scrubbed logs to replace the synthetic fixture (limitations L01-L03)
+- [x] Trivy OS gate red from 2026-11-09 (apt CVE-2026-109518): runtime stage runs `apt-get upgrade` (PR #3); superseded release records kept in `docs/changes.md` 2026-11-10
+- [ ] Follow-up: `publish.yml` re-uses an existing release (`--clobber`) when a push republishes an already-released version; give such a publish a `-rYYYYMMDD` tag as ADR 0008 describes for rebuilds
+- [ ] Follow-up: the Buildx `type=gha` cache is not in effect (0 cached steps in runs 42595391755, 42683161039); if it is repaired, bust the apt layer on rebuilds or OS patches stop silently
+- [ ] Follow-up: arm64 images are published but not Trivy-scanned in CI
