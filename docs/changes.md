@@ -19,9 +19,23 @@ Next step.
   `ubuntu:26.04` since 2026-10-29, so the pinned digest was already current. The documented
   design ("the monthly rebuild picks them up") did not hold for packages that ship inside the
   base image: `apt-get install` of other packages never upgrades them.
+- **Release records superseded by this publish:** a push-triggered publish adds no
+  `-rYYYYMMDD` suffix, so it re-uploads the assets of the existing releases with `--clobber`
+  (ADR 0008 expects a suffixed tag for a rebuild; follow-up in `tasks/todo.md`). The records it
+  replaces, downloaded 2026-11-10 before merge (the images, their keyless signatures and the
+  CycloneDX attestations stay in GHCR under these digests):
+
+  | Release | Image digest | Created | Asset SHA-256 (`digests-*.json` / `sbom-*.cdx.json`) |
+  |---|---|---|---|
+  | `v10.50.1f-stable` | `sha256:a35fcafed0ee2c6857970aef230dfe5df0277cfafe24ef927503a54d0716b885` | 2026-11-01T07:59:03Z | `e55d58bd…6bd28` / `288d8f20…26914` |
+  | `v10.51.1e-latest` | `sha256:8fb845fbc6298b8dc51d0a09b95bed837eedfc1bbaa19033c5488c79868c0774` | 2026-11-01T08:00:23Z | `6e7a7f95…91c84` / `5d31c182…2135` |
+
+  Both were built with IBC `3.24.2-rocketedge.1` on `ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c`.
 - **Next step:** after merge, `publish.yml` publishes both channels with the fix; the monorepo
   `image-pin.yml` then opens a pin PR that waits for the operator-run `regression-paper` check
-  (C6).
+  (C6). Independent review of PR #3 also found that the Buildx GitHub Actions cache is not in
+  effect today (0 cached steps); if it is ever repaired, the unchanged apt layer would be reused
+  and rebuilds would silently stop patching, so a rebuild must then bust that layer.
 
 ### 2026-11-01 — First successful publish of both channels
 
