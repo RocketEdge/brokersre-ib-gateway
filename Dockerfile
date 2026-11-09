@@ -9,8 +9,8 @@
 # HEALTHCHECK, IBC command server on loopback, structured JSON stdout, tini as PID 1.
 #
 # apt package versions are deliberately not pinned (DL3008): Ubuntu security updates would
-# otherwise force a version bump on every rebuild; the monthly rebuild picks them up and
-# Trivy gates the result.
+# otherwise force a version bump on every rebuild; the runtime stage runs `apt-get upgrade`,
+# so the monthly rebuild picks them up (base packages included) and Trivy gates the result.
 # hadolint global ignore=DL3008
 # =============================================================================
 ARG UBUNTU_DIGEST=sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
@@ -68,7 +68,13 @@ ARG IBC_RELEASE_TAG
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 # No sudo, no SSH, no telnet: the Gateway user owns only the paths it must write.
+# `apt-get upgrade` first: packages that ship inside the pinned ubuntu digest (apt itself,
+# libapt-pkg, ...) are otherwise never patched, because installing other packages does not
+# upgrade them and Docker Hub rebuilds ubuntu:26.04 only every few weeks. Without it the
+# monthly OS-patch rebuild cannot clear a base CVE (2026-11-09: apt CVE-2026-109518, HIGH,
+# fixed in 3.2.1ubuntu0.1, failed the Trivy gate while the base digest was still current).
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends \
       tini xvfb x11vnc socat gettext-base ca-certificates jq procps iproute2 \
       libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libc6 libcairo2 libcups2 libdbus-1-3 \

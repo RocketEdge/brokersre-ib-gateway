@@ -5,6 +5,24 @@ Next step.
 
 ## Change History
 
+### 2026-11-10 — Runtime stage runs `apt-get upgrade`, so rebuilds patch base packages
+
+- **What changed:** the runtime stage runs `apt-get upgrade -y --no-install-recommends` before
+  installing its packages; the Dockerfile header now states that the monthly rebuild patches
+  base packages too.
+- **Result:** on the pinned `ubuntu:26.04` digest the upgrade moves four packages (apt and
+  libapt-pkg7.0 3.2.0 to 3.2.1ubuntu0.1, base-files, libpcre2-8-0), and Trivy 0.70.0 with the
+  gate's flags (`--pkg-types os`, CRITICAL/HIGH, `--ignore-unfixed`) goes from 2 HIGH to 0.
+- **What did NOT work / root cause:** the Trivy gate failed from 2026-11-09 (Dependabot PR #2,
+  run 42595391755) on apt CVE-2026-109518 (HIGH), and the published `stable` digest
+  `sha256:a35fcafe…` carries it. A base digest bump was not possible: Docker Hub had not rebuilt
+  `ubuntu:26.04` since 2026-10-29, so the pinned digest was already current. The documented
+  design ("the monthly rebuild picks them up") did not hold for packages that ship inside the
+  base image: `apt-get install` of other packages never upgrades them.
+- **Next step:** after merge, `publish.yml` publishes both channels with the fix; the monorepo
+  `image-pin.yml` then opens a pin PR that waits for the operator-run `regression-paper` check
+  (C6).
+
 ### 2026-11-01 — First successful publish of both channels
 
 - **What changed:** `publish.yml` creates the release tag through the release API
