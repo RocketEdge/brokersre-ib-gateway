@@ -21,9 +21,16 @@ Next step.
   cannot be rebuilt because the private archive is empty (`ARCHIVE_WRITE_TOKEN` was never set).
   Trust is unchanged: the original pin was also taken from IBKR over HTTPS, and IBKR publishes no
   checksums.
+- **Release record superseded:** a push publishes both channels (`publish.yml` plan defaults to
+  `stable latest`), so this merge also republishes `stable` and overwrites its release assets.
+  The record it replaces: `v10.50.1f-stable`, image
+  `sha256:aefa03c37b90e5d897854d82a403bc7374d63e4e8af8aa9e325a5a6574b1fb6b` (created
+  2026-11-09T19:55:39Z by the publish of PR #3, nothing pins it yet), asset SHA-256
+  `9c13c2bd…13d4` (`digests-stable.json`) / `3610bb0a…4d13` (`sbom-stable.cdx.json`).
 - **Next step:** merging publishes `latest`; set the archive tokens so installers are kept, and
   make `detect-releases.yml` also compare the installers' SHA-256, so a same-version re-upload
-  opens a pull request instead of breaking a publish.
+  opens a pull request instead of breaking a publish. A push should publish only the channels
+  whose `versions.json` entry changed.
 
 ### 2026-11-10 — Runtime stage runs `apt-get upgrade`, so rebuilds patch base packages
 
