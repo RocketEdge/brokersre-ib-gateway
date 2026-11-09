@@ -5,6 +5,33 @@ Next step.
 
 ## Change History
 
+### 2026-11-10 — `latest` re-pinned to IBKR's re-upload of 10.51.1e
+
+- **What changed:** `versions.json` `channels.latest.sha256` moves to the installers IBKR serves
+  since 2026-11-05 (x64 `e57858252ae21da7395e5c08884639cc45dfc15eed24a7ccd6cf4383d2826ec0`, was
+  `b4d57815…0703`; arm `6aa611348ec6709b59a4a966494aa54969c7848249579dccdca0d3a333e908f6`, was
+  `f1c29317…fcc5`); version and build time are unchanged because IBKR's manifest still reports
+  `10.51.1e`, `20261026 16:53:53`. Owner decision 2026-11-10.
+- **Result:** `scripts/fetch-installer.sh` against IBKR's live `latest` URL passes the checksum for
+  amd64 and arm64 (2026-11-10); the x64 file hashed the same on two downloads.
+- **What did NOT work / root cause:** the publish of PR #3 (run 42686705729) built `stable` but
+  failed `latest` with `SHA-256 MISMATCH`: IBKR replaced both `latest` installers on
+  2026-11-05 (`Last-Modified` 04:22:15 and 04:23:23 GMT) without changing the version label.
+  `detect-releases.yml` compares only `buildVersion`, so it saw no change; the original bytes
+  cannot be rebuilt because the private archive is empty (`ARCHIVE_WRITE_TOKEN` was never set).
+  Trust is unchanged: the original pin was also taken from IBKR over HTTPS, and IBKR publishes no
+  checksums.
+- **Release record superseded:** a push publishes both channels (`publish.yml` plan defaults to
+  `stable latest`), so this merge also republishes `stable` and overwrites its release assets.
+  The record it replaces: `v10.50.1f-stable`, image
+  `sha256:aefa03c37b90e5d897854d82a403bc7374d63e4e8af8aa9e325a5a6574b1fb6b` (created
+  2026-11-09T19:55:39Z by the publish of PR #3, nothing pins it yet), asset SHA-256
+  `9c13c2bd…13d4` (`digests-stable.json`) / `3610bb0a…4d13` (`sbom-stable.cdx.json`).
+- **Next step:** merging publishes `latest`; set the archive tokens so installers are kept, and
+  make `detect-releases.yml` also compare the installers' SHA-256, so a same-version re-upload
+  opens a pull request instead of breaking a publish. A push should publish only the channels
+  whose `versions.json` entry changed.
+
 ### 2026-11-10 — Runtime stage runs `apt-get upgrade`, so rebuilds patch base packages
 
 - **What changed:** the runtime stage runs `apt-get upgrade -y --no-install-recommends` before

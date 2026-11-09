@@ -14,3 +14,6 @@
 - [ ] Follow-up: `publish.yml` re-uses an existing release (`--clobber`) when a push republishes an already-released version; give such a publish a `-rYYYYMMDD` tag as ADR 0008 describes for rebuilds
 - [ ] Follow-up: the Buildx `type=gha` cache is not in effect (0 cached steps in runs 42595391755, 42683161039); if it is repaired, bust the apt layer on rebuilds or OS patches stop silently
 - [ ] Follow-up: arm64 images are published but not Trivy-scanned in CI
+- [x] `latest` re-pinned to IBKR's 2026-11-05 re-upload of 10.51.1e (owner decision 2026-11-10); `fetch-installer.sh` verified on amd64 and arm64
+- [ ] Follow-up: `detect-releases.yml` compares only `buildVersion`; also compare the installers' SHA-256 so a same-version re-upload opens a pull request (IBKR re-uploaded 10.51.1e on 2026-11-05)
+- [ ] Follow-up: a push-triggered `publish.yml` publishes both channels; publish only the channels whose `versions.json` entry changed (a `latest`-only re-pin republished `stable` too)
