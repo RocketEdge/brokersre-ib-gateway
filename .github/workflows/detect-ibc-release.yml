@@ -41,7 +41,7 @@ jobs:
           mv versions.json.new versions.json
           echo "sha=$sha" >> "$GITHUB_ENV"
           git diff --stat
-      - uses: peter-evans/create-pull-request@v8.1.1
+      - uses: peter-evans/create-pull-request@v8.1.2
         if: steps.cmp.outputs.update == 'true'
         with:
           token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
