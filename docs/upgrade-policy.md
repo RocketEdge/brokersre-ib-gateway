@@ -4,10 +4,12 @@
    build produces a pull request that bumps `versions.json` with RocketEdge-computed SHA-256 for
    both architectures. `detect-ibc-release.yml` does the same for RocketEdge/ibc releases.
 2. **Merge** ([ADR 0009](adr/0009-stable-updates-merge-themselves.md)). `scripts/release-decision.sh`
-   decides: a new `stable` version's pull request merges itself once `lint` and `build-test` pass
-   (needs `BOT_TOKEN`); a new `latest` version waits for a human; different bytes under the
-   pinned version open an `ibkr-reupload` issue and change nothing. Installers are archived
-   privately (`ARCHIVE_WRITE_TOKEN`), and builds pre-fetch them when IBKR has moved on.
+   decides: a newer `stable` version whose installers both changed merges itself once `lint` and
+   `build-test` pass (needs `BOT_TOKEN`; hold one by disabling its auto-merge, stop all with the
+   repository variable `STABLE_AUTOMERGE=false`); any other new label waits for a human; different
+   bytes under the pinned version are archived and open one `ibkr-reupload` issue, changing
+   nothing. Installers are archived privately (`ARCHIVE_WRITE_TOKEN`), and builds pre-fetch them
+   when IBKR has moved on.
 3. **Publish.** `publish.yml` builds amd64, scans with Trivy (fail on fixable CRITICAL/HIGH),
    then builds and pushes multi-arch, signs with cosign, attests the SBOM and provenance, tags
    `v<version>-<channel>` and creates a release with `digests-<channel>.json`.

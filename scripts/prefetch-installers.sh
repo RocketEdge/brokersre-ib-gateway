@@ -3,19 +3,24 @@
 # keeping only copies whose SHA-256 matches the pin.
 #
 # Purpose: IBKR's channel URL serves only its newest build, so a pinned version that IBKR has
-# moved past can only be built from the archive (RocketEdge/brokersre-ib-gateway-archive, release
-# `ibgateway-<channel>@<version>`, written by detect-releases.yml). fetch-installer.sh fails the
-# build when a pre-fetched file does not match the pin, so a stale archive copy (IBKR re-uploaded
-# the version) is dropped here and the build falls back to IBKR's URL.
+# moved past can only be built from the archive (RocketEdge/brokersre-ib-gateway-archive, written
+# by detect-releases.yml). fetch-installer.sh fails the build when a pre-fetched file does not
+# match the pin, so a copy that matches no pin is dropped here and the build falls back to IBKR's
+# URL.
 #
 # Contract:
 #   prefetch-installers.sh <channel> <version> <sha256_x64> <sha256_arm> <dest_dir>
 #   GH_TOKEN       ARCHIVE_READ_TOKEN (contents: read on the archive repository); when empty the
-#                  script does nothing and exits 0, leaving the build on IBKR's URL
+#                  script does nothing and exits 0, leaving the build on IBKR's URL. A bad or
+#                  expired token looks like an archive miss (gh fails either way).
+#   candidates     release `ibgateway-<channel>@<version>` (a new version, as first archived) and
+#                  `ibgateway-<channel>@<version>-<first 12 hex of sha256_x64>` (bytes IBKR
+#                  re-uploaded under the same version, archived by detect-releases.yml); for each
+#                  architecture the first candidate copy whose SHA-256 equals the pin is used
 #   dest_dir       existing directory (the build context's downloads/)
 #   result         dest_dir holds ibgateway-<version>-standalone-linux-{x64,arm}.sh for every
-#                  architecture whose archive copy matches its pin, and nothing else from the
-#                  archive; an archive miss is reported and is not an error
+#                  architecture with a matching copy, and nothing else from the archive; misses
+#                  are reported and are not an error
 #   exit           0, or 2 on bad arguments
 # Side effects: network (gh release download), files in a temporary directory and dest_dir.
 set -euo pipefail
@@ -28,6 +33,8 @@ archive_repo="RocketEdge/brokersre-ib-gateway-archive"
 }
 channel="$1"
 version="$2"
+pin_x64="${3,,}"
+pin_arm="${4,,}"
 dest="$5"
 case "${channel}" in
   stable | latest) ;;
@@ -36,6 +43,10 @@ case "${channel}" in
     exit 2
     ;;
 esac
+[ -d "${dest}" ] || {
+  echo "prefetch-installers: destination '${dest}' is not a directory"
+  exit 2
+}
 
 if [ -z "${GH_TOKEN:-}" ]; then
   echo "prefetch-installers: no ARCHIVE_READ_TOKEN; relying on IBKR's channel URL"
@@ -44,24 +55,29 @@ fi
 
 staging="$(mktemp -d)"
 trap 'rm -rf "${staging}"' EXIT
-tag="ibgateway-${channel}@${version}"
-if ! gh release download "${tag}" -R "${archive_repo}" --pattern '*.sh' --dir "${staging}"; then
-  echo "prefetch-installers: archive miss for ${tag}; relying on IBKR's channel URL"
-  exit 0
-fi
+tags=("ibgateway-${channel}@${version}" "ibgateway-${channel}@${version}-${pin_x64:0:12}")
+for i in "${!tags[@]}"; do
+  mkdir -p "${staging}/${i}"
+  if ! gh release download "${tags[${i}]}" -R "${archive_repo}" --pattern '*.sh' --dir "${staging}/${i}" 2>/dev/null; then
+    echo "prefetch-installers: no archive release ${tags[${i}]}"
+  fi
+done
 
 for arch in x64 arm; do
-  if [ "${arch}" = x64 ]; then expected="${3,,}"; else expected="${4,,}"; fi
+  if [ "${arch}" = x64 ]; then expected="${pin_x64}"; else expected="${pin_arm}"; fi
   file="ibgateway-${version}-standalone-linux-${arch}.sh"
-  if [ ! -f "${staging}/${file}" ]; then
-    echo "prefetch-installers: ${file} not in ${tag}; relying on IBKR's channel URL"
-    continue
-  fi
-  actual="$(sha256sum "${staging}/${file}" | cut -d' ' -f1)"
-  if [ "${actual}" = "${expected}" ]; then
-    cp "${staging}/${file}" "${dest}/${file}"
-    echo "prefetch-installers: ${file} from ${tag} (sha256 ok)"
+  found=""
+  for i in "${!tags[@]}"; do
+    candidate="${staging}/${i}/${file}"
+    if [ -f "${candidate}" ] && [ "$(sha256sum "${candidate}" | cut -d' ' -f1)" = "${expected}" ]; then
+      found="${candidate}"
+      echo "prefetch-installers: ${file} from ${tags[${i}]} (sha256 ok)"
+      break
+    fi
+  done
+  if [ -n "${found}" ]; then
+    cp "${found}" "${dest}/${file}"
   else
-    echo "prefetch-installers: archived ${file} does not match the pin (${actual}); dropped, relying on IBKR's channel URL"
+    echo "prefetch-installers: no archived copy matches the pin for ${file}; relying on IBKR's channel URL"
   fi
 done

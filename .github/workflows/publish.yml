@@ -196,7 +196,11 @@ jobs:
           # The tag is created server-side by the release API: GITHUB_TOKEN may not `git push` a ref
           # whose commit contains workflow files ("refusing to allow a GitHub App to create or update workflow").
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # Republishing an already released version: replace the assets and the notes, so the
+            # digest the notes show is the one the channel tag now points at. Editing a release
+            # sends watchers no notification; only a new release does.
             gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --clobber
+            gh release edit "$TAG" --notes "$notes"
           else
             gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
           fi

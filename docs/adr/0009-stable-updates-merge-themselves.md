@@ -16,14 +16,21 @@ production system by itself.
 
 `detect-releases.yml` runs daily and hands the policy to `scripts/release-decision.sh`:
 
-- a new version opens a pull request; on `stable` it enables auto-merge, so the pull request
-  merges once the required checks (`lint`, `build-test`: build, bats, offline container tests,
-  Trivy gate) pass, and `publish.yml` publishes;
-- a new `latest` version waits for a human (CI builds and tests `stable` only);
-- different bytes under the pinned version open an `ibkr-reupload` issue and change nothing.
+- a new version opens a pull request. Auto-merge is enabled, once and only when the run creates
+  the pull request, if the version is on `stable`, sorts higher than the pin (`sort -V`) and
+  both installers changed; the pull request then merges once the required checks (`lint`,
+  `build-test`: build, bats, offline container tests, Trivy gate) pass, and `publish.yml`
+  publishes;
+- anything else with a new label (a `latest` version, a lower version, an unchanged installer)
+  waits for a human (CI builds and tests `stable` only);
+- different bytes under the pinned version are archived under their own release and open one
+  `ibkr-reupload` issue per set of bytes; nothing changes.
 
-Installers are archived privately for every new version, and CI and publish pre-fetch them,
-keeping only copies that match the pin (`scripts/prefetch-installers.sh`).
+Installers are archived privately, and CI and publish pre-fetch them, keeping only copies that
+match the pin (`scripts/prefetch-installers.sh`).
+
+Stopping it: a human disables auto-merge on one pull request (the daily run never re-enables
+it), or sets the repository variable `STABLE_AUTOMERGE` to `false` to stop every automatic merge.
 
 ## Consequences
 
@@ -36,8 +43,8 @@ caught instead of breaking or slipping into a build.
 
 A bad IBKR `stable` build that passes the offline tests is published publicly without review
 (the tests never log in). Consumers are protected by digest pinning, not by this repository.
-Auto-merge needs the `BOT_TOKEN` secret: a pull request opened with `GITHUB_TOKEN` runs no CI,
-and a merge made with it would not start `publish.yml`.
+Auto-merge needs the `BOT_TOKEN` secret: GitHub does not start CI by itself for a pull request
+opened with `GITHUB_TOKEN`, and a merge made with it would not start `publish.yml`.
 
 ## Revisit trigger
 

@@ -7,6 +7,8 @@
 # channel CI builds and tests); different bytes under the pinned version (an IBKR re-upload, seen
 # for 10.51.1e on 2026-11-05) never auto-merge; identical bytes do nothing.
 
+bats_require_minimum_version 1.5.0 # `run --separate-stderr`
+
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../../../scripts/release-decision.sh"
   A=$(printf 'a%.0s' {1..64})
@@ -74,4 +76,35 @@ setup() {
   run "$SCRIPT" stable
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage"* ]]
+}
+
+@test "new stable label but the pinned bytes (stale download): a human decides" {
+  run "$SCRIPT" stable 10.50.1g "$A" "$B" 10.50.1h "$A" "$B"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'action=new-version\nautomerge=false' ]
+}
+
+@test "new stable label with one installer unchanged: a human decides" {
+  run "$SCRIPT" stable 10.50.1g "$A" "$B" 10.50.1h "$C" "$B"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'action=new-version\nautomerge=false' ]
+}
+
+@test "lower stable version (cached or rolled-back manifest): a human decides" {
+  run "$SCRIPT" stable 10.50.1g "$A" "$B" 10.50.1f "$C" "$D"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'action=new-version\nautomerge=false' ]
+}
+
+@test "version order is numeric, not textual (10.50.10a is newer than 10.50.9z)" {
+  run "$SCRIPT" stable 10.50.9z "$A" "$B" 10.50.10a "$C" "$D"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'action=new-version\nautomerge=true' ]
+}
+
+@test "a refusal goes to stderr only, so it can never reach GITHUB_OUTPUT" {
+  run --separate-stderr "$SCRIPT" beta 10.50.1g "$A" "$B" 10.50.1h "$C" "$D"
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"channel"* ]]
 }

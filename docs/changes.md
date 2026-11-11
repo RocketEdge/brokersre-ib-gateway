@@ -15,8 +15,24 @@ Next step.
   the pin. Auto-merge is allowed on the repository; the private archive got its first commit and
   the installers pinned today (`ibgateway-stable@10.50.1g`, `ibgateway-latest@10.51.1e`). README
   sections for following releases and for creating the tokens; ADR 0009 (owner decision).
-- **Result:** 16 bats tests (release policy, archive pre-fetch) pass; actionlint, shellcheck and
+- **Result:** 23 bats tests (release policy, archive pre-fetch) pass; actionlint, shellcheck and
   shfmt clean.
+- **Independent review of PR #7, fixed before merge:** (1) the daily run re-enabled auto-merge a
+  human had turned off (create-pull-request returns the number of an existing PR), so auto-merge
+  is now requested only when the run creates the PR, with the kill switch `STABLE_AUTOMERGE=false`;
+  (2) a lower version, or a new label over unchanged bytes, would have merged itself, so
+  auto-merge now needs a higher version (`sort -V`) and both installers changed; (3) a closed
+  re-upload issue would reopen daily and the new bytes were never archived, so issues are keyed
+  by the bytes (any state) and the bytes are archived under `ibgateway-<channel>@<version>-<x64
+  prefix>`, which the pre-fetch also reads; (4) a republished version kept stale release notes,
+  so `publish.yml` now rewrites them. Also: refusals go to stderr only (stdout feeds
+  `GITHUB_OUTPUT`), `add-paths: versions.json`, and a missing pre-fetch destination is refused.
+- **Release records superseded by this merge** (it changes `publish.yml`, which republishes both
+  channels): `v10.50.1g-stable` image
+  `sha256:2479cc941831a5ba9f3b810a118b8677fd082fbe2b1b8172ce142a84297439a4` (created
+  2026-11-11T06:57:14Z), assets `3dafe62f…eb721` / `c8dd6a37…a9c67`; `v10.51.1e-latest` image
+  `sha256:5eecf3a8fefd09908437dd6879135eda55642d38fb6c8a39bf19d0ca6cead78e` (created
+  2026-11-11T06:56:31Z), assets `78899cb6…21d8f` / `8e955347…c3e1`.
 - **What did NOT work / root cause:** the archive could never have worked: the repository had no
   commit, so creating a release failed with "Repository is empty" (found while seeding it by
   hand). `fetch-installer.sh` aborts the build when a pre-fetched copy does not match the pin, so

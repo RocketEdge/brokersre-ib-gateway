@@ -13,11 +13,17 @@
 #   stdout         two lines, GITHUB_OUTPUT-ready:
 #                    action=none|new-version|reupload
 #                    automerge=true|false
-#   exit           0 on a decision, 2 on bad input (message on stderr and stdout)
+#   exit           0 on a decision, 2 on bad input (message on stderr only: stdout is appended
+#                  to GITHUB_OUTPUT, where a stray line would break the runner's parser)
 #
 # Policy:
-#   * new-version: IBKR's version differs from the pin -> pull request. It auto-merges only on
-#     stable, the channel ci.yml builds and container-tests; latest waits for a human.
+#   * new-version: IBKR's version differs from the pin -> pull request. It auto-merges only when
+#     all of these hold, otherwise a human merges it:
+#       - the channel is stable (the channel ci.yml builds and container-tests);
+#       - the new version sorts higher than the pin (`sort -V`), so a cached or rolled-back
+#         manifest never downgrades the image by itself;
+#       - both installers' bytes changed, so a new label over the old download (a stale cache)
+#         never ships as a "new" build.
 #   * reupload: same version, different bytes (IBKR replaced 10.51.1e on 2026-11-05 without a
 #     new label) -> a human decides; never auto-merged.
 #   * none: same version, same bytes.
@@ -26,13 +32,11 @@ set -euo pipefail
 
 usage() {
   echo "usage: release-decision.sh <stable|latest> <pinned_version> <pinned_x64> <pinned_arm> <ibkr_version> <ibkr_x64> <ibkr_arm>" >&2
-  echo "usage: see the header of scripts/release-decision.sh"
   exit 2
 }
 
 refuse() {
   echo "release-decision: $1" >&2
-  echo "release-decision: $1"
   exit 2
 }
 
@@ -65,7 +69,11 @@ fi
 
 automerge=false
 if [ "${action}" = new-version ] && [ "${channel}" = stable ]; then
-  automerge=true
+  newest="$(printf '%s\n%s\n' "${pinned_version}" "${ibkr_version}" | sort -V | tail -n 1)"
+  if [ "${newest}" = "${ibkr_version}" ] \
+    && [ "${ibkr_x64}" != "${pinned_x64}" ] && [ "${ibkr_arm}" != "${pinned_arm}" ]; then
+    automerge=true
+  fi
 fi
 
 printf 'action=%s\nautomerge=%s\n' "${action}" "${automerge}"

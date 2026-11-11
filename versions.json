@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Single source of truth for everything the image pins. detect-releases.yml updates the channels; detect-ibc-release.yml updates ibc; humans merge. Every checksum is SHA-256 computed by RocketEdge (IBKR publishes none).",
+  "description": "Single source of truth for everything the image pins. detect-releases.yml updates the channels (a newer stable build merges itself after CI, ADR 0009; anything else is merged by a human); detect-ibc-release.yml updates ibc, merged by a human. Every checksum is SHA-256 computed by RocketEdge (IBKR publishes none).",
   "base": {
     "image": "ubuntu",
     "tag": "26.04",
