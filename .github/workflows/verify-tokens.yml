@@ -1,0 +1,50 @@
+# TEMPORARY, never merged: proves the repository secrets have exactly the permissions the README
+# lists, without creating anything. Write probes send invalid input, so a permitted call answers
+# 422 (validation failed) and a forbidden one 403/404; read probes expect 200, and the
+# least-privilege probes expect the token NOT to reach what it was not granted.
+name: Verify tokens (temporary)
+
+on:
+  pull_request:
+    paths: [.github/workflows/verify-tokens.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe BOT_TOKEN, ARCHIVE_WRITE_TOKEN, ARCHIVE_READ_TOKEN
+        env:
+          BOT: ${{ secrets.BOT_TOKEN }}
+          AW: ${{ secrets.ARCHIVE_WRITE_TOKEN }}
+          AR: ${{ secrets.ARCHIVE_READ_TOKEN }}
+        run: |
+          set -uo pipefail
+          api=https://api.github.com/repos/RocketEdge
+          zero=0000000000000000000000000000000000000000
+          fail=0
+          # check <description> <expected HTTP code> <token> <method> <path> [json body]
+          check() {
+            local desc="$1" want="$2" tok="$3" method="$4" path="$5" data="${6:-}" got
+            if [ -z "$tok" ]; then echo "FAIL  $desc: secret is empty"; fail=1; return; fi
+            args=(-s -o /dev/null -w '%{http_code}' -X "$method" -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.github+json')
+            if [ -n "$data" ]; then args+=(-d "$data"); fi
+            got=$(curl "${args[@]}" "$api/$path")
+            if [ "$got" = "$want" ]; then echo "ok    $desc (HTTP $got)"; else echo "FAIL  $desc: HTTP $got, expected $want"; fail=1; fi
+          }
+          ref() { printf '{"ref":"refs/heads/token-probe-%s","sha":"%s"}' "$GITHUB_RUN_ID" "$zero"; }
+
+          check "BOT_TOKEN reads brokersre-ib-gateway" 200 "$BOT" GET brokersre-ib-gateway
+          check "BOT_TOKEN may write contents there (422 = allowed, invalid SHA)" 422 "$BOT" POST brokersre-ib-gateway/git/refs "$(ref)"
+          check "BOT_TOKEN may open pull requests there (422 = allowed, no such branch)" 422 "$BOT" POST brokersre-ib-gateway/pulls \
+            "{\"title\":\"token probe\",\"head\":\"no-such-branch-${GITHUB_RUN_ID}\",\"base\":\"main\"}"
+          check "BOT_TOKEN cannot see the private archive (least privilege)" 404 "$BOT" GET brokersre-ib-gateway-archive
+
+          check "ARCHIVE_WRITE_TOKEN reads the archive" 200 "$AW" GET brokersre-ib-gateway-archive
+          check "ARCHIVE_WRITE_TOKEN may write contents there (422 = allowed, invalid SHA)" 422 "$AW" POST brokersre-ib-gateway-archive/git/refs "$(ref)"
+
+          check "ARCHIVE_READ_TOKEN reads the archive releases" 200 "$AR" GET brokersre-ib-gateway-archive/releases
+          check "ARCHIVE_READ_TOKEN cannot write there (read-only)" 403 "$AR" POST brokersre-ib-gateway-archive/git/refs "$(ref)"
+          exit "$fail"
