@@ -1,14 +1,23 @@
 # IBC log classification (log contract v1). Tab-separated: event<TAB>extended-regex<TAB>phase<TAB>level
 # Lines starting with # are comments. The regex is matched against the whole IBC log line with
 # bash's [[ =~ ]] (POSIX ERE). An empty phase means "no phase change".
-# Wording is taken from IBC 3.24.x; VERIFY against scrubbed logs from this image in Phase 0.
+#
+# Evidence per pattern (docs/limitations.md L01):
+#   REAL  = seen in this image's IBC output (IBC 3.24.2, IB Gateway 10.50.1g, 2026-11-11;
+#           tests/fixtures/ibc-real-failed-login.log): ibc_version, login_dialog,
+#           login_failed_dialog.
+#   DOCS  = wording from IBC 3.24.x sources, not yet seen in a real log: every other row.
+# IBC reports each dialog three times (event=Opened, Activated, Focused); dialog patterns match
+# only event=Opened so that one dialog is one event. The login window and the Gateway main
+# window share the title "IBKR Gateway", so the login dialog is recognised by IBC's own
+# "Login dialog WINDOW_OPENED" line, never by the frame title.
 twofa_initiated	IBC: Second Factor Authentication initiated	2fa-pending	warn
 twofa_dialog	detected (dialog|frame) entitled: Second Factor Authentication; event=(Opened|Activated)	2fa-pending	warn
 login_completed	IBC: Login has completed	logged-in	info
 login_failed	IBC: Login failed	login	error
-login_failed_dialog	detected dialog entitled: Unrecognized Username or Password	login	error
-existing_session	detected dialog entitled: Existing session detected	existing-session	warn
-relogin_required	detected dialog entitled: Re-login (is required|to session)	login	warn
+login_failed_dialog	detected dialog entitled: Unrecognized Username or Password; event=Opened	login	error
+existing_session	detected dialog entitled: Existing session detected; event=Opened	existing-session	warn
+relogin_required	detected dialog entitled: Re-login (is required|to session)[^;]*; event=Opened	login	warn
 daily_restart	IBC: autorestart file found	restarting	info
-login_dialog	detected frame entitled: (IB Gateway|Login); event=Opened	login	info
+login_dialog	IBC: Login dialog WINDOW_OPENED	login	info
 ibc_version	IBC: version	login	info

@@ -1,0 +1,61 @@
+# REAL LOG, scrubbed: IBC 3.24.2 + IB Gateway 10.50.1g (paper), 2026-11-11, login with a made-up username that IBKR rejects. Only the "IBC:" lines are kept (the JVM property dump, host name and session id are dropped); no credential or account appears in IBC output.
+2026-11-11 23:22:58:828 IBC: version: 3.24.2
+2026-11-11 23:22:58:832 IBC: using default settings provider: ini file is /run/brokersre/config.ini
+2026-11-11 23:22:58:832 IBC: using default login manager: will get username and password from settings; FIX username and password (if required) from settings
+2026-11-11 23:22:58:833 IBC: using default main window manager
+2026-11-11 23:22:58:833 IBC: using default trading mode manager: constructor parameter args but trading mode not present - will be taken from settings
+2026-11-11 23:22:58:834 IBC: using default config dialog manager
+2026-11-11 23:22:58:838 IBC: CommandServer is starting with port 7462
+2026-11-11 23:22:58:852 IBC: CommandServer listening on address: 127.0.0.1 port: 7462
+2026-11-11 23:22:58:852 IBC: CommandServer started and is ready to accept commands
+2026-11-11 23:22:58:919 IBC: TWS Settings directory is: /home/ibgateway/Jts/settings
+2026-11-11 23:22:58:919 IBC: Starting session: will exit if login dialog is not displayed within 60 seconds
+2026-11-11 23:22:58:926 IBC: Ensuring /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-11 23:22:58:927 IBC: Found setting: [Logon]/s3store=true
+2026-11-11 23:22:58:927 IBC: Found setting: [Logon]/Locale=en
+2026-11-11 23:22:58:928 IBC: Found setting: [Logon]/displayedproxymsg=1
+2026-11-11 23:22:58:928 IBC: Found setting: [Logon]/UseSSL=true
+2026-11-11 23:22:58:928 IBC: Found setting: [IBGateway]/ApiOnly=true
+2026-11-11 23:22:58:928 IBC: Found setting: [IBGateway]/TrustedIPs=127.0.0.1
+2026-11-11 23:22:58:928 IBC: Confirmed /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-11 23:22:58:928 IBC: Starting Gateway
+2026-11-11 23:23:01:827 IBC: Getting config dialog
+2026-11-11 23:23:01:827 IBC: Creating config dialog future
+2026-11-11 23:23:01:828 IBC: Getting config dialog
+2026-11-11 23:23:01:829 IBC: Waiting for config dialog future to complete
+2026-11-11 23:23:01:829 IBC: Getting main window
+2026-11-11 23:23:01:829 IBC: Creating main window future
+2026-11-11 23:23:02:764 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-11 23:23:02:767 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-11 23:23:02:768 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-11 23:23:02:769 IBC: Login dialog WINDOW_OPENED: LoginState is LOGGED_OUT
+2026-11-11 23:23:02:769 IBC: trading mode from settings: tradingMode=paper
+2026-11-11 23:23:02:769 IBC: Setting Trading mode = paper
+2026-11-11 23:23:02:871 IBC: Setting user name
+2026-11-11 23:23:02:871 IBC: Setting password
+2026-11-11 23:23:02:872 IBC: Login attempt: 1
+2026-11-11 23:23:02:873 IBC: trading mode from settings: tradingMode=paper
+2026-11-11 23:23:02:896 IBC: Click button: Paper Log In
+2026-11-11 23:23:03:235 IBC: Button now disabled: Paper Log In
+2026-11-11 23:23:03:265 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-11 23:23:03:265 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-11 23:23:03:266 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-11 23:23:03:271 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-11 23:23:03:272 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-11 23:23:03:272 IBC: Found Gateway main window
+2026-11-11 23:23:03:272 IBC: Got main window from future
+2026-11-11 23:23:03:273 IBC: Invoking config dialog menu
+2026-11-11 23:23:03:826 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-11 23:23:03:826 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-11 23:23:03:826 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Activated
+2026-11-11 23:23:03:827 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Focused
+2026-11-11 23:23:03:827 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Opened
+2026-11-11 23:23:04:154 IBC: detected frame entitled: ; event=Lost focus
+2026-11-11 23:23:04:154 IBC: detected frame entitled: ; event=Deactivated
+2026-11-11 23:23:04:154 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-11 23:23:04:154 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-11 23:23:04:155 IBC: detected dialog entitled: Unrecognized Username or Password; event=Opened
+2026-11-11 23:23:04:158 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-11 23:23:04:158 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-11 23:23:04:158 IBC: detected dialog entitled: Unrecognized Username or Password; event=Activated
+2026-11-11 23:23:04:160 IBC: detected dialog entitled: Unrecognized Username or Password; event=Focused
