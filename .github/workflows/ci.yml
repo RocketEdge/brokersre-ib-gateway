@@ -41,6 +41,10 @@ jobs:
         run: |
           eval "$(scripts/bake-env.sh)"
           docker buildx bake --print stable latest > /dev/null
+      - name: CI script tests (bats, release policy and archive prefetch)
+        run: |
+          git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
+          tests/.bats-core/bin/bats tests/bats/ci
 
   build-test:
     needs: lint
@@ -55,6 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: docker/setup-buildx-action@v4.4.1
+      - name: Pre-fetch archived stable installers (IBKR serves only its newest build)
+        # Without this, every build of main fails from the day IBKR moves past the pinned version
+        # until the bump merges (2026-11-11). Copies are used only when they match the pin.
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          scripts/prefetch-installers.sh stable "$STABLE_VERSION" "$STABLE_SHA256_X64" "$STABLE_SHA256_ARM" downloads
       - name: Build stable (amd64) and load
         run: |
           eval "$(scripts/bake-env.sh)"

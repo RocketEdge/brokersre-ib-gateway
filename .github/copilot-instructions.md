@@ -13,6 +13,7 @@ docker buildx bake stable --set '*.platform=linux/amd64' --load      # local bui
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh
 git clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
+tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch), on the host
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests
 pre-commit run --all-files
 ```

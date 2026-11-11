@@ -95,12 +95,15 @@ jobs:
       - name: Pre-fetch archived installers when IBKR has moved on (optional)
         # Only needed when rebuilding a version IBKR no longer serves at its channel URL. The
         # private archive needs ARCHIVE_READ_TOKEN; without it the Dockerfile uses IBKR's URL.
+        # scripts/prefetch-installers.sh keeps only copies that match the pin, so a stale archive
+        # copy (IBKR re-uploaded the version) falls back to the URL instead of failing the build.
         env:
           GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+          CHANNEL: ${{ matrix.channel }}
+          VERSION: ${{ steps.vars.outputs.version }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then echo "no ARCHIVE_READ_TOKEN; relying on IBKR's channel URL"; exit 0; fi
-          gh release download "ibgateway-${{ matrix.channel }}@${{ steps.vars.outputs.version }}" \
-            -R RocketEdge/brokersre-ib-gateway-archive --pattern '*.sh' --dir downloads || echo "archive miss; relying on IBKR's channel URL"
+          if [ "$CHANNEL" = stable ]; then x64="$STABLE_SHA256_X64"; arm="$STABLE_SHA256_ARM"; else x64="$LATEST_SHA256_X64"; arm="$LATEST_SHA256_ARM"; fi
+          scripts/prefetch-installers.sh "$CHANNEL" "$VERSION" "$x64" "$arm" downloads
       - name: Build amd64 and load for scanning
         run: docker buildx bake ${{ matrix.channel }} --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
       - name: Trivy gate before anything is pushed (fixable CRITICAL/HIGH in OS packages)
