@@ -37,6 +37,8 @@ jobs:
           jq -e '[.ibc.sha256, .channels.stable.sha256.x64, .channels.stable.sha256.arm, .channels.latest.sha256.x64, .channels.latest.sha256.arm] | all(test("^[0-9a-f]{64}$"))' versions.json
           jq -e '.base.digest | test("^sha256:[0-9a-f]{64}$")' versions.json
           jq -e '[.channels.stable.version, .channels.latest.version] | all(test("^10\\.[0-9]+\\.[0-9]+[a-z]?$"))' versions.json
+      - name: README version table matches versions.json
+        run: scripts/readme-versions.sh --check
       - name: bake definition resolves
         run: |
           eval "$(scripts/bake-env.sh)"

@@ -49,6 +49,7 @@ table() {
   for channel in stable latest; do
     version="$(jq -r --arg ch "${channel}" '.channels[$ch].version' "${versions}")"
     minor="$(printf '%s' "${version}" | cut -d. -f1,2)"
+    # shellcheck disable=SC2016  # the backticks are Markdown code marks, not command substitution
     printf '| %s | %s | %s (%s `%s`) | `%s`, `%s`, `%s` |\n' \
       "${channel}" "${version}" "${ibc_version}" "${ibc_repo}" "${ibc_tag}" "${channel}" "${minor}" "${version}"
   done
