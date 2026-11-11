@@ -2,7 +2,8 @@
 # Unit tests for scripts/prefetch-installers.sh: copy archived installers into downloads/ only
 # when they match the pinned SHA-256. Candidates are the version's release
 # (ibgateway-<channel>@<version>) and, for a version IBKR re-uploaded, the release keyed by the
-# pinned x64 hash (ibgateway-<channel>@<version>-<first 12 hex of x64>). A copy that matches no
+# pinned hashes (ibgateway-<channel>@<version>-<first 8 hex of x64><first 8 hex of arm>, so an
+# arm-only re-upload gets its own release too). A copy that matches no
 # pin is dropped so fetch-installer.sh falls back to IBKR's URL instead of failing the build.
 # `gh` is replaced by a stub on PATH; nothing reaches GitHub.
 #   tests/.bats-core/bin/bats tests/bats/ci
@@ -65,11 +66,23 @@ teardown() {
   printf 're-uploaded x64 bytes\n' > "${NEW}/ibgateway-10.50.1g-standalone-linux-x64.sh"
   cp "${ORIG}/ibgateway-10.50.1g-standalone-linux-arm.sh" "${NEW}/"
   new_x64=$(sha256sum "${NEW}/ibgateway-10.50.1g-standalone-linux-x64.sh" | cut -d' ' -f1)
-  mv "${NEW}" "${ARCHIVES}/ibgateway-stable@10.50.1g-${new_x64:0:12}"
+  mv "${NEW}" "${ARCHIVES}/ibgateway-stable@10.50.1g-${new_x64:0:8}${ARM:0:8}"
   run "$SCRIPT" stable 10.50.1g "$new_x64" "$ARM" "$DEST"
   [ "$status" -eq 0 ]
   [ "$(sha256sum "${DEST}/ibgateway-10.50.1g-standalone-linux-x64.sh" | cut -d' ' -f1)" = "$new_x64" ]
   [ "$(sha256sum "${DEST}/ibgateway-10.50.1g-standalone-linux-arm.sh" | cut -d' ' -f1)" = "$ARM" ]
+}
+
+@test "an arm-only re-upload is found under the key of both pinned hashes" {
+  NEW="${ARCHIVES}/reupload"
+  mkdir -p "${NEW}"
+  cp "${ORIG}/ibgateway-10.50.1g-standalone-linux-x64.sh" "${NEW}/"
+  printf 're-uploaded arm bytes\n' > "${NEW}/ibgateway-10.50.1g-standalone-linux-arm.sh"
+  new_arm=$(sha256sum "${NEW}/ibgateway-10.50.1g-standalone-linux-arm.sh" | cut -d' ' -f1)
+  mv "${NEW}" "${ARCHIVES}/ibgateway-stable@10.50.1g-${X64:0:8}${new_arm:0:8}"
+  run "$SCRIPT" stable 10.50.1g "$X64" "$new_arm" "$DEST"
+  [ "$status" -eq 0 ]
+  [ "$(sha256sum "${DEST}/ibgateway-10.50.1g-standalone-linux-arm.sh" | cut -d' ' -f1)" = "$new_arm" ]
 }
 
 @test "without a token it does nothing and succeeds (IBKR's URL is used)" {

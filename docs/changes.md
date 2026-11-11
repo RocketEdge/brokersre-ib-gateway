@@ -23,8 +23,10 @@ Next step.
   (2) a lower version, or a new label over unchanged bytes, would have merged itself, so
   auto-merge now needs a higher version (`sort -V`) and both installers changed; (3) a closed
   re-upload issue would reopen daily and the new bytes were never archived, so issues are keyed
-  by the bytes (any state) and the bytes are archived under `ibgateway-<channel>@<version>-<x64
-  prefix>`, which the pre-fetch also reads; (4) a republished version kept stale release notes,
+  by the bytes (any state) and the bytes are archived under `ibgateway-<channel>@<version>-<8 hex
+  of x64><8 hex of arm>` (both hashes, so an arm-only re-upload cannot overwrite another), which
+  the pre-fetch also reads, and an unchanged archive is not uploaded again each day; (4) a
+  republished version kept stale release notes,
   so `publish.yml` now rewrites them. Also: refusals go to stderr only (stdout feeds
   `GITHUB_OUTPUT`), `add-paths: versions.json`, and a missing pre-fetch destination is refused.
 - **Release records superseded by this merge** (it changes `publish.yml`, which republishes both

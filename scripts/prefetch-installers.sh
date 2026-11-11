@@ -14,8 +14,10 @@
 #                  script does nothing and exits 0, leaving the build on IBKR's URL. A bad or
 #                  expired token looks like an archive miss (gh fails either way).
 #   candidates     release `ibgateway-<channel>@<version>` (a new version, as first archived) and
-#                  `ibgateway-<channel>@<version>-<first 12 hex of sha256_x64>` (bytes IBKR
-#                  re-uploaded under the same version, archived by detect-releases.yml); for each
+#                  `ibgateway-<channel>@<version>-<first 8 hex of sha256_x64><first 8 hex of
+#                  sha256_arm>` (bytes IBKR re-uploaded under the same version, archived by
+#                  detect-releases.yml; keyed by both hashes so an arm-only re-upload has its own
+#                  release); for each
 #                  architecture the first candidate copy whose SHA-256 equals the pin is used
 #   dest_dir       existing directory (the build context's downloads/)
 #   result         dest_dir holds ibgateway-<version>-standalone-linux-{x64,arm}.sh for every
@@ -55,7 +57,7 @@ fi
 
 staging="$(mktemp -d)"
 trap 'rm -rf "${staging}"' EXIT
-tags=("ibgateway-${channel}@${version}" "ibgateway-${channel}@${version}-${pin_x64:0:12}")
+tags=("ibgateway-${channel}@${version}" "ibgateway-${channel}@${version}-${pin_x64:0:8}${pin_arm:0:8}")
 for i in "${!tags[@]}"; do
   mkdir -p "${staging}/${i}"
   if ! gh release download "${tags[${i}]}" -R "${archive_repo}" --pattern '*.sh' --dir "${staging}/${i}" 2>/dev/null; then

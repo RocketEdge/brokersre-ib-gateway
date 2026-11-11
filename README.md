@@ -175,11 +175,13 @@ channels, downloads both installers and lets `scripts/release-decision.sh` decid
 |---|---|
 | A newer `stable` version, both installers changed | Installers archived, pull request opened with auto-merge: it merges once `lint` and `build-test` pass, then `publish.yml` publishes and the release notifies watchers |
 | Any other new label (`latest`, a lower version, an installer unchanged) | Installers archived, pull request opened; a human merges it |
-| The pinned version with different bytes | New bytes archived under `ibgateway-<channel>@<version>-<x64 hash prefix>`, one `ibkr-reupload` issue per set of bytes; nothing changes |
+| The pinned version with different bytes | New bytes archived under `ibgateway-<channel>@<version>-<8 hex of x64><8 hex of arm>`, one `ibkr-reupload` issue per set of bytes; nothing changes |
 | The pinned version, same bytes | Nothing |
 
-To hold one `stable` update, disable auto-merge on its pull request: the daily run enables it
-only on the run that creates the pull request, so it stays off. To stop all automatic merges:
+To hold one `stable` update, disable auto-merge on its pull request and leave the pull request
+open: the daily run enables auto-merge only on the run that creates the pull request, so it stays
+off. Do not close it: the next daily run would open a new one with auto-merge. To skip a version
+or stop all automatic merges:
 `gh variable set STABLE_AUTOMERGE --body false -R RocketEdge/brokersre-ib-gateway` (delete the
 variable to resume).
 

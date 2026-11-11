@@ -29,8 +29,10 @@ production system by itself.
 Installers are archived privately, and CI and publish pre-fetch them, keeping only copies that
 match the pin (`scripts/prefetch-installers.sh`).
 
-Stopping it: a human disables auto-merge on one pull request (the daily run never re-enables
-it), or sets the repository variable `STABLE_AUTOMERGE` to `false` to stop every automatic merge.
+Stopping it: a human disables auto-merge on one pull request and leaves it open (the daily run
+never re-enables it; a closed pull request is opened again the next day, with auto-merge), or
+sets the repository variable `STABLE_AUTOMERGE` to `false` to skip a version or stop every
+automatic merge.
 
 ## Consequences
 

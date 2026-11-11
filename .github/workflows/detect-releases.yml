@@ -90,14 +90,26 @@ jobs:
           REMOTE: ${{ steps.cmp.outputs.remote }}
           REMOTE_DT: ${{ steps.cmp.outputs.remote_dt }}
           SHA_X64: ${{ steps.dl.outputs.sha_x64 }}
+          SHA_ARM: ${{ steps.dl.outputs.sha_arm }}
         run: |
+          set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then echo "::warning::ARCHIVE_WRITE_TOKEN not set; installers not archived (reproducible rebuilds of this version will depend on IBKR keeping the URL)"; exit 0; fi
-          # A re-upload goes to its own release, keyed by the new x64 hash, so the original copy
-          # stays intact; scripts/prefetch-installers.sh looks in both.
+          # A re-upload goes to its own release, keyed by both new hashes, so no earlier copy is
+          # ever overwritten; scripts/prefetch-installers.sh looks in both.
+          repo=RocketEdge/brokersre-ib-gateway-archive
           tag="ibgateway-${CHANNEL}@${REMOTE}"
-          if [ "$ACTION" = reupload ]; then tag="${tag}-${SHA_X64:0:12}"; fi
-          if gh release view "$tag" -R RocketEdge/brokersre-ib-gateway-archive >/dev/null 2>&1; then
-            gh release upload "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --clobber
+          if [ "$ACTION" = reupload ]; then tag="${tag}-${SHA_X64:0:8}${SHA_ARM:0:8}"; fi
+          if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
+            # Runs daily until the pull request merges or the issue is resolved: skip the ~565 MB
+            # upload when the archived checksums already equal today's download.
+            held="$(mktemp -d)"
+            gh release download "$tag" -R "$repo" --pattern '*.sha256' --dir "$held" || true
+            if [ "$(cat "$held/ibgateway-${REMOTE}-standalone-linux-x64.sh.sha256" 2>/dev/null)" = "$SHA_X64" ] \
+              && [ "$(cat "$held/ibgateway-${REMOTE}-standalone-linux-arm.sh.sha256" 2>/dev/null)" = "$SHA_ARM" ]; then
+              echo "$tag already holds these installers; nothing to upload"
+              exit 0
+            fi
+            gh release upload "$tag" archive/* -R "$repo" --clobber
           else
             gh release create "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --title "IB Gateway ${CHANNEL} ${REMOTE}" \
               --notes "Installer archive for reproducible builds of brokersre-ib-gateway. SHA-256 computed by RocketEdge on $(date -u +%Y-%m-%d). Build ${REMOTE_DT}."
@@ -137,7 +149,7 @@ jobs:
             - x64 SHA-256: `${{ steps.dl.outputs.sha_x64 }}`
             - arm SHA-256: `${{ steps.dl.outputs.sha_arm }}`
 
-            ${{ steps.decide.outputs.automerge == 'true' && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes the image. To hold it, disable auto-merge on this pull request; to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
+            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes the image. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
             Downstream, BrokerSRE's `image-pin.yml` picks the new digest up only after `cosign verify`
             and the operator-run paper regression (runbook R10).
       - name: Enable auto-merge (stable; needs BOT_TOKEN)
@@ -167,10 +179,10 @@ jobs:
           set -euo pipefail
           # One issue per set of re-uploaded bytes, open or closed: closing it (keeping the pin)
           # must not make the next daily run open it again.
-          key="${SHA_X64:0:12}"
-          title="IBKR re-uploaded IB Gateway ${REMOTE} (${CHANNEL}) with different bytes (x64 ${key})"
+          key="${SHA_X64:0:8}${SHA_ARM:0:8}"
+          title="IBKR re-uploaded IB Gateway ${REMOTE} (${CHANNEL}) with different bytes (${key})"
           if [ -n "$(gh issue list -R "$GITHUB_REPOSITORY" --state all --label ibkr-reupload --search "in:title ${key}" --json number --jq '.[0].number // empty')" ]; then
-            echo "an ibkr-reupload issue already covers these bytes (x64 ${key})"
+            echo "an ibkr-reupload issue already covers these bytes (${key})"
             exit 0
           fi
           body="$(printf '%s\n\n%s\n%s\n\n%s\n' \
