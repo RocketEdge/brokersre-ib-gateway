@@ -5,6 +5,21 @@ Next step.
 
 ## Change History
 
+### 2026-11-11 — GitHub Actions may open pull requests in this repository
+
+- **What changed:** the repository setting "Allow GitHub Actions to create and approve pull
+  requests" is on (owner decision 2026-11-11; the default workflow token stays read-only).
+- **Result:** "Detect IB Gateway releases" run 42969621084 went green on attempt 3 and updated
+  pull request #5 (stable 10.50.1f to 10.50.1g, both SHA-256 values re-checked against IBKR).
+- **What did NOT work / root cause:** IBKR shipped stable 10.50.1g; `detect-releases.yml` pushed
+  `update-stable-to-10.50.1g` but failed on 2026-11-10 and 2026-11-11 with "GitHub Actions is not
+  permitted to create or approve pull requests": `BOT_TOKEN` is not set, so it used
+  `GITHUB_TOKEN`, which the setting forbade. Opening #5 by hand did not make the job green:
+  peter-evans/create-pull-request tries to create before it updates, and that call was refused.
+- **Next step:** a pull request opened with `GITHUB_TOKEN` starts no workflows, so a release PR
+  the job opens needs a close and reopen before CI runs; `BOT_TOKEN` (fine-grained PAT) avoids
+  that.
+
 ### 2026-11-10 — `latest` re-pinned to IBKR's re-upload of 10.51.1e
 
 - **What changed:** `versions.json` `channels.latest.sha256` moves to the installers IBKR serves
