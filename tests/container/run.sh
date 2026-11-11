@@ -142,6 +142,37 @@ if docker logs ibgw-test 2>&1 | grep -q '"event":"shutdown_complete"'; then pass
   docker logs ibgw-test 2>&1 | tail -5
 fi
 
+echo "== reference compose (compose/docker-compose.example.yml) =="
+# The example is what users copy, so it is tested as shipped: its hardening settings are
+# asserted on the rendered configuration and the stack is started from it (without IBC).
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+compose_file="${repo_root}/compose/docker-compose.example.yml"
+if command -v cygpath >/dev/null 2>&1; then compose_file="$(cygpath -m "${compose_file}")"; fi
+compose_ref() { IBGW_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no docker compose -p ibgw-ref-test -f "${compose_file}" "$@"; }
+rendered="$(compose_ref config --format json 2>/dev/null)"
+compose_has() { # description jq-filter
+  if printf '%s' "${rendered}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e ".services[\"ib-gateway\"] | $2" >/dev/null 2>&1; then pass "compose: $1"; else fail "compose" "$1"; fi
+}
+compose_has "read-only root filesystem" '.read_only == true'
+compose_has "every capability dropped" '.cap_drop == ["ALL"]'
+compose_has "no-new-privileges" '.security_opt | index("no-new-privileges:true") != null'
+compose_has "stop_grace_period of at least 90 s (the entrypoint waits 60 s for IBC to log out)" '.stop_grace_period | test("^(1m30s|[2-9]m|1m[3-5][0-9]s)")'
+compose_has "open-file limit raised to 65536" '.ulimits.nofile.soft == 65536 and .ulimits.nofile.hard == 65536'
+compose_has "process limit set" '.pids_limit > 0'
+compose_has "container log size capped" '.logging.options["max-size"] != null and .logging.options["max-file"] != null'
+compose_has "API ports published on loopback by default" '[.ports[] | .host_ip] | all(. == "127.0.0.1")'
+compose_ref down -v >/dev/null 2>&1 || true
+if compose_ref up -d >/dev/null 2>&1 \
+  && wait_for 60 bash -c "docker inspect -f '{{.State.Health.Status}}' ibgw-ref-test-ib-gateway-1 2>/dev/null | grep -qx healthy \
+    || docker exec ibgw-ref-test-ib-gateway-1 bash -c 'TRADING_MODE=paper IBC_LAUNCH=no /usr/local/lib/brokersre/healthcheck.sh'"; then
+  pass "compose: the example starts as shipped (hardened, test mode) and is healthy"
+else
+  fail "compose up" "$(compose_ref logs 2>&1 | tail -5)"
+fi
+s_start=${SECONDS}
+compose_ref down -v >/dev/null 2>&1 || true
+if [ $((SECONDS - s_start)) -lt 60 ]; then pass "compose: down completes inside the grace period"; else fail "compose down" "took $((SECONDS - s_start)) s"; fi
+
 echo "== command server disabled =="
 run_container --network none -e IBC_COMMAND_SERVER_PORT=0
 sleep 45
