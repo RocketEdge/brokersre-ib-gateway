@@ -5,6 +5,28 @@ Next step.
 
 ## Change History
 
+### 2026-11-11 — `stable` moves to IBKR 10.50.1g
+
+- **What changed:** PR #5 (opened by `detect-releases.yml`, merged by owner decision) pins
+  `stable` to 10.50.1g (build `20261109 16:10:13`; x64
+  `13dc8bb05cbcec8d1b0bb0b25748447cf85863fb4b94361f57fcd350f35c7a9c`, arm
+  `cbd1e3f9368dcc9d517e23dd72cf10db4d045e58b46882d01ab528a0d1f8e343`, both re-checked with
+  `fetch-installer.sh` against IBKR on 2026-11-11).
+- **Result:** publish run 42974878793 created release `v10.50.1g-stable`, image
+  `sha256:2479cc941831a5ba9f3b810a118b8677fd082fbe2b1b8172ce142a84297439a4`, and republished
+  `latest` 10.51.1e as `sha256:5eecf3a8fefd09908437dd6879135eda55642d38fb6c8a39bf19d0ca6cead78e`;
+  both pass `cosign verify`, the CycloneDX attestation check and the Trivy OS gate. The
+  `v10.50.1f-stable` release is kept.
+- **What did NOT work / root cause:** once IBKR's unversioned `stable` URL served 10.50.1g, `main`
+  could no longer build its pinned 10.50.1f (CI of PR #6: `SHA-256 MISMATCH`, actual = the
+  10.50.1g hash), and the 10.50.1f installer was never archived. Moving `stable` was the only fix.
+- **Release record superseded:** the push also republished `latest`, overwriting the assets of
+  `v10.51.1e-latest`: image `sha256:2083e887f4d982ab302b26702104b3f38c69eea817c923e417671c77ece6d37a`
+  (created 2026-11-09T20:22:13Z), asset SHA-256 `f4e511b0…9ecc` (`digests-latest.json`) /
+  `2d0c0503…5fed` (`sbom-latest.cdx.json`).
+- **Next step:** the archive tokens would have kept 10.50.1f buildable; BrokerSRE's `image-pin.yml`
+  proposes the new `stable` digest, which waits for the operator-run paper regression (R10).
+
 ### 2026-11-11 — GitHub Actions may open pull requests in this repository
 
 - **What changed:** the repository setting "Allow GitHub Actions to create and approve pull
