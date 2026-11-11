@@ -23,8 +23,10 @@ by or endorsed by Interactive Brokers.
 - [Health, phases and logs](#health-phases-and-logs)
 - [Security posture](#security-posture)
 - [Verifying an image](#verifying-an-image)
+- [Get notified of new images](#get-notified-of-new-images)
 - [Building and testing](#building-and-testing)
 - [Upgrade policy](#upgrade-policy)
+- [Automatic updates and repository secrets](#automatic-updates-and-repository-secrets)
 - [Differences from gnzsnz/ib-gateway-docker](#differences-from-gnzsnzib-gateway-docker)
 - [Documentation](#documentation)
 - [License](#license)
@@ -120,6 +122,29 @@ cosign verify-attestation --type cyclonedx "$IMAGE" --certificate-oidc-issuer ht
   --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/' | jq .
 ```
 
+## Get notified of new images
+
+Every new IB Gateway version and every OS-patch rebuild creates a
+[release](https://github.com/RocketEdge/brokersre-ib-gateway/releases). Its notes carry the
+exact digest to pin and the `cosign verify` command; the release's `digests-<channel>.json` always
+holds the digest the channel tag points at. When an already released version is rebuilt (an
+image fix, no new IB Gateway), its release is updated in place, which GitHub does not announce.
+Follow the releases in either of two ways:
+
+- **E-mail from GitHub** (needs a GitHub account): on this repository click **Watch**, then
+  **Custom**, tick **Releases** and click **Apply**. In your GitHub
+  [notification settings](https://github.com/settings/notifications), under **Subscriptions >
+  Watching**, make sure **Email** is ticked. GitHub then e-mails you each new release.
+- **Feed, no account needed:** subscribe to
+  `https://github.com/RocketEdge/brokersre-ib-gateway/releases.atom` in a feed reader, or post it
+  to a team channel through the channel's RSS integration (for example Microsoft Teams Workflows
+  or the Slack RSS app).
+
+Release names carry the channel (`v10.50.1g-stable`, `v10.51.1e-latest`); look for `-stable` if
+that is the channel you run. A release changes nothing you run: images are pinned by digest.
+BrokerSRE clients receive a new digest as a pull request in their own repository from the weekly
+image-pin workflow and merge it only after it is verified.
+
 ## Building and testing
 
 ```bash
@@ -135,9 +160,78 @@ IBC starts, the command server listens and `STOP` shuts the Gateway down tidily.
 
 ## Upgrade policy
 
-See [docs/upgrade-policy.md](docs/upgrade-policy.md). Summary: `detect-releases.yml` opens a
-pull request when IBKR publishes a build; a human merges; `publish.yml` builds, scans, pushes,
-signs; a monthly rebuild refreshes OS packages with `-rYYYYMMDD` tags. Consumers pin digests.
+See [docs/upgrade-policy.md](docs/upgrade-policy.md). Summary: `detect-releases.yml` checks
+IBKR daily and opens a pull request when IBKR publishes a build; a `stable` update merges itself
+once CI passes, a `latest` update waits for a human (ADR 0009); `publish.yml` builds, scans,
+pushes, signs; a monthly rebuild refreshes OS packages with `-rYYYYMMDD` tags. Consumers pin
+digests.
+
+## Automatic updates and repository secrets
+
+For maintainers. Every day at 06:00 UTC `detect-releases.yml` reads IBKR's manifest for both
+channels, downloads both installers and lets `scripts/release-decision.sh` decide:
+
+| IBKR serves | What happens |
+|---|---|
+| A newer `stable` version, both installers changed | Installers archived, pull request opened with auto-merge: it merges once `lint` and `build-test` pass, then `publish.yml` publishes and the release notifies watchers |
+| Any other new label (`latest`, a lower version, an installer unchanged) | Installers archived, pull request opened; a human merges it |
+| The pinned version with different bytes | New bytes archived under `ibgateway-<channel>@<version>-<8 hex of x64><8 hex of arm>`, one `ibkr-reupload` issue per set of bytes; nothing changes |
+| The pinned version, same bytes | Nothing |
+
+To hold one `stable` update, disable auto-merge on its pull request and leave the pull request
+open: the daily run enables auto-merge only on the run that creates the pull request, so it stays
+off. Do not close it: the next daily run would open a new one with auto-merge. To skip a version
+or stop all automatic merges:
+`gh variable set STABLE_AUTOMERGE --body false -R RocketEdge/brokersre-ib-gateway` (delete the
+variable to resume).
+
+Repository settings this needs (both on): **Settings > General > Pull Requests > Allow
+auto-merge**, and **Settings > Actions > General > Allow GitHub Actions to create and approve
+pull requests**.
+
+Repository secrets (fine-grained personal access tokens; GitHub adds **Metadata: Read-only** to
+each by itself):
+
+| Secret | Used by | Repository access | Repository permissions |
+|---|---|---|---|
+| `BOT_TOKEN` | `detect-releases.yml`: opens the pull request and enables auto-merge | `RocketEdge/brokersre-ib-gateway` | Contents: Read and write; Pull requests: Read and write |
+| `ARCHIVE_WRITE_TOKEN` | `detect-releases.yml`: archives the installers | `RocketEdge/brokersre-ib-gateway-archive` | Contents: Read and write |
+| `ARCHIVE_READ_TOKEN` | `ci.yml`, `publish.yml`: pre-fetch archived installers | `RocketEdge/brokersre-ib-gateway-archive` | Contents: Read-only |
+
+Without `BOT_TOKEN` the pull request is opened with `GITHUB_TOKEN`: GitHub does not start its CI
+by itself (it skips the runs or holds them for approval), it is not set to auto-merge, and a
+merge made with `GITHUB_TOKEN` would not start `publish.yml`. Without the archive tokens a pinned
+version stops building on the day IBKR moves past it.
+
+To create and store each token:
+
+1. Open [New fine-grained token](https://github.com/settings/personal-access-tokens/new).
+2. **Token name:** for example `brokersre-ib-gateway-bot`. **Resource owner:** `RocketEdge`.
+   **Expiration:** at most a year; put a reminder in the calendar two weeks before it expires.
+   An expired `BOT_TOKEN` or `ARCHIVE_WRITE_TOKEN` fails only the run that needs it (the day IBKR
+   publishes); an expired `ARCHIVE_READ_TOKEN` fails nothing and only logs an archive miss, so
+   the reminder is the only warning.
+3. **Repository access:** *Only select repositories*, then the repository from the table.
+4. **Permissions > Repository permissions:** exactly the permissions in the table, nothing else.
+5. **Generate token** and copy it once. If the organisation requires approval, approve the
+   request under **RocketEdge > Settings > Personal access tokens > Pending requests**.
+6. Store it, pasting the value at the prompt (never on the command line, where shell history
+   keeps it):
+
+   ```bash
+   gh secret set BOT_TOKEN -R RocketEdge/brokersre-ib-gateway
+   gh secret set ARCHIVE_WRITE_TOKEN -R RocketEdge/brokersre-ib-gateway
+   gh secret set ARCHIVE_READ_TOKEN -R RocketEdge/brokersre-ib-gateway
+   ```
+
+7. Check: `gh secret list -R RocketEdge/brokersre-ib-gateway` lists all three. `ARCHIVE_READ_TOKEN`
+   is proven by the next CI run: its "Pre-fetch archived stable installers" step logs
+   `from ibgateway-stable@<version> (sha256 ok)`. `BOT_TOKEN` and `ARCHIVE_WRITE_TOKEN` are first
+   used when IBKR publishes: that day's pull request shows CI checks and auto-merge, and the
+   archive gains a release.
+
+A GitHub App installation token would avoid tying the bot to a person; it needs an app with the
+same permissions and `actions/create-github-app-token` in the workflow.
 
 ## Differences from gnzsnz/ib-gateway-docker
 

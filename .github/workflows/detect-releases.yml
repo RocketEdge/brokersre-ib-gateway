@@ -1,6 +1,16 @@
-# Daily: read IBKR's version.json for each channel; when a new build appears, download both
-# installers, compute SHA-256, archive them in the PRIVATE archive repository (when the token is
-# present), update versions.json and open a pull request. A human merges; publish.yml then builds.
+# Daily, per channel: read IBKR's version.json, download both installers and hash them, then let
+# scripts/release-decision.sh decide (docs/upgrade-policy.md, ADR 0009):
+#   new-version  archive the installers privately (ARCHIVE_WRITE_TOKEN), bump versions.json and open
+#                a pull request. A newer stable version whose installers both changed gets
+#                auto-merge, enabled once, when the pull request is created (a human who turns it
+#                off keeps it off; repository variable STABLE_AUTOMERGE=false turns it off for
+#                all). That needs BOT_TOKEN: a pull request opened with GITHUB_TOKEN does not start
+#                CI by itself, and a merge made with it would not start publish.yml. Everything
+#                else (latest, a lower version, unchanged bytes) waits for a human.
+#   reupload     IBKR changed the bytes of the pinned version without a new label: archive them
+#                under ibgateway-<channel>@<version>-<x64 hash prefix>, open one issue per set of
+#                bytes and change nothing; a human decides whether to re-pin.
+#   none         nothing to do.
 # RocketEdge never redistributes IBKR binaries from this public repository (ADR 0007).
 name: Detect IB Gateway releases
 
@@ -23,61 +33,112 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Compare IBKR's manifest with versions.json
+      - name: Read IBKR's manifest
         id: cmp
+        env:
+          CHANNEL: ${{ matrix.channel }}
         run: |
-          res=$(curl -sSfL "https://download2.interactivebrokers.com/installers/ibgateway/${{ matrix.channel }}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
+          set -euo pipefail
+          res=$(curl -sSfL "https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
           remote=$(jq -r .buildVersion <<< "$res")
           remote_dt=$(jq -r .buildDateTime <<< "$res")
-          local_v=$(jq -r '.channels["${{ matrix.channel }}"].version' versions.json)
+          # External input: refuse anything that is not a plain IBKR build label before it reaches
+          # a branch name, a file name or a shell.
+          [[ "$remote" =~ ^10\.[0-9]+\.[0-9]+[a-z]?$ ]] || { echo "::error::unexpected IBKR version '$remote'"; exit 1; }
+          [[ "$remote_dt" =~ ^[0-9]{8}\ [0-9:]{8}$ ]] || { echo "::error::unexpected IBKR build time '$remote_dt'"; exit 1; }
+          local_v=$(jq -r --arg ch "$CHANNEL" '.channels[$ch].version' versions.json)
           echo "remote=$remote local=$local_v"
-          {
-            echo "remote=$remote"; echo "remote_dt=$remote_dt"; echo "local=$local_v"
-            if [ "$remote" != "$local_v" ]; then echo "update=true"; else echo "update=false"; fi
-          } >> "$GITHUB_OUTPUT"
+          { echo "remote=$remote"; echo "remote_dt=$remote_dt"; echo "local=$local_v"; } >> "$GITHUB_OUTPUT"
       - name: Download both installers and compute checksums
-        if: steps.cmp.outputs.update == 'true'
         id: dl
+        env:
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
         run: |
           set -euo pipefail
           mkdir -p archive
           for arch in x64 arm; do
-            url="https://download2.interactivebrokers.com/installers/ibgateway/${{ matrix.channel }}-standalone/ibgateway-${{ matrix.channel }}-standalone-linux-${arch}.sh"
-            dest="archive/ibgateway-${{ steps.cmp.outputs.remote }}-standalone-linux-${arch}.sh"
+            url="https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/ibgateway-${CHANNEL}-standalone-linux-${arch}.sh"
+            dest="archive/ibgateway-${REMOTE}-standalone-linux-${arch}.sh"
             curl -sSfL --retry 3 "$url" -o "$dest"
             sha256sum "$dest" | cut -d' ' -f1 > "$dest.sha256"
             echo "sha_${arch}=$(cat "$dest.sha256")" >> "$GITHUB_OUTPUT"
           done
           ls -la archive
+      - name: Decide (scripts/release-decision.sh)
+        id: decide
+        env:
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
+          SHA_X64: ${{ steps.dl.outputs.sha_x64 }}
+          SHA_ARM: ${{ steps.dl.outputs.sha_arm }}
+        run: |
+          set -euo pipefail
+          # pin <path below .channels.<channel>>, e.g. pin sha256.x64
+          pin() { jq -r --arg ch "$CHANNEL" --arg path "$1" '.channels[$ch] | getpath($path | split("."))' versions.json; }
+          scripts/release-decision.sh "$CHANNEL" "$(pin version)" "$(pin sha256.x64)" "$(pin sha256.arm)" \
+            "$REMOTE" "$SHA_X64" "$SHA_ARM" | tee -a "$GITHUB_OUTPUT"
       - name: Archive installers privately (needs ARCHIVE_WRITE_TOKEN)
-        if: steps.cmp.outputs.update == 'true'
+        if: steps.decide.outputs.action == 'new-version' || steps.decide.outputs.action == 'reupload'
         env:
           GH_TOKEN: ${{ secrets.ARCHIVE_WRITE_TOKEN }}
+          ACTION: ${{ steps.decide.outputs.action }}
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
+          REMOTE_DT: ${{ steps.cmp.outputs.remote_dt }}
+          SHA_X64: ${{ steps.dl.outputs.sha_x64 }}
+          SHA_ARM: ${{ steps.dl.outputs.sha_arm }}
         run: |
+          set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then echo "::warning::ARCHIVE_WRITE_TOKEN not set; installers not archived (reproducible rebuilds of this version will depend on IBKR keeping the URL)"; exit 0; fi
-          tag="ibgateway-${{ matrix.channel }}@${{ steps.cmp.outputs.remote }}"
-          if gh release view "$tag" -R RocketEdge/brokersre-ib-gateway-archive >/dev/null 2>&1; then
-            gh release upload "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --clobber
+          # A re-upload goes to its own release, keyed by both new hashes, so no earlier copy is
+          # ever overwritten; scripts/prefetch-installers.sh looks in both.
+          repo=RocketEdge/brokersre-ib-gateway-archive
+          tag="ibgateway-${CHANNEL}@${REMOTE}"
+          if [ "$ACTION" = reupload ]; then tag="${tag}-${SHA_X64:0:8}${SHA_ARM:0:8}"; fi
+          if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
+            # Runs daily until the pull request merges or the issue is resolved: skip the ~565 MB
+            # upload when the archived checksums already equal today's download.
+            held="$(mktemp -d)"
+            gh release download "$tag" -R "$repo" --pattern '*.sha256' --dir "$held" || true
+            if [ "$(cat "$held/ibgateway-${REMOTE}-standalone-linux-x64.sh.sha256" 2>/dev/null)" = "$SHA_X64" ] \
+              && [ "$(cat "$held/ibgateway-${REMOTE}-standalone-linux-arm.sh.sha256" 2>/dev/null)" = "$SHA_ARM" ]; then
+              echo "$tag already holds these installers; nothing to upload"
+              exit 0
+            fi
+            gh release upload "$tag" archive/* -R "$repo" --clobber
           else
-            gh release create "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --title "IB Gateway ${{ matrix.channel }} ${{ steps.cmp.outputs.remote }}" \
-              --notes "Installer archive for reproducible builds of brokersre-ib-gateway. SHA-256 computed by RocketEdge on $(date -u +%Y-%m-%d). Build ${{ steps.cmp.outputs.remote_dt }}."
+            gh release create "$tag" archive/* -R RocketEdge/brokersre-ib-gateway-archive --title "IB Gateway ${CHANNEL} ${REMOTE}" \
+              --notes "Installer archive for reproducible builds of brokersre-ib-gateway. SHA-256 computed by RocketEdge on $(date -u +%Y-%m-%d). Build ${REMOTE_DT}."
           fi
       - name: Update versions.json
-        if: steps.cmp.outputs.update == 'true'
+        if: steps.decide.outputs.action == 'new-version'
+        env:
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
+          REMOTE_DT: ${{ steps.cmp.outputs.remote_dt }}
+          SHA_X64: ${{ steps.dl.outputs.sha_x64 }}
+          SHA_ARM: ${{ steps.dl.outputs.sha_arm }}
         run: |
-          jq --arg ch "${{ matrix.channel }}" --arg v "${{ steps.cmp.outputs.remote }}" --arg dt "${{ steps.cmp.outputs.remote_dt }}" \
-             --arg x64 "${{ steps.dl.outputs.sha_x64 }}" --arg arm "${{ steps.dl.outputs.sha_arm }}" \
+          jq --arg ch "$CHANNEL" --arg v "$REMOTE" --arg dt "$REMOTE_DT" --arg x64 "$SHA_X64" --arg arm "$SHA_ARM" \
              '.channels[$ch] = {version:$v, build_datetime:$dt, sha256:{x64:$x64, arm:$arm}}' versions.json > versions.json.new
           mv versions.json.new versions.json
           rm -rf archive
           git diff --stat
       - uses: peter-evans/create-pull-request@v8.1.1
-        if: steps.cmp.outputs.update == 'true'
+        id: cpr
+        if: steps.decide.outputs.action == 'new-version'
         with:
-          # BOT_TOKEN (fine-grained PAT) lets CI run on the PR; GITHUB_TOKEN-authored PRs do not trigger workflows.
+          # BOT_TOKEN (fine-grained PAT, README "Automatic updates and repository secrets") lets CI
+          # run on the PR; without it the PR is opened with GITHUB_TOKEN, which needs the repository
+          # setting "Allow GitHub Actions to create and approve pull requests" and does not start
+          # CI by itself.
           token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          # Only the pin may ever be committed: never an installer (ADR 0007).
+          add-paths: versions.json
           branch: update-${{ matrix.channel }}-to-${{ steps.cmp.outputs.remote }}
           title: "build(${{ matrix.channel }}): IB Gateway ${{ steps.cmp.outputs.local }} -> ${{ steps.cmp.outputs.remote }}"
           commit-message: "build(${{ matrix.channel }}): pin IB Gateway ${{ steps.cmp.outputs.remote }} with RocketEdge-computed SHA-256"
@@ -88,5 +149,45 @@ jobs:
             - x64 SHA-256: `${{ steps.dl.outputs.sha_x64 }}`
             - arm SHA-256: `${{ steps.dl.outputs.sha_arm }}`
 
-            Merging publishes the new image (publish.yml). Downstream, BrokerSRE's `image-pin.yml` picks the
-            new digest up only after `cosign verify` and the operator-run paper regression (runbook R10).
+            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes the image. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
+            Downstream, BrokerSRE's `image-pin.yml` picks the new digest up only after `cosign verify`
+            and the operator-run paper regression (runbook R10).
+      - name: Enable auto-merge (stable; needs BOT_TOKEN)
+        # Only on the run that creates the pull request: a later daily run must never re-enable
+        # auto-merge that a human turned off. STABLE_AUTOMERGE=false stops it for every update.
+        if: >-
+          steps.decide.outputs.automerge == 'true' && steps.cpr.outputs.pull-request-operation == 'created'
+          && vars.STABLE_AUTOMERGE != 'false'
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN }}
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::BOT_TOKEN not set: pull request #$PR was opened with GITHUB_TOKEN, runs no CI and cannot auto-merge. Merge it by hand (close and reopen it first to run CI)."
+            exit 0
+          fi
+          gh pr merge "$PR" --auto --merge -R "$GITHUB_REPOSITORY"
+      - name: Report an IBKR re-upload (nothing is changed)
+        if: steps.decide.outputs.action == 'reupload'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
+          SHA_X64: ${{ steps.dl.outputs.sha_x64 }}
+          SHA_ARM: ${{ steps.dl.outputs.sha_arm }}
+        run: |
+          set -euo pipefail
+          # One issue per set of re-uploaded bytes, open or closed: closing it (keeping the pin)
+          # must not make the next daily run open it again.
+          key="${SHA_X64:0:8}${SHA_ARM:0:8}"
+          title="IBKR re-uploaded IB Gateway ${REMOTE} (${CHANNEL}) with different bytes (${key})"
+          if [ -n "$(gh issue list -R "$GITHUB_REPOSITORY" --state all --label ibkr-reupload --search "in:title ${key}" --json number --jq '.[0].number // empty')" ]; then
+            echo "an ibkr-reupload issue already covers these bytes (${key})"
+            exit 0
+          fi
+          body="$(printf '%s\n\n%s\n%s\n\n%s\n' \
+            "IBKR's ${CHANNEL} URL serves ${REMOTE} with bytes that differ from the pin in versions.json. Nothing was changed; builds keep using the archived installers (when ARCHIVE_READ_TOKEN is set). The new bytes were archived as release ibgateway-${CHANNEL}@${REMOTE}-${key} (when ARCHIVE_WRITE_TOKEN is set)." \
+            "- x64 SHA-256 now served: \`${SHA_X64}\`" \
+            "- arm SHA-256 now served: \`${SHA_ARM}\`" \
+            "To accept the new bytes, update channels.${CHANNEL}.sha256 in versions.json in a pull request and record the decision in docs/changes.md (as for 10.51.1e on 2026-11-10). To keep the pin, close this issue; these bytes will not be reported again.")"
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --label ibkr-reupload --body "$body"

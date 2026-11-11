@@ -5,6 +5,46 @@ Next step.
 
 ## Change History
 
+### 2026-11-11 — Stable updates merge themselves; archive pre-fetch in CI; re-uploads reported
+
+- **What changed:** `detect-releases.yml` hashes both installers daily and hands the policy to
+  `scripts/release-decision.sh` (bats-tested): a new `stable` version's pull request gets
+  auto-merge (with `BOT_TOKEN`), a new `latest` version waits for a human, and different bytes
+  under the pinned version open an `ibkr-reupload` issue. `ci.yml` and `publish.yml` pre-fetch
+  archived installers through `scripts/prefetch-installers.sh`, which keeps only copies matching
+  the pin. Auto-merge is allowed on the repository; the private archive got its first commit and
+  the installers pinned today (`ibgateway-stable@10.50.1g`, `ibgateway-latest@10.51.1e`). README
+  sections for following releases and for creating the tokens; ADR 0009 (owner decision).
+- **Result:** 23 bats tests (release policy, archive pre-fetch) pass; actionlint, shellcheck and
+  shfmt clean.
+- **Independent review of PR #7, fixed before merge:** (1) the daily run re-enabled auto-merge a
+  human had turned off (create-pull-request returns the number of an existing PR), so auto-merge
+  is now requested only when the run creates the PR, with the kill switch `STABLE_AUTOMERGE=false`;
+  (2) a lower version, or a new label over unchanged bytes, would have merged itself, so
+  auto-merge now needs a higher version (`sort -V`) and both installers changed; (3) a closed
+  re-upload issue would reopen daily and the new bytes were never archived, so issues are keyed
+  by the bytes (any state) and the bytes are archived under `ibgateway-<channel>@<version>-<8 hex
+  of x64><8 hex of arm>` (both hashes, so an arm-only re-upload cannot overwrite another), which
+  the pre-fetch also reads, and an unchanged archive is not uploaded again each day; (4) a
+  republished version kept stale release notes,
+  so `publish.yml` now rewrites them. Also: refusals go to stderr only (stdout feeds
+  `GITHUB_OUTPUT`), `add-paths: versions.json`, and a missing pre-fetch destination is refused.
+- **Release records superseded by this merge** (it changes `publish.yml`, which republishes both
+  channels): `v10.50.1g-stable` image
+  `sha256:2479cc941831a5ba9f3b810a118b8677fd082fbe2b1b8172ce142a84297439a4` (created
+  2026-11-11T06:57:14Z), assets `3dafe62f…eb721` / `c8dd6a37…a9c67`; `v10.51.1e-latest` image
+  `sha256:5eecf3a8fefd09908437dd6879135eda55642d38fb6c8a39bf19d0ca6cead78e` (created
+  2026-11-11T06:56:31Z), assets `78899cb6…21d8f` / `8e955347…c3e1`.
+- **What did NOT work / root cause:** the archive could never have worked: the repository had no
+  commit, so creating a release failed with "Repository is empty" (found while seeding it by
+  hand). `fetch-installer.sh` aborts the build when a pre-fetched copy does not match the pin, so
+  a stale archive copy would have failed builds instead of falling back to IBKR's URL; the
+  pre-fetch now drops such copies. CI never pre-fetched at all, which is why PR #6 failed once
+  IBKR moved `stable`.
+- **Next step:** the owner creates `BOT_TOKEN`, `ARCHIVE_WRITE_TOKEN` and `ARCHIVE_READ_TOKEN`
+  (README); until then pull requests are opened with `GITHUB_TOKEN`, run no CI and do not
+  auto-merge, and nothing is archived automatically.
+
 ### 2026-11-11 — `stable` moves to IBKR 10.50.1g
 
 - **What changed:** PR #5 (opened by `detect-releases.yml`, merged by owner decision) pins
