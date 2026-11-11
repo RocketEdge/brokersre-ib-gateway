@@ -128,7 +128,7 @@ jobs:
           mv versions.json.new versions.json
           rm -rf archive
           git diff --stat
-      - uses: peter-evans/create-pull-request@v8.1.1
+      - uses: peter-evans/create-pull-request@v8.1.2
         id: cpr
         if: steps.decide.outputs.action == 'new-version'
         with:
