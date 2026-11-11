@@ -84,6 +84,51 @@ render() {
   grep -q '^IbLoginId=custom$' "${RUN_DIR}/config.ini"
 }
 
+# IBC reads config.ini with java.util.Properties.load(InputStream): ISO-8859-1 bytes, backslash
+# as the escape character, leading whitespace of a value dropped. A credential must therefore be
+# written in .properties escaping or IBC types a different password than the user set.
+@test "a backslash in the password is escaped for IBC's .properties parser" {
+  printf 'dummyuser' > "${SECRETS}/u"
+  printf 'hunter2\\x\\\\y' > "${SECRETS}/p"
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  run render 'true'
+  [ "$status" -eq 0 ]
+  grep -q -F -x 'IbPassword=hunter2\\x\\\\y' "${RUN_DIR}/config.ini"
+}
+
+@test "leading whitespace of a credential survives the .properties parser" {
+  printf 'dummyuser' > "${SECRETS}/u"
+  printf ' hunter2 lead' > "${SECRETS}/p"
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  run render 'true'
+  [ "$status" -eq 0 ]
+  grep -q -F -x 'IbPassword=\ hunter2 lead' "${RUN_DIR}/config.ini"
+}
+
+@test "non-ASCII credential characters are written as \\uXXXX escapes (incl. surrogate pairs)" {
+  printf 'dummyuser' > "${SECRETS}/u"
+  # a-umlaut (U+00E4), euro sign (U+20AC), an emoji (U+1F600 = surrogates D83D DE00)
+  printf 'hunter2\xc3\xa4\xe2\x82\xac\xf0\x9f\x98\x80' > "${SECRETS}/p"
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  run render 'true'
+  [ "$status" -eq 0 ]
+  # The expected escapes are assembled from parts so that no editor or tool turns a literal
+  # backslash-u sequence back into the character it stands for.
+  bs='\'
+  grep -q -F -x "IbPassword=hunter2${bs}u00e4${bs}u20ac${bs}ud83d${bs}ude00" "${RUN_DIR}/config.ini"
+  # The rendered file is pure ASCII, so the parser's ISO-8859-1 decoding cannot corrupt it.
+  ! LC_ALL=C grep -q '[^ -~]' "${RUN_DIR}/config.ini"
+}
+
+@test "the username gets the same escaping as the password" {
+  printf 'dummy\\user' > "${SECRETS}/u"
+  printf 'hunter2hunter2' > "${SECRETS}/p"
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  run render 'true'
+  [ "$status" -eq 0 ]
+  grep -q -F -x 'IbLoginId=dummy\\user' "${RUN_DIR}/config.ini"
+}
+
 @test "TRADING_MODE other than live or paper is rejected (one session per container)" {
   run bash -c "source '${BROKERSRE_LIB}/common.sh'; TRADING_MODE=both set_ports"
   [ "$status" -ne 0 ]
