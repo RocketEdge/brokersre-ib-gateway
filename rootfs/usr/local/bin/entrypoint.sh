@@ -20,6 +20,8 @@ source "${BROKERSRE_LIB}/start-vnc.sh"
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/start-socat.sh"
 # shellcheck source=/dev/null
+source "${BROKERSRE_LIB}/java-env.sh"
+# shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/start-ibc.sh"
 
 IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID=""
@@ -59,12 +61,15 @@ for dir in "${LOG_DIR}" "${RUN_DIR}" "${TWS_SETTINGS_PATH}"; do
     exit 1
   fi
 done
-mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state" "${RUN_DIR}/prefs"
+mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state"
 set_phase starting
 log_event entrypoint info container_start "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
 
 set_ports
 render_config
+# Before any helper starts: a Java home that cannot be written must stop the container here,
+# not leave a half-started one behind (java-env.sh explains why the Gateway needs it).
+java_env
 start_xvfb
 start_vnc
 start_socat

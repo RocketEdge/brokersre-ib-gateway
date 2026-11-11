@@ -29,6 +29,7 @@ if command -v cygpath >/dev/null 2>&1; then host_secrets="$(cygpath -m "${secret
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
   docker rm -f ibgw-test >/dev/null 2>&1 || true
+  docker volume rm ibgw-test-settings ibgw-test-logs >/dev/null 2>&1 || true
   rm -rf "${secrets_dir}"
 }
 trap cleanup EXIT
@@ -107,13 +108,29 @@ fi
 docker rm -f ibgw-test >/dev/null 2>&1 || true
 docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
 
-echo "== IBC smoke (offline, --network none) =="
-run_container --network none
+echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) =="
+# The reference compose runs read-only with every capability dropped, so the smoke test does
+# too: IBC and the Gateway JVM must start in exactly that configuration.
+docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
+run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
 if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
   fail "ibc smoke" "7462 never listened"
   docker logs ibgw-test | tail -30
 fi
 if in_container 'pgrep -f ibcalpha.ibc >/dev/null'; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
+# A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
+# Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
+if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -qx "_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home"'; then
+  pass "Gateway JVM gets a user.home on the settings volume"
+else
+  fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
+fi
+if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
+  pass "Java home exists, is writable and private (0700) under a read-only root"
+else
+  fail "java home dir" "missing, not writable or not 0700"
+fi
 if in_container 'test -s /var/log/ibgateway/ibc/ibc.log'; then pass "raw IBC log captured to the volume"; else fail "ibc log" "empty"; fi
 if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh'; then fail "healthcheck" "reported healthy without a login"; else pass "healthcheck honestly unhealthy before login"; fi
 docker stop -t 90 ibgw-test >/dev/null 2>&1 &
