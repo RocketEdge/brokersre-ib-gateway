@@ -76,8 +76,8 @@ rotate() {
 # save_state: write "<id> <bytes>" atomically so a reader never sees a half-written record.
 save_state() {
   [ -n "${state_file}" ] || return 0
-  printf '%s %s\n' "${state_id}" "${consumed}" >"${state_file}.tmp" 2>/dev/null &&
-    mv -f "${state_file}.tmp" "${state_file}" 2>/dev/null
+  printf '%s %s\n' "${state_id}" "${consumed}" >"${state_file}.tmp" 2>/dev/null \
+    && mv -f "${state_file}.tmp" "${state_file}" 2>/dev/null
   last_saved="${SECONDS}"
 }
 last_saved=-1

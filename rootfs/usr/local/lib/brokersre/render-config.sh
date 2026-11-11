@@ -46,6 +46,7 @@ properties_escape() {
     # A byte that is not valid UTF-8 comes back as a (possibly negative) byte value.
     if ((code < 0)); then code=$((code + 256)); fi
     if ((code == 92)); then
+      # shellcheck disable=SC1003  # two literal backslashes: the escaped form of one backslash
       out+='\\'
     elif ((code == 32 && i == 0)); then
       out+='\ '
