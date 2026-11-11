@@ -11,10 +11,11 @@ eval "$(scripts/bake-env.sh)"                                        # variables
 docker buildx bake --print stable latest > /dev/null                 # bake definition resolves
 docker buildx bake stable --set '*.platform=linux/amd64' --load      # local build
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh
-git clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once
+git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
-tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch), on the host
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests
+tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch, README table), on the host (needs jq)
+IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
+scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
 pre-commit run --all-files
 ```
 
@@ -52,7 +53,8 @@ Dockerfile                 two-stage build; ARGs come from docker-bake.hcl <- ve
 docker-bake.hcl            targets stable/latest, tags, labels; scripts/bake-env.sh exports variables
 scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first)
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
-rootfs/usr/local/lib/brokersre/*.sh           common, log, render-config, start-xvfb/vnc/socat/ibc, classify-ibc-log, tail-gateway-logs, ibc-cmd, healthcheck
+rootfs/usr/local/lib/brokersre/*.sh           common, log, render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, rotating-append, tail-gateway-logs, ibc-cmd, healthcheck
+scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification)
 schemas/log-event.v1.schema.json
 tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
@@ -68,6 +70,25 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   archived installer under `downloads/`.
 - `ibcstart.sh` resolves Java from `.install4j/inst_jre.cfg` in the Gateway directory; the
   Dockerfile writes it (bundled JRE on x64, system OpenJDK 25 on arm64).
-- Dialog titles in `ibc-patterns.tsv` are from IBC 3.24.x documentation; verify against real
-  scrubbed logs (`docs/limitations.md` L01).
-- `tests/container/run.sh` needs ~3 minutes: the IBC smoke test waits for the Gateway JVM.
+- Three rows of `ibc-patterns.tsv` are confirmed by a real log, the rest are from IBC 3.24.x
+  sources (`docs/limitations.md` L01). IBC logs every dialog three times (`event=Opened`,
+  `Activated`, `Focused`): match `Opened` only. The login window and the Gateway main window are
+  both titled "IBKR Gateway": never classify by that title.
+- `tests/container/run.sh` needs ~4 minutes: the IBC smoke test waits for the Gateway JVM.
+- JVM options: `ibcstart.sh` drops every `-D` line of `ibgateway.vmoptions` and clears
+  `JAVA_TOOL_OPTIONS`; only `_JAVA_OPTIONS` reaches the Gateway JVM (`java-env.sh`). Check what
+  the JVM really got in `/proc/<pid>/cmdline` and `/proc/<pid>/environ`, not in the files.
+- The Gateway needs a writable JVM `user.home` (it writes `.hwid` during login). Without it the
+  login blocks behind a dialog IBC does not see and nothing is logged; `kill -3 <java pid>`
+  prints a thread dump into `ibc/ibc.log`, which is how it was found.
+- IBC reads `config.ini` with `java.util.Properties.load`: backslashes, non-ASCII characters
+  and leading spaces in a value must be escaped (`properties_escape` in `render-config.sh`).
+- A login can be exercised without touching a real account: a made-up username reaches IBKR's
+  "Unrecognized Username or Password" dialog, which proves everything up to authentication.
+  Never loop it, and never run it in CI (invariant 9).
+- bats: a background process started in a test must close descriptor 3 and its output
+  (`cmd >/dev/null 2>&1 3>&- &`), or bats waits for it and the run hangs.
+- A literal backslash-u sequence in a file written through an editor or agent tool can come out
+  as the character it names; assemble such test strings from parts (see `render.bats`).
+- The host that develops this repository may lack `jq`: run `tests/bats/ci` inside the image
+  (`docker run --rm -v "$PWD:/code:ro" -w /code --entrypoint bash <image> -c 'tests/.bats-core/bin/bats tests/bats/ci'`).
