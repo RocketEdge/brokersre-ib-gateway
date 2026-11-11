@@ -116,7 +116,7 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
-# ib_async ships no type information; it is used behind the IbClient Protocol only.
-module = ["ib_async", "ib_async.*"]
-ignore_missing_imports = true
-follow_untyped_imports = false
+# ib_async declares py.typed but most of its functions are unannotated; the adapter is the
+# only module that calls it, behind the fully typed IbClient Protocol.
+module = ["brokersre_sidecar.probe.adapter"]
+disallow_untyped_calls = false
