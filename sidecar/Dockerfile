@@ -51,6 +51,17 @@ LABEL org.opencontainers.image.title="brokersre-ib-gateway-sidecar" \
       org.opencontainers.image.created="${CREATED}" \
       com.rocketedge.brokersre.sidecar.status-schema="brokersre.sidecar.status.v1"
 
+# Security upgrade of one package the pinned base still ships unpatched: zlib1g carries two
+# fixable HIGH findings (CVE-2026-76844, CVE-2026-85091, Trivy 0.76.2 on 2026-11-12) and the
+# fix is in Debian's security archive. Only that package is touched (--only-upgrade installs
+# nothing new), so the base digest keeps its meaning. Drop this layer when a newer base digest
+# carries the fix. No version pin, for the reason given in .hadolint.yaml (DL3008): a pin
+# would have to be bumped on every Debian security update.
+# hadolint ignore=DL3008
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends --only-upgrade zlib1g \
+ && rm -rf /var/lib/apt/lists/*
+
 # uid 1000 like the gateway, so the shared log volume is readable. pip is removed: nothing is
 # installed at run time, and an installer in the image is attack surface with CVEs of its own.
 # /var/lib/sidecar is created owned by uid 1000 so a named volume mounted there is writable.
