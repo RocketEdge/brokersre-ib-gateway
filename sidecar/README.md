@@ -1,0 +1,507 @@
+# brokersre-ib-gateway-sidecar
+
+An optional companion container for [`brokersre-ib-gateway`](../README.md). It watches one
+IB Gateway container and tells people and monitoring systems what it sees:
+
+- **follows the gateway's state** from the gateway's log volume, mounted read-only;
+- **probes the API read-only**: one persistent connection, one server-time request per minute;
+- **serves** `/livez`, `/readyz`, `/status` (JSON) and `/metrics` (Prometheus) on port 9810;
+- **notifies humans** (Teams, Slack, Telegram, ntfy, PagerDuty, e-mail, generic webhook) and
+  escalates when a person is needed, for example to approve the IBKR Mobile prompt;
+- **pings a dead-man check** (optional, recommended) so that somebody notices when the
+  sidecar or its host dies.
+
+It **alerts and never acts**: it places no orders, requests no market or account data,
+never automates or bypasses two-factor authentication, sends nothing to the IBC command
+server and never restarts the gateway. The gateway does not depend on it: stop the sidecar
+and the gateway keeps running. Stop the gateway, and the sidecar says so.
+
+## Table of contents
+
+- [How it fits](#how-it-fits)
+- [Quick start](#quick-start)
+- [Network modes](#network-modes)
+- [Endpoints](#endpoints)
+- [Status model](#status-model)
+- [Environment variables](#environment-variables)
+- [Notification channels](#notification-channels)
+- [Alert classes](#alert-classes)
+- [IBKR reset windows](#ibkr-reset-windows)
+- [Escalation and de-duplication](#escalation-and-de-duplication)
+- [Dead-man ping (recommended)](#dead-man-ping-recommended)
+- [Metrics](#metrics)
+- [Command line](#command-line)
+- [Security posture](#security-posture)
+- [Limitations](#limitations)
+- [Development](#development)
+
+## How it fits
+
+```mermaid
+flowchart LR
+  subgraph gwc["ib-gateway container"]
+    gw["IB Gateway API<br/>loopback only"]
+    relay["relay :4004 paper / :4003 live<br/>open only while logged in"]
+    relay --> gw
+  end
+  subgraph scc["sidecar container (its own network namespace)"]
+    sc["sidecar<br/>:9810"]
+  end
+  vol[("log volume<br/>state/phase, events/, metrics/")]
+  gwc -- "writes" --> vol
+  vol -- "read-only" --> sc
+  sc -- "time request, client id 999<br/>ib-gateway:4004" --> relay
+  sc -- "HTTPS" --> ch["Teams / Slack / Telegram / ntfy / PagerDuty / SMTP / webhook"]
+  sc -- "GET, nothing attached" --> dm["dead-man check (optional)"]
+  mon["Prometheus, load balancer, operator"] -- "GET 127.0.0.1:9810" --> sc
+```
+
+Architecture, task model and data flow: [docs/sidecar.md](../docs/sidecar.md). Decision
+record: [ADR 0010](../docs/adr/0010-sidecar-for-probe-status-and-alerts.md).
+
+## Quick start
+
+The sidecar is an ordinary container next to the gateway. Nothing is added to the
+`ib-gateway` service. Use the override file next to the reference compose file:
+
+```bash
+cd compose
+mkdir -p secrets
+printf '%s' 'https://prod-00.westeurope.logic.azure.com/workflows/...' > secrets/notify-teams-url
+docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml up -d
+curl -s http://127.0.0.1:9810/status
+```
+
+The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-compose.sidecar.yml):
+
+```yaml
+services:
+  sidecar:
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0   # pin by digest in production
+    restart: unless-stopped
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
+    ports:
+      - "127.0.0.1:9810:9810"              # the sidecar's own port
+    environment:
+      TRADING_MODE: paper                  # the gateway's value: relay port 4004 (paper) or 4003 (live)
+      IBGW_INSTANCE: desk-1
+      TIME_ZONE: America/New_York
+      NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url
+      DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url   # recommended, see below
+    secrets: [notify-teams-url, deadman-ping-url]
+    volumes:
+      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      - sidecar-state:/var/lib/sidecar     # de-duplication state across restarts
+```
+
+Check a configuration without starting anything, and test the channels:
+
+```bash
+docker compose run --rm sidecar check-config
+docker compose run --rm sidecar notify test
+```
+
+## Network modes
+
+### Own network namespace (default, recommended)
+
+The sidecar has its own network namespace and reaches the gateway by its service name
+(`GATEWAY_HOST`, default `ib-gateway`) on the gateway's **relay port**: 4004 for paper, 4003
+for live. That is the same path a strategy container uses, so `ready` means "a client on the
+container network gets an answer".
+
+Why this is the default: the sidecar's most important messages are about a gateway that is
+gone, and it can only send them from a network that outlives the gateway container. When
+the gateway is stopped, exits, is killed or restarts, the sidecar keeps running, keeps its
+endpoints, and announces it (`gateway_stopped`, `gateway_exited`, `gateway_silent`,
+`restart_storm`).
+
+The relay listens only while the gateway is logged in, and it opens a moment after the phase
+says `logged-in`. The probe allows for that: for 20 seconds after a login a refused
+connection is `not_measured` (and is tried again every 3 seconds); after that it is `down`.
+
+The number of half-closed API sockets comes from the gateway's own metrics sample
+(`api_close_wait_sockets`); the sidecar does not read another container's socket table.
+
+### Shared network namespace (optional)
+
+The sidecar can run inside the gateway's network namespace instead, with
+[`compose/docker-compose.sidecar-shared.yml`](../compose/docker-compose.sidecar-shared.yml)
+(use it **instead of** `docker-compose.sidecar.yml`):
+
+```yaml
+services:
+  ib-gateway:
+    ports:
+      - "127.0.0.1:9810:9810"   # published on the gateway service: the namespace is the gateway's
+  sidecar:
+    network_mode: "service:ib-gateway"
+    restart: unless-stopped      # required: the sidecar exits to rejoin a restarted gateway
+    environment:
+      GATEWAY_HOST: 127.0.0.1    # a loopback address selects this mode; API port 4002 paper / 4001 live
+```
+
+What it buys: the probe talks to the Gateway's own API port, so it also answers "is the
+Gateway healthy although the relay is not".
+
+What it costs: when the gateway **container** stops or restarts, its network namespace goes
+away and the sidecar keeps only loopback. It can then send nothing, not even the dead-man
+ping, and its endpoints are unreachable. The sidecar notices (it had seen the gateway's
+listening sockets, the gateway's boot id on the log volume has changed, and no listener
+appears for 60 seconds), exits with code 75, and its restart policy starts it inside the new
+namespace, where it announces what happened from the gateway's event feed. A gateway that
+stays stopped is announced by nobody in this mode; only the dead-man check goes silent.
+`EXIT_WHEN_ORPHANED=no` turns the exit off. A restart of the Gateway **process** inside its
+container (IBC's daily auto-restart) changes nothing in either mode.
+
+## Endpoints
+
+All endpoints answer `GET` only; any other method is 405, any other path 404. A request
+body is never parsed.
+
+| Path | Answer |
+|---|---|
+| `/livez` | 200 `ok` while the sidecar's task supervisor runs and every periodic task (`follow`, `probe`, `notify`, `deadman`) makes progress; 503 and one line naming the stalled task otherwise. Use it for the container health check. |
+| `/readyz` | 200 `ready` only when the status is `ready`; otherwise 503 and one line `<status>: <reason>`. `not_measured` is 503: absence is never healthy. |
+| `/status` | JSON document `brokersre.sidecar.status.v1` ([schema](schemas/status.v1.schema.json)). Never contains a username or a full account id. |
+| `/metrics` | Prometheus text exposition, see [Metrics](#metrics). |
+
+## Status model
+
+| Status | Meaning | `/readyz` |
+|---|---|---|
+| `ready` | The last time round trip succeeded, IBKR connectivity is up and no data farm is broken. | 200 |
+| `degraded` | The API answers, but a data farm is broken (codes 2103/2105/2157) or IBKR connectivity was lost (1100) and not yet restored (1101/1102). | 503 |
+| `down` | The gateway is logged in, but there is no API handshake on the probed port (after the 20 second grace that follows a login), the round trip timed out, or the gateway holds half-closed API sockets for five minutes and does not answer ("zombie"). | 503 |
+| `client_id_in_use` | The gateway refused the probe's client id (error 326). Another client uses it: stop that client or set `HEALTH_CLIENT_ID`. Retried every five minutes, never in a tight loop. | 503 |
+| `not_measured` | The probe is disabled, the gateway is not in phase `logged-in`, no probe has completed yet, or the port does not accept connections yet in the first 20 seconds after a login. | 503 |
+
+The probe runs only while the gateway's phase is `logged-in`. A failed attempt closes the
+connection; the next attempts back off (15 s, 30 s, 60 s ... up to 5 minutes at the default
+interval) and a new login probes at once. Outside `logged-in` nothing is sent, so a closed
+relay port is never mistaken for an outage.
+
+## Environment variables
+
+Secrets are accepted **only as files** (`*_FILE`). The same name without `_FILE` is refused
+at start, so a URL or token can never sit in a compose file or in `docker inspect` output.
+
+| Variable | Default | Values | Effect |
+|---|---|---|---|
+| `TRADING_MODE` | `paper` | `paper`, `live` | Selects the API port (see `API_PORT`). Pass the gateway's value. |
+| `GATEWAY_HOST` | `ib-gateway` | host name or IP address | Where the probe reaches the gateway: its service name on the compose network. A loopback address (`127.0.0.1`) selects the [shared-namespace mode](#shared-network-namespace-optional). |
+| `API_PORT` | from `TRADING_MODE` and the mode | port | The probed port. Default: the gateway's relay port, 4004 paper or 4003 live; in the shared-namespace mode the Gateway's own port, 4002 paper or 4001 live. |
+| `IBGW_INSTANCE` | `default` | letters, digits, `.`, `_`, `-` | Label of this gateway in every notification and in `/status`. Must not be an account id. |
+| `TIME_ZONE` | `Etc/UTC` | IANA zone | Local time shown in notifications (next to UTC) and zone of `HEARTBEAT_TIME`. |
+| `GATEWAY_LOG_DIR` | `/var/log/ibgateway` | path | Where the gateway's log volume is mounted (read-only). Unreadable for 5 minutes raises `volume_missing`. |
+| `SIDECAR_STATE_DIR` | `/var/lib/sidecar` | path | Writable directory for the notifier's state file. When it is not writable the sidecar keeps the state in memory and says so in `/status`. |
+| `SIDECAR_BIND` | `0.0.0.0` | IP address | Address the endpoints bind to, inside the sidecar's network namespace. |
+| `SIDECAR_PORT` | `9810` | port | Port of the endpoints. The compose file publishes it on the host's loopback. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Verbosity of the JSON log on stdout. |
+| `PROBE_ENABLED` | `yes` | `yes`, `no` | `no` turns the API probe off; the status is then always `not_measured`. |
+| `IBKR_REGION` | `none` | `america`, `europe`, `asia`, `none` | The IBKR region that serves the account. Inside that region's [reset windows](#ibkr-reset-windows) a lost IBKR link does not raise `api_unhealthy`. `none`: no window, every outage alerts. |
+| `HEALTH_CLIENT_ID` | `999` | 1 to 2147483647 | API client id reserved for the probe. No other API client may use it. |
+| `PROBE_INTERVAL_S` | `60` | 5 to 3600 | Seconds between time round trips while healthy. |
+| `PROBE_TIMEOUT_S` | `10` | 1 to 60 | Bound of the handshake and of each round trip. |
+| `EXIT_WHEN_ORPHANED` | `yes` in the shared-namespace mode | `yes`, `no` | [Shared-namespace mode](#shared-network-namespace-optional) only, ignored otherwise: exit with code 75 when the gateway container restarted and left the sidecar in its old network namespace, so the restart policy rejoins it. |
+| `DEADMAN_PING_URL_FILE` | unset | path | File holding the URL of a [dead-man check](#dead-man-ping-recommended). `https://` only, unless `NOTIFY_ALLOW_HTTP=yes`. The plain variable `DEADMAN_PING_URL` is refused. |
+| `DEADMAN_PING_INTERVAL_S` | `60` | 10 to 86400 | Seconds between dead-man pings. |
+| `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
+| `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
+| `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
+| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. |
+| `NOTIFY_ALLOW_HTTP` | `no` | `yes`, `no` | Allows `http://` channel URLs. Only for a receiver on a private network, such as a local ntfy. |
+| `NOTIFY_CHANNELS` | all configured | list of channel names | Channels for first notifications, resolutions and heartbeats. |
+| `NOTIFY_ESCALATION_CHANNELS` | all configured | list of channel names | Channels for escalations. |
+| `NOTIFY_DISABLE_CLASSES` | none | list of alert classes | Alert classes that are never notified. |
+| `NOTIFY_WEBHOOK_URL_FILE` | unset | path | Generic JSON webhook URL. |
+| `NOTIFY_WEBHOOK_SECRET_FILE` | unset | path | Shared secret: adds `X-BrokerSRE-Signature: sha256=<HMAC-SHA256 of the body>`. |
+| `NOTIFY_TEAMS_URL_FILE` | unset | path | Microsoft Teams Workflows webhook URL. |
+| `NOTIFY_SLACK_URL_FILE` | unset | path | Slack incoming-webhook URL. |
+| `NOTIFY_TELEGRAM_TOKEN_FILE` | unset | path | Telegram bot token. Needs `NOTIFY_TELEGRAM_CHAT_ID`. |
+| `NOTIFY_TELEGRAM_CHAT_ID` | unset | chat id or `@channel` | Telegram destination (not a secret). |
+| `NOTIFY_NTFY_URL_FILE` | unset | path | ntfy topic URL. |
+| `NOTIFY_NTFY_TOKEN_FILE` | unset | path | ntfy access token, sent as a bearer token. Visible ASCII without blanks. |
+| `NOTIFY_PAGERDUTY_KEY_FILE` | unset | path | PagerDuty Events API v2 routing key. |
+| `NOTIFY_SMTP_URL_FILE` | unset | path | `smtps://user:pass@host:465` (implicit TLS) or `smtp://user:pass@host:587` (STARTTLS required). |
+| `NOTIFY_SMTP_FROM` | unset | address | Sender of e-mail notifications. |
+| `NOTIFY_SMTP_TO` | unset | addresses, comma separated | Recipients of e-mail notifications. |
+
+Outbound HTTPS honours the standard `HTTPS_PROXY`, `NO_PROXY` and `SSL_CERT_FILE` variables.
+
+## Notification channels
+
+The notifier is **opt-in**: it runs only when at least one channel is configured.
+
+| Channel | Name | What is sent |
+|---|---|---|
+| Generic webhook | `webhook` | JSON `brokersre.sidecar.alert.v1`, optionally HMAC-signed. |
+| Microsoft Teams | `teams` | An Adaptive Card in the Workflows envelope ("When a Teams webhook request is received"). Office 365 connectors are retired and are not supported. |
+| Slack | `slack` | Text plus Block Kit sections. |
+| Telegram | `telegram` | Plain text through the Bot API. |
+| ntfy | `ntfy` | Text with title, priority (urgent for critical), tag and click-through headers. |
+| PagerDuty | `pagerduty` | `trigger` with a `dedup_key`; `resolve` when the condition clears. Heartbeats are not sent. |
+| E-mail | `smtp` | Plain-text mail over TLS. |
+
+**Secret files.** Each file holds one line. A UTF-8 byte-order mark and trailing CR/LF are
+stripped, so a file written on Windows works. UTF-16 (what PowerShell's `>` writes), NUL
+bytes, an empty file and a value with a line break inside are refused with a message that
+names the variable and never the content. On Windows write the file with:
+
+```powershell
+Set-Content -Path secrets\notify-teams-url -Value $url -Encoding utf8NoBOM -NoNewline
+```
+
+**What a message contains.** Instance label, alert class, severity, gateway phase, API
+status, UTC time and the local time of `TIME_ZONE`, a short instruction, and the runbook
+link when configured. **Never** a username, a password, a webhook URL, a token or a full
+account id: messages are assembled from fixed text and numbers only, and a test plants
+canary strings in every input and checks every channel's payload for them.
+
+URLs must be `https://`. Redirects are not followed. Each send has a 10 second timeout and
+up to three retries with exponential back-off; each channel has its own bounded queue, so a
+channel that is down delays only itself. Failures are counted per channel in `/status` and
+in `ibgw_notify_failures_total`.
+
+## Alert classes
+
+| Class | Default severity | Fires when | What to do |
+|---|---|---|---|
+| `twofa_pending` | critical | From the first second-factor prompt until a login completes. It stays active while the gateway times out a prompt and logs in again to prompt anew (phase `login` between two prompts). | Approve the IBKR Mobile prompt now. Nothing approves it for you. |
+| `needs_human` | critical | The phase is `needs-human`. | Open the gateway screen (VNC) or its log and resolve what it waits on. |
+| `login_failed` | error | The gateway reported a failed login in the last 15 minutes and has not logged in since. Silent while the phase is `needs-human` (that alert carries the cause). | Check the username and password secrets and whether the account is locked. |
+| `existing_session` | error | The phase is `existing-session`. | Log out the other session or give this gateway its own username. |
+| `login_stalled` | error | The gateway reports `login_stalled` (its own `LOGIN_STALL_S`) and has not reported `login_resumed`. When the gateway gives up, exits or is stopped instead, the alert is handed over ("Superseded"). | Look at the gateway screen and log. |
+| `unknown_window` | warning | The gateway reported a dialog it does not recognise while not logged in. | Handle the dialog and report its title. |
+| `gateway_exited` | critical | The phase is `exited` (IBC ended on its own), or the gateway's boot id changed without a `shutdown_requested` event (the container was killed or crashed; reported for 15 minutes). | Read the container log, then start the container when it is safe (new login and 2FA). |
+| `gateway_stopped` | info | The phase is `stopping` or `stopped`: a shutdown was requested. | Nothing, if the stop was intended. |
+| `api_unhealthy` | error | The status has been `down`, `degraded` or `client_id_in_use` for 5 minutes. A lost IBKR link inside a [reset window](#ibkr-reset-windows) of `IBKR_REGION` is excused; a failed API handshake and a zombie gateway never are. | Read `/status` for the reason. Do not restart blindly. |
+| `restart_storm` | error | 3 or more gateway starts within 30 minutes. | Stop the restart loop and read the first error. |
+| `resource_alert` | error | The gateway reports `memory_high` (until `memory_ok`), or an `oom_kill` in the last 15 minutes. | Raise the memory limit or lower the Java heap. |
+| `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
+| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time (IBKR answers in whole seconds, so up to 1.5 s of the reading is rounding). One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
+| `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped: the gateway was killed or hangs. | Check that the gateway container runs and the volume is mounted. |
+| `volume_missing` | error | For 5 minutes the sidecar could not read a known phase: the log volume is not mounted, `state/phase` is missing or unreadable, or it holds a token this sidecar does not know. Nothing else can alert in that state. | Mount the gateway's log volume read-only at `GATEWAY_LOG_DIR`; check that the gateway writes `state/phase`. |
+| `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while the gateway's phase is known and no alert is active. It names what is not measured (an API that is not probed, a gateway without feeds). | Nothing. A missing heartbeat means the sidecar is down, cannot see the gateway, or an alert is active. |
+| `resolved` (a message kind) | info | A condition that was notified has cleared. | Nothing. |
+
+A condition that cannot be decided (a value was not measured, a duration has not elapsed
+yet) neither raises nor resolves an alert.
+
+For a stalled login, low disk space and memory pressure the gateway is the single source of
+truth: it reports each as a pair of events (`login_stalled`/`login_resumed`,
+`disk_low`/`disk_ok`, `memory_high`/`memory_ok`) from its own thresholds (`LOGIN_STALL_S`,
+`DISK_MIN_FREE_PCT`, `MEM_HIGH_PCT` of the gateway image), and the sidecar only relays the
+pair. It has no threshold of its own for them, so the two cannot disagree.
+
+## IBKR reset windows
+
+IBKR resets its servers every day; during that window the Gateway loses its link to IBKR and
+that is normal. Which region serves an account is not visible to the sidecar, so you say it
+with `IBKR_REGION`. The default is `none`: **no window, every outage alerts**. A false alert
+at night is better than silence at the close.
+
+| `IBKR_REGION` | Daily window | Weekly window |
+|---|---|---|
+| `america` | 00:15 - 01:45 ET | Saturday 00:00 - 02:00 ET |
+| `europe` | 06:25 - 07:45 CET | Saturday 00:00 - 02:00 ET |
+| `asia` | 16:45 - 18:05 ET and 08:15 - 09:15 ET | Saturday 00:00 - 02:00 ET |
+| `none` | none | none |
+
+Source: IBKR's system status page, section "Server Reset Times",
+<https://brokerage.ibkr.com/en/software/systemStatus.php>, checked on 2026-11-12. The page
+gives the Asia Pacific windows in Hong Kong time (04:45 - 06:05 and 20:15 - 21:15 HKT) with
+the footnote that they are "one hour later when Daylight Savings Time (DST) in North America
+is not in effect". Hong Kong has no daylight saving time, so the windows are fixed in New
+York time, which is how they are stored and shown here. Windows follow the local time of
+their zone, daylight saving included.
+
+A window excuses only what IBKR's reset can cause: lost connectivity, broken data farms, a
+time request without an answer. It never excuses a Gateway that refuses the API handshake or
+holds half-closed sockets; those are local faults at any time of day. `/status` shows
+`in_reset_window`.
+
+## Escalation and de-duplication
+
+- A new condition is notified at once on `NOTIFY_CHANNELS`.
+- `twofa_pending` and `needs_human` are repeated on `NOTIFY_ESCALATION_CHANNELS`
+  `ESCALATE_AFTER_S` (10 minutes) and once more `ESCALATE_AGAIN_AFTER_S` (30 minutes)
+  after the condition began, which for a second factor is the FIRST prompt: the alert stays
+  active while the gateway times a prompt out and prompts again. Then the ladder is silent
+  until the condition clears.
+- When the gateway gives up (`needs-human`), exits or is stopped while a second factor is
+  pending or a login is stalled, that alert is closed with a message that says "Superseded",
+  not "Resolved", and names the alert that took over.
+- A class is announced at most once per 15 minutes. A condition that flaps is held back
+  and announced when the 15 minutes end, if it is still active.
+- An alert counts as notified only when at least one channel accepted the message. Until
+  then it is sent again (after 30 s, doubling to every 5 minutes) for as long as the
+  condition lasts; `/status` shows `notified: false` and the number of failed attempts.
+- When a notified condition clears, a `resolved` message goes to every channel that heard
+  about it. A condition nobody was told about clears silently.
+- The state, including what was not delivered yet, is kept in `notifier-state.json` under
+  `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write). After a restart a
+  delivered alert is not repeated and an undelivered one is announced, not forgotten. When
+  the file cannot be written the state is kept in memory, `/status` says so, and the write
+  is tried again every 30 seconds.
+
+## Dead-man ping (recommended)
+
+Every alert above needs the sidecar, its host and its network to be alive. **Without a
+dead-man check, a dead host is silent**: no power, no Docker, no sidecar means no message,
+and nobody is told.
+
+The cure is a signal in the other direction. Create a check at a service that expects a
+regular ping and alarms when it stops (Healthchecks, a push monitor of Uptime Kuma, or any
+URL of your own that records a GET), and give the sidecar its URL as a secret file:
+
+```bash
+printf '%s' 'https://hc-ping.com/<uuid of the check>' > secrets/deadman-ping-url
+```
+
+```yaml
+    environment:
+      DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url
+      DEADMAN_PING_INTERVAL_S: "60"        # set the check's period and grace to match
+    secrets: [deadman-ping-url]
+```
+
+The sidecar then fetches that URL every `DEADMAN_PING_INTERVAL_S` seconds, but only while
+all of this holds:
+
+- its own tasks run and make progress (what `/livez` reports);
+- the gateway's log volume is readable and the phase is known;
+- no alert of severity `warning` or higher is active (classes listed in
+  `NOTIFY_DISABLE_CLASSES` do not count; `gateway_stopped` is `info` and does not count).
+
+So the pings also stop when the gateway needs a person, which makes the check a second,
+independent path for the alerts the channels carry. `/status` shows why a ping is withheld
+(`deadman.withheld`), and the ping works without any notification channel.
+
+The request is a plain `GET` of exactly the configured URL: nothing is appended and there is
+no body, so no state of the gateway leaves through it. The URL identifies your check: it is
+read from a file only, must be `https://` (unless `NOTIFY_ALLOW_HTTP=yes`), and is never
+logged or shown. A failed ping is tried again after 15 seconds.
+
+## Metrics
+
+Metric names are frozen. A value that was not measured is **omitted**, never exported as 0.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `ibgw_phase{phase}` | gauge | 1 for the current gateway phase. |
+| `ibgw_api_ready` | gauge | 1 when `ready`, 0 when `degraded`, `down` or `client_id_in_use`; absent when `not_measured`. |
+| `ibgw_api_rtt_seconds` | gauge | Round-trip time of the last successful time request. |
+| `ibgw_clock_offset_seconds` | gauge | IBKR time minus host time (IBKR reports whole seconds). |
+| `ibgw_api_close_wait_sockets` | gauge | Half-closed sockets on the gateway's API port: the gateway's own sample (default), or the shared socket table in the shared-namespace mode. |
+| `ibgw_boots_30m` | gauge | Gateway container starts in the last 30 minutes. |
+| `ibgw_memory_working_set_bytes`, `ibgw_memory_limit_bytes` | gauge | Gateway container memory (re-exported from the gateway's sampler). |
+| `ibgw_oom_kills_total` | counter | Out-of-memory kills in the gateway container. |
+| `ibgw_cpu_usage_seconds_total`, `ibgw_cpu_throttled_seconds_total` | counter | Gateway container CPU. |
+| `ibgw_pids`, `ibgw_java_rss_bytes`, `ibgw_java_threads`, `ibgw_open_fds` | gauge | Gateway process figures. |
+| `ibgw_notify_failures_total{channel}` | counter | Notifications given up on after all retries. |
+| `ibgw_notify_sent_total{channel}` | counter | Notifications delivered. |
+| `ibgw_notify_dropped_total{channel}` | counter | Notifications discarded because the channel's outbox was full. |
+| `ibgw_notify_undelivered_alerts` | gauge | Active alerts that no channel has accepted yet. They are sent again with a capped back-off. |
+| `ibgw_deadman_pings_total` | counter | Dead-man pings the monitoring service accepted. Exported only when a ping URL is configured, like the next three. |
+| `ibgw_deadman_ping_failures_total` | counter | Dead-man ping attempts that failed. |
+| `ibgw_deadman_withheld` | gauge | 1 while the ping is withheld; the reason is in `/status` (`deadman.withheld`). |
+| `ibgw_deadman_last_ping_timestamp_seconds` | gauge | Unix time of the last accepted ping; absent before the first one. |
+| `ibgw_sidecar_task_restarts_total{task}` | counter | Restarts of a sidecar task after a crash. |
+| `ibgw_sidecar_task_progress_age_seconds{task}` | gauge | Seconds since a periodic sidecar task (`follow`, `probe`, `notify`, `deadman`) completed a step of its loop. |
+| `ibgw_sidecar_task_stalled{task}` | gauge | 1 while such a task has made no progress for longer than its limit (about a minute plus the longest wait a step may take). `/livez` then answers 503. |
+| `ibgw_sidecar_info{version}` | gauge | Constant 1. |
+
+Sampler values are re-exported only while the gateway's sample is younger than two minutes.
+
+## Command line
+
+```text
+brokersre-sidecar run                     run the sidecar (the image's default command)
+brokersre-sidecar status                  print /status; exit 0 only when ready (1 not ready, 3 not reachable)
+brokersre-sidecar healthcheck             exit 0 when /livez answers 200 (the image's HEALTHCHECK)
+brokersre-sidecar check-config            validate the configuration without starting
+brokersre-sidecar notify test             send a test message to every configured channel
+brokersre-sidecar print-schema status     print the JSON Schema of /status
+brokersre-sidecar support-bundle --out D  write a redacted tar.gz of recent state into directory D
+```
+
+The support bundle holds the last event and metrics lines (contract fields only), the
+phase, the status document, versions and non-secret settings. Account ids are cut to their
+last three characters; of the raw IBC log only the lines marked `IBC:` are included, after
+redaction. Review it before sharing.
+
+## Security posture
+
+- uid 1000, read-only root file system, `cap_drop: [ALL]`, `no-new-privileges`; the only
+  writable paths are a tmpfs `/tmp` and the state volume.
+- No Docker socket, no privileged mode, no shell access into the gateway.
+- By default the sidecar is outside the gateway's network namespace: it cannot reach the
+  Gateway's loopback ports (the API port, the IBC command server, VNC). What it can reach is
+  the relay port, like any API client on the container network.
+- The gateway's log volume is mounted read-only; the settings volume is not mounted at all.
+- Credentials only as files; never in the environment, the image, the log or `/status`.
+- The API connection is read-only by construction: the code references a single API
+  request (the server time), and a test scans the package for any other.
+- The image's base and the `uv` build tool are pinned by digest; Python dependencies are
+  locked with hashes in `uv.lock`. Debian security updates are applied when the image is
+  built; a weekly run rescans the published image and rebuilds it when a finding has a fix.
+- Images are published from `main` only, signed keyless, and an existing tag is never moved.
+  Verify a build before you pin its digest:
+
+```bash
+cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/sidecar-publish.yml@refs/heads/main
+```
+
+## Limitations
+
+- **A dead host is silent without the dead-man ping.** The sidecar cannot report its own
+  death. Configure [the dead-man ping](#dead-man-ping-recommended).
+- **A killed gateway is announced after five minutes, not at once.** A stop or an exit
+  writes its own phase and is announced within seconds. A gateway container that is killed
+  (out of memory, `docker kill`, a crashed host that comes back) leaves the phase file as it
+  was; the sidecar then reports `gateway_silent` after 5 minutes without a feed line and
+  `api_unhealthy` after 5 minutes without an API answer, and `gateway_exited` as soon as the
+  container starts again with a new boot id.
+- **Shared-namespace mode cannot report a stopped gateway.** See
+  [Network modes](#network-modes).
+- **Log contract v2.** Events, metrics, boot counting and several alert classes need the
+  gateway's `events/` and `metrics/` feeds. With a gateway that writes only `state/phase`
+  those values are reported as not measured, their alerts stay silent and the heartbeat says
+  so.
+- **Clock skew resolution.** IBKR answers the time request in whole seconds, so
+  `clock_skew` fires only when the difference is provably above one second (in practice
+  from about 1.5 to 2 seconds), and only after two consecutive probes.
+- **Not verified against a logged-in gateway.** The probe is tested against an in-process
+  server that speaks the IB API wire protocol and against a scriptable fake; the end-to-end
+  check runs the real gateway image on a network without a route out, so it never logs in.
+  Still to be confirmed with a paper login: the handshake through the relay port, the 20
+  second grace against the relay's real start-up time, the notices 1100/1101/1102 and the
+  farm codes as the Gateway really sends them, the second-factor timeline with a real
+  prompt, and error 326 for a client id that is in use. Channel payloads are tested against
+  local receivers, not against the real services.
+- **One gateway per sidecar.**
+
+## Development
+
+```bash
+cd sidecar
+uv sync                               # Python 3.14, everything pinned in uv.lock
+uv run ruff check . && uv run black --check . && uv run mypy
+uv run pytest --cov                   # coverage gate: 90 %
+docker build -t brokersre-ib-gateway-sidecar:dev .
+IMAGE=brokersre-ib-gateway-sidecar:dev tests/container/run.sh        # the image alone
+tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev    # with the real gateway image
+```
+
+Neither script needs credentials or contacts IBKR; the end-to-end check runs on a Docker
+network without a route out. Layers and import rules are in
+[docs/sidecar.md](../docs/sidecar.md) and enforced by `tests/test_architecture.py`.
+
+Interactive Brokers, IBKR, IB Gateway and Trader Workstation are trademarks of Interactive Brokers LLC. This project is not affiliated with, endorsed by or sponsored by Interactive Brokers.

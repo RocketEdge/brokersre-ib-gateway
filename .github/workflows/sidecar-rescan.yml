@@ -1,0 +1,102 @@
+# Weekly rescan of the PUBLISHED sidecar image. A build is scanned when it is published, but
+# vulnerabilities are found afterwards: this run scans the newest published build of the
+# current version again and, when a finding has a fix, starts a security rebuild
+# (sidecar-publish.yml with rebuild=true: no layer cache, so the Dockerfile's security-update
+# layer picks up today's Debian archive; the result is tagged <version>-rYYYYMMDD and the
+# existing tags are not moved).
+#
+# The rebuild has the same gates as every publish. When it cannot clear the finding (the fix
+# needs a newer base digest or a newer Python dependency, which arrive as Dependabot pull
+# requests), that run fails and says so; nothing is published.
+name: Sidecar rescan (weekly)
+
+on:
+  schedule:
+    - cron: "20 7 * * 1" # Mondays 07:20 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sidecar-rescan
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar
+
+jobs:
+  rescan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write # Trivy SARIF upload
+      actions: write         # start the rebuild
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Find the newest published build of the current version
+        id: target
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(sed -n 's/^version = "\([0-9][0-9A-Za-z.+-]*\)"$/\1/p' sidecar/pyproject.toml | head -1)"
+          if [ -z "$version" ]; then echo "::error::no version in sidecar/pyproject.toml"; exit 1; fi
+          # <version> and its security rebuilds <version>-rYYYYMMDD; the newest sorts last.
+          if ! listing="$(skopeo list-tags --creds "${ACTOR}:${TOKEN}" "docker://${IMAGE}" 2>&1)"; then
+            echo "::notice::the image has no published tag yet (${listing##*: }); nothing to scan"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="$(jq -r '.Tags[]' <<<"$listing" | grep -E "^${version//./\\.}(-r[0-9]{8})?\$" | sort | tail -1 || true)"
+          if [ -z "$tag" ]; then
+            echo "::notice::version ${version} is not published yet; nothing to scan"
+          else
+            echo "scanning ${IMAGE}:${tag}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Trivy scan of the published build (fixable CRITICAL/HIGH, OS and libraries)
+        id: scan
+        if: steps.target.outputs.tag != ''
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.target.outputs.tag }}
+          format: sarif
+          output: trivy-sidecar-published.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+      - name: Upload Trivy SARIF
+        if: steps.target.outputs.tag != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4.39.3
+        with:
+          sarif_file: trivy-sidecar-published.sarif
+          category: sidecar-published
+      - name: Start a security rebuild when the published build has a fixable finding
+        if: steps.target.outputs.tag != '' && steps.scan.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          gh workflow run sidecar-publish.yml -R "$GITHUB_REPOSITORY" --ref main -f rebuild=true
+          {
+            echo "### Sidecar rescan"
+            echo
+            echo "\`$IMAGE:$TAG\` has a fixable CRITICAL or HIGH finding (see Code scanning, category \`sidecar-published\`)."
+            echo "A security rebuild was started: workflow \"Sidecar publish\" with \`rebuild=true\`."
+            echo "If that run fails its own Trivy gate, the fix needs a newer base image digest or a newer Python dependency: merge the open Dependabot pull request for \`/sidecar\` and bump the version."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Summary when nothing needs fixing
+        if: steps.target.outputs.tag != '' && steps.scan.outcome == 'success'
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: echo "\`$IMAGE:$TAG\` has no fixable CRITICAL or HIGH finding." >> "$GITHUB_STEP_SUMMARY"

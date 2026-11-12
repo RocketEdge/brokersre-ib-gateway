@@ -21,3 +21,20 @@ updates:
     commit-message:
       prefix: ci
     labels: [dependencies, ci]
+  # The optional sidecar image: its base images (named in FROM lines) and its Python lockfile.
+  - package-ecosystem: docker
+    directory: /sidecar
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "build(sidecar)"
+    labels: [dependencies, sidecar]
+  - package-ecosystem: uv
+    directory: /sidecar
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "build(sidecar)"
+    labels: [dependencies, sidecar]

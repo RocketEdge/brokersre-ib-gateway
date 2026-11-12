@@ -1,0 +1,793 @@
+{
+  "$defs": {
+    "ActiveAlert": {
+      "additionalProperties": false,
+      "description": "One alert condition that is active now.",
+      "properties": {
+        "class": {
+          "pattern": "^[a-z_]{1,40}$",
+          "title": "Class",
+          "type": "string"
+        },
+        "escalation_step": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Escalation Step",
+          "type": "integer"
+        },
+        "failed_attempts": {
+          "description": "Attempts of the pending notification that no channel accepted",
+          "minimum": 0,
+          "title": "Failed Attempts",
+          "type": "integer"
+        },
+        "notified": {
+          "description": "A channel accepted a notification of this episode",
+          "title": "Notified",
+          "type": "boolean"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "since": {
+          "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+          "title": "Since",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "severity",
+        "since",
+        "notified",
+        "escalation_step",
+        "failed_attempts"
+      ],
+      "title": "ActiveAlert",
+      "type": "object"
+    },
+    "Channel": {
+      "additionalProperties": false,
+      "description": "Delivery statistics of one notification channel.",
+      "properties": {
+        "dropped_total": {
+          "minimum": 0,
+          "title": "Dropped Total",
+          "type": "integer"
+        },
+        "failures_total": {
+          "minimum": 0,
+          "title": "Failures Total",
+          "type": "integer"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9_]{1,40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failure category, never a URL or a reply",
+          "title": "Last Error"
+        },
+        "last_failure_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Failure At"
+        },
+        "last_success_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Success At"
+        },
+        "name": {
+          "enum": [
+            "webhook",
+            "teams",
+            "slack",
+            "telegram",
+            "ntfy",
+            "pagerduty",
+            "smtp"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "queue_depth": {
+          "minimum": 0,
+          "title": "Queue Depth",
+          "type": "integer"
+        },
+        "sent_total": {
+          "minimum": 0,
+          "title": "Sent Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "sent_total",
+        "failures_total",
+        "dropped_total",
+        "queue_depth",
+        "last_success_at",
+        "last_failure_at",
+        "last_error"
+      ],
+      "title": "Channel",
+      "type": "object"
+    },
+    "Deadman": {
+      "additionalProperties": false,
+      "description": "State of the optional dead-man ping.",
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "failures_total": {
+          "minimum": 0,
+          "title": "Failures Total",
+          "type": "integer"
+        },
+        "interval_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Interval S"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failure category of the last attempt",
+          "title": "Last Error"
+        },
+        "last_ping_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last ping the service accepted",
+          "title": "Last Ping At"
+        },
+        "pings_total": {
+          "minimum": 0,
+          "title": "Pings Total",
+          "type": "integer"
+        },
+        "withheld": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why no ping is sent right now; null while pinging and when disabled",
+          "title": "Withheld"
+        }
+      },
+      "required": [
+        "enabled",
+        "interval_s",
+        "withheld",
+        "last_ping_at",
+        "last_error",
+        "pings_total",
+        "failures_total"
+      ],
+      "title": "Deadman",
+      "type": "object"
+    },
+    "Farm": {
+      "additionalProperties": false,
+      "description": "One IBKR data farm reported on the probe's API connection.",
+      "properties": {
+        "condition": {
+          "enum": [
+            "ok",
+            "broken",
+            "inactive"
+          ],
+          "title": "Condition",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "market_data",
+            "historical_data",
+            "sec_def"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z0-9.-]{1,24}$",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "condition"
+      ],
+      "title": "Farm",
+      "type": "object"
+    },
+    "GatewayFeed": {
+      "additionalProperties": false,
+      "description": "How much of the gateway's log volume the sidecar can see.",
+      "properties": {
+        "feeds_seen": {
+          "description": "At least one events or metrics line was read",
+          "title": "Feeds Seen",
+          "type": "boolean"
+        },
+        "last_event_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Event At"
+        },
+        "last_metrics_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Metrics At"
+        },
+        "rejected_lines": {
+          "description": "Feed lines that were not contract lines",
+          "minimum": 0,
+          "title": "Rejected Lines",
+          "type": "integer"
+        },
+        "volume_present": {
+          "description": "The gateway log directory is mounted",
+          "title": "Volume Present",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "volume_present",
+        "feeds_seen",
+        "last_event_at",
+        "last_metrics_at",
+        "rejected_lines"
+      ],
+      "title": "GatewayFeed",
+      "type": "object"
+    },
+    "LastProbe": {
+      "additionalProperties": false,
+      "description": "Outcome of the most recent probe attempt; all null before the first attempt.",
+      "properties": {
+        "at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "At"
+        },
+        "consecutive_failures": {
+          "minimum": 0,
+          "title": "Consecutive Failures",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "enum": [
+                "connect_failed",
+                "timeout",
+                "disconnected",
+                "client_id_in_use"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ok"
+        },
+        "rtt_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Round-trip time of the time request, seconds",
+          "title": "Rtt S"
+        }
+      },
+      "required": [
+        "at",
+        "ok",
+        "rtt_s",
+        "error",
+        "consecutive_failures"
+      ],
+      "title": "LastProbe",
+      "type": "object"
+    },
+    "Notifier": {
+      "additionalProperties": false,
+      "description": "State of the notifier.",
+      "properties": {
+        "active_alerts": {
+          "items": {
+            "$ref": "#/$defs/ActiveAlert"
+          },
+          "title": "Active Alerts",
+          "type": "array"
+        },
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/Channel"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "state_persistence": {
+          "enum": [
+            "file",
+            "memory",
+            "disabled"
+          ],
+          "title": "State Persistence",
+          "type": "string"
+        },
+        "state_persistence_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "State Persistence Reason"
+        }
+      },
+      "required": [
+        "enabled",
+        "channels",
+        "active_alerts",
+        "state_persistence",
+        "state_persistence_reason"
+      ],
+      "title": "Notifier",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "Supervision record of one background task.",
+      "properties": {
+        "last_crash_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Crash At"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exception class name of the last crash",
+          "title": "Last Error"
+        },
+        "name": {
+          "pattern": "^[a-z0-9-]{1,40}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "progress_age_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Seconds since the task completed a step of its loop; null for a task that has no periodic step",
+          "title": "Progress Age S"
+        },
+        "restarts": {
+          "minimum": 0,
+          "title": "Restarts",
+          "type": "integer"
+        },
+        "stalled": {
+          "description": "No progress for longer than the task's limit",
+          "title": "Stalled",
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "backoff",
+            "stopped"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "restarts",
+        "last_error",
+        "last_crash_at",
+        "progress_age_s",
+        "stalled"
+      ],
+      "title": "Task",
+      "type": "object"
+    },
+    "Versions": {
+      "additionalProperties": false,
+      "description": "Versions of the sidecar and its runtime.",
+      "properties": {
+        "ib_async": {
+          "title": "Ib Async",
+          "type": "string"
+        },
+        "python": {
+          "title": "Python",
+          "type": "string"
+        },
+        "sidecar": {
+          "title": "Sidecar",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sidecar",
+        "python",
+        "ib_async"
+      ],
+      "title": "Versions",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/RocketEdge/brokersre-ib-gateway/sidecar/schemas/status.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The document served at ``GET /status``.",
+  "properties": {
+    "boot_id": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{16}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Boot Id"
+    },
+    "boots_30m": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Boots 30M"
+    },
+    "clock_skew_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "IBKR time minus host time, seconds",
+      "title": "Clock Skew S"
+    },
+    "close_wait_sockets": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Half-closed sockets on the API port",
+      "title": "Close Wait Sockets"
+    },
+    "connectivity": {
+      "enum": [
+        "ok",
+        "lost",
+        "not_measured"
+      ],
+      "title": "Connectivity",
+      "type": "string"
+    },
+    "deadman": {
+      "$ref": "#/$defs/Deadman"
+    },
+    "farms": {
+      "items": {
+        "$ref": "#/$defs/Farm"
+      },
+      "title": "Farms",
+      "type": "array"
+    },
+    "gateway_feed": {
+      "$ref": "#/$defs/GatewayFeed"
+    },
+    "generated_at": {
+      "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "in_reset_window": {
+      "description": "Inside a reset window of the configured IBKR region; always false with IBKR_REGION=none",
+      "title": "In Reset Window",
+      "type": "boolean"
+    },
+    "instance": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$",
+      "title": "Instance",
+      "type": "string"
+    },
+    "last_login": {
+      "anyOf": [
+        {
+          "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Login"
+    },
+    "last_probe": {
+      "$ref": "#/$defs/LastProbe"
+    },
+    "network_mode": {
+      "description": "own_network: the sidecar reaches the gateway over the container network; shared_namespace: it runs inside the gateway's network namespace",
+      "enum": [
+        "own_network",
+        "shared_namespace"
+      ],
+      "title": "Network Mode",
+      "type": "string"
+    },
+    "notifier": {
+      "$ref": "#/$defs/Notifier"
+    },
+    "phase": {
+      "anyOf": [
+        {
+          "enum": [
+            "starting",
+            "login",
+            "2fa-pending",
+            "logged-in",
+            "restarting",
+            "existing-session",
+            "needs-human",
+            "stopping",
+            "stopped",
+            "exited",
+            "test-mode",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "null: the phase file is absent",
+      "title": "Phase"
+    },
+    "phase_since": {
+      "anyOf": [
+        {
+          "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Phase Since"
+    },
+    "reason": {
+      "description": "One line explaining status",
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "const": "brokersre.sidecar.status.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "degraded",
+        "down",
+        "client_id_in_use",
+        "not_measured"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "status_since": {
+      "anyOf": [
+        {
+          "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Status Since"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/Task"
+      },
+      "title": "Tasks",
+      "type": "array"
+    },
+    "trading_mode": {
+      "enum": [
+        "paper",
+        "live"
+      ],
+      "title": "Trading Mode",
+      "type": "string"
+    },
+    "versions": {
+      "$ref": "#/$defs/Versions"
+    },
+    "zombie": {
+      "title": "Zombie",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "generated_at",
+    "instance",
+    "trading_mode",
+    "network_mode",
+    "phase",
+    "phase_since",
+    "status",
+    "reason",
+    "status_since",
+    "connectivity",
+    "farms",
+    "last_probe",
+    "clock_skew_s",
+    "close_wait_sockets",
+    "zombie",
+    "in_reset_window",
+    "boot_id",
+    "boots_30m",
+    "last_login",
+    "gateway_feed",
+    "versions",
+    "notifier",
+    "deadman",
+    "tasks"
+  ],
+  "title": "brokersre-ib-gateway-sidecar status document (brokersre.sidecar.status.v1)",
+  "type": "object"
+}

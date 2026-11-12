@@ -1,0 +1,125 @@
+# brokersre-ib-gateway-sidecar: optional companion container for the IB Gateway image.
+# Every dependency is pinned to an exact version here AND locked with hashes in uv.lock;
+# the Dockerfile installs with `uv sync --frozen`, so a build never resolves anything new.
+[project]
+name = "brokersre-sidecar"
+version = "0.1.0"
+description = "Read-only probe, status API, Prometheus metrics and human-escalation notifier for the brokersre IB Gateway container"
+readme = "README.md"
+license = "MIT"
+# 3.14 only: the image ships exactly one interpreter (python:3.14-slim, pinned by digest).
+requires-python = ">=3.14,<3.15"
+authors = [{ name = "RocketEdge.com" }]
+dependencies = [
+  # The only IB API client; imported in exactly one module (probe/adapter.py).
+  "ib_async==2.1.0",
+  # Outbound notifications (HTTPS webhooks). SMTP and the HTTP server use the standard library.
+  "httpx==0.28.1",
+  # Configuration and the versioned /status document.
+  "pydantic==2.14.3",
+]
+
+[project.scripts]
+brokersre-sidecar = "brokersre_sidecar.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.2.0",
+  "pytest-asyncio==1.4.1.post1",
+  "pytest-cov==7.1.0",
+  "hypothesis==6.170.15",
+  "jsonschema==4.26.0",
+  "types-jsonschema==4.26.0.20261006",
+  "ruff==0.17.4",
+  "black==26.10.1",
+  "mypy==2.4.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/ is not a package: helpers (fakes/, testkit.py) are importable through pythonpath.
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers --strict-config"
+# A test that hangs for a minute gets the stack of every thread dumped (the run goes on):
+# without that, a hang leaves nothing to diagnose.
+faulthandler_timeout = 60
+filterwarnings = ["error"]
+markers = [
+  "posix: needs POSIX file semantics (inodes, modes); skipped on Windows hosts",
+]
+
+[tool.coverage.run]
+source = ["brokersre_sidecar"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "\\.\\.\\.$",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",   # pycodestyle, pyflakes
+  "I",             # import order
+  "B",             # bugbear
+  "UP",            # modern syntax
+  "SIM",           # simplifications
+  "C4",            # comprehensions
+  "PT",            # pytest style
+  "ASYNC",         # blocking calls in coroutines
+  "S",             # bandit (security)
+  "BLE",           # no blind except
+  "T20",           # no print: logging only
+  "D",             # docstrings (Google style)
+  "RUF",
+]
+ignore = [
+  "D203", "D213",  # conflict with D211/D212 (Google convention picks one of each pair)
+  "D107",          # the class docstring documents construction
+  "E501",          # black owns line length
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, bind local sockets and plant fake secrets on purpose.
+"tests/**" = ["S101", "S104", "S105", "S106", "S108", "D1", "ASYNC230", "ASYNC240"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+python_version = "3.14"
+# The package runs only in a Linux container: check POSIX branches on every host.
+platform = "linux"
+files = ["src", "tests"]
+mypy_path = ["src", "tests"]
+explicit_package_bases = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+# ib_async declares py.typed but most of its functions are unannotated; the adapter is the
+# only module that calls it, behind the fully typed IbClient Protocol.
+module = ["brokersre_sidecar.probe.adapter"]
+disallow_untyped_calls = false

@@ -1,0 +1,476 @@
+"""Alert rules: turn the gateway and probe snapshots into one verdict per alert class.
+
+Each verdict is three-valued. ``ACTIVE``: the condition holds. ``INACTIVE``: it provably
+does not. ``UNKNOWN``: it cannot be decided right now (the input is not measured, the
+condition has not lasted long enough yet, or a reset window makes it meaningless). An
+``UNKNOWN`` verdict changes nothing: it neither raises an alert nor resolves one. That is
+"absence is never healthy" applied to alerting, and it is also what stops a restart of the
+sidecar from sending a false "resolved".
+
+Who decides what:
+
+* Conditions the gateway reports as an event pair (a stalled login, low disk space, memory
+  pressure) are the gateway's call alone. The rule is "the pair is open"; the sidecar keeps
+  no threshold and no timer for them, so the two can never disagree and nothing "resolves"
+  because a timer ran out.
+* Durations the sidecar does measure (API unhealthy, silence) run on the monotonic clock.
+
+The ``detail`` of a verdict is built from numbers and fixed words only.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from enum import Enum
+
+from brokersre_sidecar.model.events import GatewayEvent
+from brokersre_sidecar.model.health import ProbeSnapshot
+from brokersre_sidecar.model.state import GatewaySnapshot
+from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, Phase, ProbeStatus
+
+_UNHEALTHY = frozenset({ProbeStatus.DOWN, ProbeStatus.DEGRADED, ProbeStatus.CLIENT_ID_IN_USE})
+_NOT_RUNNING = frozenset({Phase.STOPPING, Phase.STOPPED, Phase.EXITED})
+# Phases the gateway passes through between two second-factor prompts.
+_BETWEEN_PROMPTS = frozenset({Phase.LOGIN, Phase.RESTARTING, Phase.STARTING})
+_TWOFA_EVENTS = ("twofa_initiated", "twofa_dialog", "twofa_timeout")
+# Phases in which another alert takes over from a pending second factor or a stalled login:
+# the gateway did not recover, it moved on to something a different alert describes.
+_SUCCESSORS: dict[str, AlertClass] = {
+    Phase.NEEDS_HUMAN: AlertClass.NEEDS_HUMAN,
+    Phase.EXITED: AlertClass.GATEWAY_EXITED,
+    Phase.STOPPING: AlertClass.GATEWAY_STOPPED,
+    Phase.STOPPED: AlertClass.GATEWAY_STOPPED,
+}
+# The same hand-over told by the event that ended the gateway's attempt (PairState.ended_with):
+# the phase file and the event feed are read separately, so the event can be seen first.
+_ENDING_SUCCESSORS: dict[str, AlertClass] = {
+    "shutdown_requested": AlertClass.GATEWAY_STOPPED,
+    "ibc_exited": AlertClass.GATEWAY_EXITED,
+    "needs_human": AlertClass.NEEDS_HUMAN,
+    "login_failed_dialog": AlertClass.NEEDS_HUMAN,
+    "login_rejected_latched": AlertClass.NEEDS_HUMAN,
+}
+
+
+class Condition(Enum):
+    """Verdict of one rule (see the module docstring)."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class Evaluation:
+    """Verdict plus a short factual detail for the notification.
+
+    Attributes:
+        state: The verdict.
+        detail: Numbers and fixed words describing an ``ACTIVE`` verdict; empty otherwise.
+        superseded_by: For an ``INACTIVE`` verdict that is a hand-over rather than a
+            recovery: the alert class that describes the gateway now.
+    """
+
+    state: Condition
+    detail: str = ""
+    superseded_by: AlertClass | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuleConfig:
+    """Thresholds of the rules the sidecar itself measures.
+
+    Attributes:
+        api_unhealthy_after_s: The API must be unhealthy this long before it alerts.
+        storm_boots: Gateway starts within 30 minutes that make a restart storm.
+        event_hold_s: A point event (failed login, unknown dialog, OOM kill) keeps its
+            condition active this long.
+        clock_skew_max_s: Tolerated clock difference in seconds (half the round-trip time
+            of the measuring probe is added to it).
+        clock_skew_samples: Consecutive probes that must show the skew before it alerts.
+        silent_after_s: Seconds without an observed feed line that count as silence.
+        volume_missing_after_s: Seconds without a readable, known phase before the
+            sidecar says that it cannot see the gateway.
+    """
+
+    api_unhealthy_after_s: float = 300.0
+    storm_boots: int = 3
+    event_hold_s: float = 900.0
+    clock_skew_max_s: float = 1.0
+    clock_skew_samples: int = 2
+    silent_after_s: float = 300.0
+    volume_missing_after_s: float = 300.0
+
+
+_ACTIVE = Condition.ACTIVE
+_INACTIVE = Evaluation(Condition.INACTIVE)
+_UNKNOWN = Evaluation(Condition.UNKNOWN)
+
+
+def skew_exceeds(skew_s: float, limit_s: float) -> bool:
+    """Report whether a measured clock skew is PROVABLY beyond ``limit_s``.
+
+    IBKR answers the time request in whole seconds. The measured value (IBKR time minus the
+    local time at the middle of the round trip) therefore understates the true difference
+    by up to one second if IBKR truncates, or misstates it by half a second either way if
+    it rounds. The alert fires only when every reading consistent with both behaviours is
+    beyond the limit; a perfectly synchronised clock (which reads between -1 and +0.5)
+    never alerts.
+
+    Args:
+        skew_s: IBKR time minus local time, in seconds.
+        limit_s: Tolerated absolute difference.
+    """
+    return skew_s - 0.5 > limit_s or skew_s + 1.0 < -limit_s
+
+
+class RuleEngine:
+    """Evaluates every condition class.
+
+    Holds two pieces of memory: since when (monotonic) the API has been continuously
+    unhealthy (moving between ``down`` and ``degraded`` must not restart that clock),
+    and how many consecutive probes showed a clock skew. Single-threaded.
+    """
+
+    def __init__(self, config: RuleConfig) -> None:
+        """Create the engine with its thresholds."""
+        self._config = config
+        self._unhealthy_since: float | None = None
+        self._skew_sample_at: datetime | None = None
+        self._skew_streak = 0
+
+    def evaluate(
+        self,
+        gateway: GatewaySnapshot,
+        probe: ProbeSnapshot,
+        *,
+        now: datetime,
+        mono: float,
+    ) -> dict[AlertClass, Evaluation]:
+        """Return a verdict for every condition class.
+
+        Args:
+            gateway: What the feeds and the phase file say.
+            probe: What the API probe says.
+            now: Current time (UTC), for the age of point events.
+            mono: Current monotonic reading, for durations.
+
+        Returns:
+            One ``Evaluation`` per class except ``HEARTBEAT`` (which is not a condition).
+        """
+        phase = gateway.phase
+        known = phase is not None and phase != UNKNOWN_PHASE
+        return {
+            AlertClass.TWOFA_PENDING: self._twofa_pending(gateway, known),
+            AlertClass.NEEDS_HUMAN: self._needs_human(gateway, known),
+            AlertClass.LOGIN_FAILED: self._login_failed(gateway, now),
+            AlertClass.EXISTING_SESSION: self._phase_is(phase, known, Phase.EXISTING_SESSION),
+            AlertClass.LOGIN_STALLED: self._login_stalled(gateway, known),
+            AlertClass.UNKNOWN_WINDOW: self._unknown_window(gateway, now),
+            AlertClass.GATEWAY_EXITED: self._gateway_exited(gateway, known, now),
+            AlertClass.GATEWAY_STOPPED: self._gateway_stopped(gateway, known),
+            AlertClass.API_UNHEALTHY: self._api_unhealthy(probe, now, mono),
+            AlertClass.RESTART_STORM: self._restart_storm(gateway),
+            AlertClass.RESOURCE_ALERT: self._resource_alert(gateway, now),
+            AlertClass.DISK_LOW: self._pair(
+                gateway, "disk_low", "the gateway reports low disk space"
+            ),
+            AlertClass.CLOCK_SKEW: self._clock_skew(probe),
+            AlertClass.GATEWAY_SILENT: self._silent(gateway),
+            AlertClass.VOLUME_MISSING: self._volume_missing(gateway),
+        }
+
+    @staticmethod
+    def _phase_is(phase: str | None, known: bool, wanted: Phase) -> Evaluation:
+        """Active exactly while the phase is ``wanted``; unknown without a known phase."""
+        if not known:
+            return _UNKNOWN
+        if phase == wanted:
+            return Evaluation(_ACTIVE, f"gateway phase is {wanted.value}")
+        return _INACTIVE
+
+    @staticmethod
+    def _twofa_pending(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active from the first second-factor prompt until a login completes.
+
+        With the gateway's defaults an unanswered prompt times out after 180 s, the
+        gateway logs in again and prompts again, for hours: the phase flips
+        ``2fa-pending`` -> ``login`` -> ``2fa-pending``. For a person nothing changed
+        in between, so the condition holds across the flip: while the phase is
+        ``login``, ``restarting`` or ``starting`` and this boot has prompted for a
+        second factor since the last completed login. Only ``logged-in`` resolves it.
+        When the gateway gives up (``needs-human``) or goes away (``exited``,
+        ``stopped``), the verdict is a hand-over to that alert, not a recovery.
+        """
+        if not known:
+            return _UNKNOWN
+        phase = gateway.phase
+        if phase == Phase.TWOFA_PENDING:
+            return Evaluation(_ACTIVE, "gateway phase is 2fa-pending")
+        if phase in _SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_SUCCESSORS[phase])
+        if phase not in _BETWEEN_PROMPTS:
+            return _INACTIVE
+        prompts = [
+            event.ts
+            for name in _TWOFA_EVENTS
+            if (event := gateway.last_events.get(name)) is not None
+            and (event.boot_id is None or event.boot_id == gateway.boot_id)
+        ]
+        if not prompts:
+            return _INACTIVE
+        if gateway.last_login is not None and gateway.last_login >= max(prompts):
+            return _INACTIVE
+        return Evaluation(
+            _ACTIVE, f"second factor not approved yet; gateway phase is {phase} between prompts"
+        )
+
+    @staticmethod
+    def _pair(gateway: GatewaySnapshot, name: str, detail: str) -> Evaluation:
+        """Follow a gateway-reported pair: open is active, closed inactive, unseen unknown."""
+        pair = gateway.pairs.get(name)
+        if pair is None:
+            return _UNKNOWN
+        return Evaluation(_ACTIVE, detail) if pair.open else _INACTIVE
+
+    def _gateway_exited(self, gateway: GatewaySnapshot, known: bool, now: datetime) -> Evaluation:
+        """Active when the gateway went away without being asked to.
+
+        Two kinds of evidence: the phase ``exited`` (IBC ended on its own), and a boot id
+        that changed although the previous boot never logged ``shutdown_requested`` (the
+        container was killed or crashed and is running again). The second is a point in
+        time, so it is held for ``event_hold_s``. A requested stop is ``gateway_stopped``.
+        """
+        if not known:
+            return _UNKNOWN
+        if gateway.phase == Phase.EXITED:
+            return Evaluation(_ACTIVE, "gateway phase is exited: IBC ended on its own")
+        hold = timedelta(seconds=self._config.event_hold_s)
+        if (
+            gateway.last_restart_unexpected
+            and gateway.last_restart_at is not None
+            and now - gateway.last_restart_at <= hold
+        ):
+            return Evaluation(
+                _ACTIVE, "the gateway container restarted without a requested shutdown"
+            )
+        return _INACTIVE
+
+    @staticmethod
+    def _gateway_stopped(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the gateway is down because a shutdown was requested."""
+        if not known:
+            return _UNKNOWN
+        if gateway.phase in (Phase.STOPPING, Phase.STOPPED):
+            return Evaluation(
+                _ACTIVE, f"gateway phase is {gateway.phase}: a shutdown was requested"
+            )
+        return _INACTIVE
+
+    def _fresh(self, gateway: GatewaySnapshot, name: str, now: datetime) -> bool:
+        """True when event ``name`` happened within the hold time."""
+        event = gateway.last_events.get(name)
+        return event is not None and now - event.ts <= timedelta(seconds=self._config.event_hold_s)
+
+    @staticmethod
+    def _needs_human(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the phase is ``needs-human``; the detail names the cause when known.
+
+        The gateway reaches the phase in three ways, each announced by one event: IBKR rejected
+        the login in this start (``login_failed_dialog``), the second factor was not approved
+        after the configured number of prompts (``needs_human``), or the gateway did not log
+        in at all because IBKR had rejected the same secret files at an earlier start
+        (``login_rejected_latched``, the gateway's rejected-login latch). The newest of the
+        three names the cause; on a tie the order below decides, so the result is the same on
+        every evaluation. Without any of them the detail is the bare phase.
+        """
+        if not known:
+            return _UNKNOWN
+        if gateway.phase != Phase.NEEDS_HUMAN:
+            return _INACTIVE
+        causes = (
+            ("login_failed_dialog", "IBKR rejected the login"),
+            ("needs_human", "the second factor was not approved"),
+            (
+                "login_rejected_latched",
+                "IBKR rejected these credentials at an earlier start; "
+                "the gateway will not log in until the secret files are corrected",
+            ),
+        )
+        detail = "gateway phase is needs-human"
+        newest: GatewayEvent | None = None
+        cause = ""
+        for name, text in causes:
+            event = gateway.last_events.get(name)
+            if event is not None and (newest is None or event.ts > newest.ts):
+                newest = event
+                cause = text
+        if cause:
+            detail += f": {cause}"
+        return Evaluation(_ACTIVE, detail)
+
+    def _login_failed(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
+        """Active after a recent failed login that no later login has superseded.
+
+        Silent while the phase is ``needs-human``: a rejected login puts the gateway there,
+        and that one alert carries the cause.
+        """
+        if not gateway.feeds_seen:
+            return _UNKNOWN
+        if gateway.phase in (Phase.LOGGED_IN, Phase.NEEDS_HUMAN):
+            return _INACTIVE
+        if not self._fresh(gateway, "login_failed", now):
+            return _INACTIVE
+        failed_at = gateway.last_events["login_failed"].ts
+        if gateway.last_login is not None and gateway.last_login >= failed_at:
+            return _INACTIVE
+        return Evaluation(_ACTIVE, "the gateway reported a failed login")
+
+    @staticmethod
+    def _login_stalled(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the gateway's ``login_stalled`` pair is open and it is still logging in.
+
+        A stall that ends because the gateway gave up, exited or was stopped did not
+        recover: the verdict is then a hand-over to the alert that describes the gateway
+        now, so the closing message does not say "no action needed". The gateway's sampler
+        closes the pair itself in that case (the phase left ``login``), so a closed pair is
+        a hand-over too when the gateway announced its end before closing it
+        (``PairState.ended_with``); the phase file may not have been re-read yet.
+        """
+        if not known:
+            return _UNKNOWN
+        pair = gateway.pairs.get("login_stalled")
+        if pair is None:
+            # The gateway never reported a stall; a login that is merely in progress is
+            # not for the sidecar to judge.
+            return _UNKNOWN if gateway.phase == Phase.LOGIN else _INACTIVE
+        if pair.open and gateway.phase == Phase.LOGIN:
+            return Evaluation(_ACTIVE, "the gateway reports a stalled login")
+        if pair.open and gateway.phase in _SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_SUCCESSORS[gateway.phase])
+        if not pair.open and pair.ended_with in _ENDING_SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_ENDING_SUCCESSORS[pair.ended_with])
+        return _INACTIVE
+
+    def _unknown_window(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
+        """Active after a recent unclassified dialog while the gateway is not logged in."""
+        if not gateway.feeds_seen:
+            return _UNKNOWN
+        if self._fresh(gateway, "unknown_window", now) and gateway.phase != Phase.LOGGED_IN:
+            return Evaluation(_ACTIVE, "the gateway reported an unrecognised dialog")
+        return _INACTIVE
+
+    def _api_unhealthy(self, probe: ProbeSnapshot, now: datetime, mono: float) -> Evaluation:
+        """Active when the API has been unhealthy for long enough.
+
+        Inside a reset window of the operator's IBKR region a lost link to IBKR is
+        expected and stays undecided. The window excuses only what IBKR's reset can
+        cause: lost connectivity, broken farms, a time request without an answer. It
+        never excuses a Gateway that does not complete the API handshake or sits on
+        half-closed sockets: those are local faults, at any time of day.
+        """
+        if probe.status is ProbeStatus.READY:
+            self._unhealthy_since = None
+            return _INACTIVE
+        if probe.status not in _UNHEALTHY:
+            return _UNKNOWN
+        if self._unhealthy_since is None:
+            already = (now - probe.status_since).total_seconds() if probe.status_since else 0.0
+            self._unhealthy_since = mono - max(0.0, already)
+        elapsed = mono - self._unhealthy_since
+        if elapsed <= self._config.api_unhealthy_after_s:
+            return _UNKNOWN  # too early to say
+        local_fault = probe.last_error == "connect_failed" or probe.zombie
+        if probe.in_reset_window and not local_fault:
+            return _UNKNOWN  # a disconnect that IBKR's schedule explains
+        return Evaluation(
+            _ACTIVE, f"API status {probe.status.value} for {elapsed:.0f} s: {probe.reason}"
+        )
+
+    def _restart_storm(self, gateway: GatewaySnapshot) -> Evaluation:
+        """Active at ``storm_boots`` or more gateway starts within 30 minutes."""
+        if gateway.boots_30m is None:
+            return _UNKNOWN
+        if gateway.boots_30m >= self._config.storm_boots:
+            return Evaluation(_ACTIVE, f"{gateway.boots_30m} gateway starts in the last 30 minutes")
+        return _INACTIVE
+
+    def _resource_alert(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
+        """Active on a recent OOM kill or while the gateway's ``memory_high`` pair is open."""
+        hold = timedelta(seconds=self._config.event_hold_s)
+        if gateway.last_oom_at is not None and now - gateway.last_oom_at <= hold:
+            return Evaluation(_ACTIVE, "the gateway reports an out-of-memory kill")
+        pair = gateway.pairs.get("memory_high")
+        if pair is None:
+            return _INACTIVE if gateway.last_oom_at is not None else _UNKNOWN
+        if pair.open and gateway.phase not in _NOT_RUNNING:
+            return Evaluation(_ACTIVE, "the gateway reports memory pressure")
+        return _INACTIVE
+
+    def _clock_skew(self, probe: ProbeSnapshot) -> Evaluation:
+        """Active when consecutive probes prove that the host clock differs from IBKR time.
+
+        One reading is not proof: a process that was paused between sending the request
+        and reading its own clock measures a skew that does not exist. So the condition
+        needs ``clock_skew_samples`` consecutive successful probes beyond the limit, and
+        one probe within the limit clears it. A probe that failed is not a sample.
+
+        The skew is taken against the middle of the round trip; if request and answer
+        travel unequally long, that is wrong by up to half the round-trip time, which is
+        therefore added to the tolerance.
+        """
+        skew = probe.clock_skew_s
+        if skew is None:
+            self._skew_sample_at = None
+            self._skew_streak = 0
+            return _UNKNOWN
+        if probe.last_probe_ok and probe.last_probe_at != self._skew_sample_at:
+            self._skew_sample_at = probe.last_probe_at
+            tolerance = self._config.clock_skew_max_s + (probe.last_rtt_s or 0.0) / 2
+            self._skew_streak = self._skew_streak + 1 if skew_exceeds(skew, tolerance) else 0
+        if self._skew_streak >= self._config.clock_skew_samples:
+            return Evaluation(
+                _ACTIVE,
+                f"IBKR time minus host time is {skew:.1f} s "
+                f"({self._config.clock_skew_samples} consecutive probes)",
+            )
+        return _INACTIVE if self._skew_streak == 0 else _UNKNOWN
+
+    def _volume_missing(self, gateway: GatewaySnapshot) -> Evaluation:
+        """Active when the sidecar has not been able to see the gateway for too long.
+
+        Without a known phase every phase rule is undecidable and nothing else can
+        alert, so the blindness itself is the alert. Below the threshold the verdict is
+        unknown (a volume that appears a moment after the sidecar started is normal);
+        it is inactive exactly while a known phase is read.
+        """
+        blind_for = gateway.unreadable_for_s
+        if blind_for is None:
+            return _INACTIVE
+        if blind_for < self._config.volume_missing_after_s:
+            return _UNKNOWN
+        if not gateway.volume_present:
+            what = "the gateway's log volume is not mounted"
+        elif gateway.phase is None:
+            what = "the phase file state/phase is missing or unreadable"
+        else:
+            what = "the phase file holds a token this sidecar does not know"
+        return Evaluation(
+            _ACTIVE, f"{what} for {blind_for:.0f} s; nothing about the gateway is measured"
+        )
+
+    def _silent(self, gateway: GatewaySnapshot) -> Evaluation:
+        """Active when a running gateway wrote nothing the sidecar observed for too long."""
+        if (
+            not gateway.volume_present
+            or not gateway.feeds_seen
+            or gateway.quiet_for_s is None
+            or gateway.phase in _NOT_RUNNING
+        ):
+            return _UNKNOWN
+        if gateway.quiet_for_s > self._config.silent_after_s:
+            return Evaluation(
+                _ACTIVE, f"no event and no metrics sample for {gateway.quiet_for_s:.0f} s"
+            )
+        return _INACTIVE

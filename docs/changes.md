@@ -5,6 +5,50 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Optional sidecar: API probe, status endpoints, alerts (`sidecar/`)
+
+- **What changed:** a second, optional image. It reads the gateway's log volume read-only,
+  probes the API through the relay port (handshake, server time, connectivity notices, clock
+  skew; no order, cancel or what-if call exists in it), serves `/livez`, `/readyz`, `/status`
+  and `/metrics` on port 9810, and notifies people through seven channels with an escalation
+  ladder. It runs in its own network namespace by default, announces a gateway that stopped,
+  exited or fell silent, can ping a dead-man check, and names the cause when the gateway
+  holds because of the rejected-login latch. ADR 0010; workflows `sidecar.yml`,
+  `sidecar-publish.yml`, `sidecar-rescan.yml`.
+- **Result:** Python gates clean and the tests green (counts in the pull request); container
+  smoke suite and the end-to-end run with the real gateway image green, including a
+  notification delivered after `docker stop` of the gateway. Nothing ran against a logged-in
+  Gateway (L20).
+- **What did NOT work / root cause:**
+  - *A sidecar inside the gateway's network namespace is mute exactly when it is needed*: when
+    the gateway container stops it keeps only loopback and cannot send anything. The first
+    design shared the namespace to reach the loopback API; the default is now its own
+    namespace and the relay port, and the shared mode is an option that says what it cannot do.
+  - *"Second factor pending" derived from the phase resolved itself every three minutes*: the
+    phase flips to `login` on each prompt timeout. It is derived from events, holds across the
+    flip and escalates from the first prompt.
+  - *An alert was recorded as sent although no channel had accepted it*, and was later followed
+    by "resolved". The dispatcher now reports back; an undelivered alert is retried and
+    persisted.
+  - *Reset windows stored in fixed Hong Kong time covered the US close in winter.* The Asia
+    windows are anchored to New York time, as IBKR's footnote implies.
+  - *Image pins held in a Dockerfile `ARG` are invisible to Dependabot*: both images are named
+    in `FROM` lines.
+  - *One failed save of the state file switched to memory for good*; it now retries.
+  - *The end-to-end job failed on its first run in GitHub Actions and never locally.* After a
+    stop of the gateway the sidecar said "No action needed. The condition has cleared." about
+    a stalled login: the gateway's sampler closes that pair itself while stopping, and on a
+    fast machine the sidecar read the closing event before the new phase. The model now
+    records which event ended the gateway's attempt before the pair closed (the feed order is
+    deterministic) and the rule hands over on that.
+  - *Both test scripts ended pipelines in `grep -q` under `pipefail`*, which is false when the
+    writer dies of SIGPIPE; for "a credential is in the payloads: fail, else pass" that is a
+    false pass. Found through the Azure pack's first Linux run; a helper that reads all
+    input replaces them.
+  - Not established: everything in L20 and L21.
+- **Next step:** a paper login with the sidecar attached; one real message per channel; the
+  first runs of the three workflows.
+
 ### 2026-11-12 — Azure Log Analytics pack (`azure/`)
 
 - **What changed:** a pack that ships the gateway's events and resource samples (and, opt-in

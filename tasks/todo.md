@@ -62,3 +62,11 @@
 - [x] `azure/`: Bicep (tables, data collection rule, role, alerts, workbook, query pack), Vector shipper with redaction, compose profiles, optional gateway VM, offline suite, ADR 0012
 - [ ] First deployment to a test subscription (owner's go-ahead: it creates billable resources); then L19
 - [ ] Run the `kql-run` group once (needs a person to accept the Kusto emulator's licence)
+
+## Roadmap P1/P2: optional sidecar (2026-11-12, branch `feat/sidecar`)
+
+- [x] `sidecar/`: read-only API probe, `/livez` `/readyz` `/status` `/metrics`, notifier with an escalation ladder (seven channels), dead-man ping, own network namespace by default, ADR 0010
+- [x] Workflows: tests + image + smoke + end to end; publish from `main` only (both architectures tested and scanned before the push); weekly rescan
+- [ ] First runs of the three workflows; the first-publish path of `sidecar-publish.yml`
+- [ ] A paper login with the sidecar attached (L20); one real message per channel
+- [ ] A person checks the reset-window table against IBKR's system status page (L21)
