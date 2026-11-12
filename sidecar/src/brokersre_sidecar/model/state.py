@@ -194,6 +194,14 @@ class GatewayState:
             self._phase = reading.token
             self._phase_since = min(reading.modified, self._clock.now())
 
+    def observe_stalled(self) -> None:
+        """Record that a read of the volume has not returned in time.
+
+        Nothing that was read earlier can be vouched for any more, so the phase becomes
+        unknown, exactly as with a phase file that cannot be read.
+        """
+        self.observe_phase(None)
+
     def observe_event(self, event: GatewayEvent) -> None:
         """Record one event line (in file order)."""
         self._note_line(event.ts, event.boot_id)

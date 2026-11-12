@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
 from datetime import time, timedelta
 from pathlib import Path
 from typing import Any
@@ -51,9 +53,12 @@ class World:
         state_dir: Path | None,
         clock: FakeClock | None = None,
         heartbeat: time | None = None,
+        save_timeout_s: float = 5.0,
     ) -> None:
         self.clock = clock or FakeClock()
         self.heartbeat = heartbeat
+        self.save_timeout_s = save_timeout_s
+        self.store = NotifierStore(state_dir / "notifier-state.json") if state_dir else None
         self.gateway: dict[str, Any] = {}
         self.probe: dict[str, Any] = {}
         self.ready = True
@@ -80,7 +85,8 @@ class World:
             ),
             factory=MessageFactory("desk-1", "Etc/UTC", None, SecretRegistry()),
             dispatcher=self.dispatcher,
-            store=NotifierStore(state_dir / "notifier-state.json") if state_dir else None,
+            store=self.store,
+            save_timeout_s=self.save_timeout_s,
             clock=self.clock,
             gateway=self._gateway,
             probe=self._probe,
@@ -359,3 +365,87 @@ async def test_a_blind_sidecar_sends_no_heartbeat_but_an_alert_after_five_minute
     await world.tick(60)
     await world.tick(1)
     assert [message.kind for message in world.teams.sent] == ["firing", "resolved", "heartbeat"]
+
+
+def saved_state(tmp_path: Path) -> dict[str, Any]:
+    state: dict[str, Any] = json.loads(
+        (tmp_path / "notifier-state.json").read_text(encoding="utf-8")
+    )
+    return state
+
+
+async def test_a_state_save_that_hangs_neither_stalls_the_notifier_nor_piles_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path, save_timeout_s=0.05)
+    world.notifier.load_state()
+    assert world.store is not None
+    real_save = world.store.save
+    release = threading.Event()
+    calls: list[object] = []
+
+    def hanging_save(state: object) -> None:
+        calls.append(state)
+        if len(calls) == 1:
+            release.wait(20)
+        real_save(state)
+
+    monkeypatch.setattr(world.store, "save", hanging_save)
+    try:
+        world.gateway = {"phase": "2fa-pending"}
+        await asyncio.wait_for(world.tick(), 5)  # returns although the save hangs
+        assert [message.kind for message in world.teams.sent] == ["firing"]
+        snapshot = world.notifier.snapshot()
+        assert snapshot.state_persistence == "memory"
+        assert snapshot.state_persistence_reason == (
+            "saving the state did not finish within 0.05 s"
+        )
+        # The state changes again while the first save is still stuck: no second save is
+        # started behind it.
+        world.gateway = {"phase": "logged-in"}
+        await asyncio.wait_for(world.tick(60), 5)
+        assert [message.kind for message in world.teams.sent] == ["firing", "resolved"]
+        assert len(calls) == 1
+    finally:
+        release.set()
+    # Once the stuck save has returned, the next attempt writes the CURRENT state.
+    for _ in range(200):
+        await world.tick(31)
+        if world.notifier.snapshot().state_persistence == "file":
+            break
+        await asyncio.sleep(0.01)
+    assert world.notifier.snapshot().state_persistence == "file"
+    assert world.notifier.snapshot().state_persistence_reason is None
+    assert saved_state(tmp_path)["classes"]["twofa_pending"]["active"] is False
+
+
+async def test_a_failed_state_save_is_retried_and_persistence_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path)
+    world.notifier.load_state()
+    assert world.store is not None
+    real_save = world.store.save
+    disk_full = True
+    attempts = 0
+
+    def flaky_save(state: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if disk_full:
+            raise OSError(28, "No space left on device")
+        real_save(state)
+
+    monkeypatch.setattr(world.store, "save", flaky_save)
+    world.gateway = {"phase": "2fa-pending"}
+    await world.tick()
+    snapshot = world.notifier.snapshot()
+    assert snapshot.state_persistence == "memory"
+    assert snapshot.state_persistence_reason == "saving the state failed (OSError)"
+    await world.tick(10)
+    assert attempts == 1  # not hammered: the next attempt is thirty seconds later
+    disk_full = False
+    await world.tick(25)
+    assert attempts == 2
+    assert world.notifier.snapshot().state_persistence == "file"
+    assert saved_state(tmp_path)["classes"]["twofa_pending"]["active"] is True

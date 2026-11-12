@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import re
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,7 @@ class Harness:
         *,
         webhook: bool,
         proc_root: Path | None = None,
+        feed_read_timeout_s: float = 10.0,
     ) -> None:
         self.volume = Volume(tmp_path / "volume")
         self.clock = FakeClock()
@@ -103,6 +105,7 @@ class Harness:
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self._receive)),
             proc_root=proc_root if proc_root is not None else tmp_path / "no-proc",
             tick_s=0.005,
+            feed_read_timeout_s=feed_read_timeout_s,
         )
         self.stop = asyncio.Event()
         self.task: asyncio.Task[None] | None = None
@@ -469,3 +472,42 @@ async def test_exiting_when_orphaned_can_be_switched_off(tmp_path: Path) -> None
         await let_time_pass(h, 70)
         assert h.task is not None
         assert not h.task.done()
+
+
+async def test_a_stuck_volume_read_is_waited_for_and_never_started_twice(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, {}, webhook=False, feed_read_timeout_s=0.05)
+    release = threading.Event()
+    calls: list[str] = []
+    real_read = harness.app.feed.read
+    stuck = False
+
+    def read() -> Any:
+        if stuck:
+            calls.append("stuck")
+            release.wait(20)
+        return real_read()
+
+    harness.app.feed.read = read  # type: ignore[method-assign]
+    try:
+        await harness.start()
+        harness.volume.phase("logged-in")
+        await until(lambda: harness.app.gateway_snapshot().phase == "logged-in")
+        stuck = True
+        # The read hangs: the sidecar says that it cannot see the gateway...
+        await until(lambda: harness.app.gateway_snapshot().phase is None)
+        assert (await harness.status())["phase"] is None
+        # ...and keeps waiting for that one read through many timeouts.
+        await asyncio.sleep(0.4)
+        assert calls == ["stuck"]
+        follow = harness.app.task_snapshot()[0]
+        assert (follow.name, follow.state, follow.restarts) == ("follow", "running", 0)
+        # What was written meanwhile is not lost when the read returns.
+        harness.volume.phase("2fa-pending")
+        harness.volume.event("twofa_initiated")
+        stuck = False
+        release.set()
+        await until(lambda: harness.app.gateway_snapshot().phase == "2fa-pending")
+        assert "twofa_initiated" in harness.app.gateway_snapshot().last_events
+    finally:
+        release.set()
+        await harness.shutdown()

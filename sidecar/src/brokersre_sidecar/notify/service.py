@@ -18,9 +18,14 @@ from brokersre_sidecar.notify.message import MessageFactory
 from brokersre_sidecar.notify.rules import RuleEngine
 from brokersre_sidecar.notify.store import NotifierStore
 from brokersre_sidecar.vocab import UNKNOWN_PHASE, MessageKind, ProbeStatus
+from brokersre_sidecar.worker import SerialWorker
 
 _LOGGER = logging.getLogger(__name__)
 _TRACKED = (MessageKind.FIRING, MessageKind.ESCALATION)
+# A state file of a few hundred bytes on a local volume; anything longer is a stuck disk.
+_SAVE_TIMEOUT_S = 5.0
+# Delay between attempts while the state cannot be saved.
+_SAVE_RETRY_S = 30.0
 
 
 class Notifier:
@@ -28,9 +33,11 @@ class Notifier:
 
     ``tick`` does no network I/O: it only queues messages on the dispatcher, whose workers
     deliver them and report back whether a channel accepted each one. The state file is
-    written only when the ladder state changed. A state directory that is missing or
-    read-only is not fatal: the notifier keeps its state in memory and says so in
-    ``/status``.
+    written only when the ladder state changed, on a thread of its own, with a time
+    bound: a save that hangs or fails neither stalls the alerts nor is repeated behind
+    itself; the state is then kept in memory (``/status`` says so) and the save is tried
+    again later. A state directory that is missing or read-only when the sidecar starts
+    means memory only.
     """
 
     def __init__(
@@ -45,6 +52,7 @@ class Notifier:
         gateway: Callable[[], GatewaySnapshot],
         probe: Callable[[], ProbeSnapshot],
         ready: Callable[[], bool],
+        save_timeout_s: float = _SAVE_TIMEOUT_S,
     ) -> None:
         """Wire the notifier.
 
@@ -59,6 +67,7 @@ class Notifier:
             probe: Returns the current probe snapshot.
             ready: False until the gateway feed was read once; nothing is evaluated before
                 that, so a restart cannot "resolve" alerts from an empty model.
+            save_timeout_s: Longest wait for one write of the state file.
         """
         self._rules = rules
         self._ladder = ladder
@@ -69,6 +78,11 @@ class Notifier:
         self._gateway = gateway
         self._probe = probe
         self._ready = ready
+        self._save_timeout_s = save_timeout_s
+        self._saver = SerialWorker("sidecar-state")
+        self._can_save = False
+        self._unsaved = False
+        self._save_retry_at: float | None = None
         self._persistence: Literal["file", "memory"] = "memory"
         self._persistence_reason: str | None = "no state file is configured"
 
@@ -82,6 +96,7 @@ class Notifier:
             return
         self._ladder.import_state(self._store.load())
         if self._store.writable():
+            self._can_save = True
             self._persistence = "file"
             self._persistence_reason = None
         else:
@@ -131,7 +146,7 @@ class Notifier:
                 channels=list(due.channels),
                 attempt=due.attempt,
             )
-        if self._ladder.dirty:
+        if self._ladder.dirty or self._unsaved:
             await self._save()
 
     def _delivered(self, due: Outbound, accepted: bool) -> None:
@@ -148,17 +163,55 @@ class Notifier:
                 attempt=due.attempt,
             )
 
+    def close(self) -> None:
+        """Let the state thread end (called when the sidecar stops)."""
+        self._saver.close()
+
     async def _save(self) -> None:
-        """Write the ladder state; fall back to memory on failure."""
-        state = self._ladder.export_state()
-        if self._store is None or self._persistence != "file":
+        """Write the ladder state on the state thread; keep it in memory when that fails.
+
+        At most one write runs at a time and the wait for it is bounded. While a write has
+        not returned, or within ``_SAVE_RETRY_S`` of a failure, nothing is started and the
+        state stays marked as unsaved; the next attempt writes whatever is current then.
+        """
+        if self._store is None or not self._can_save:
+            self._ladder.export_state()  # nothing to write to: only clears the dirty flag
             return
-        try:
-            await asyncio.to_thread(self._store.save, state)
-        except OSError as error:
-            self._persistence = "memory"
-            self._persistence_reason = f"saving the state failed ({type(error).__name__})"
-            log_event(_LOGGER, logging.WARNING, "notifier_state_memory", self._persistence_reason)
+        self._unsaved = True
+        if self._saver.busy:
+            return
+        mono = self._clock.monotonic()
+        if self._save_retry_at is not None and mono < self._save_retry_at:
+            return
+        write = self._saver.start(functools.partial(self._store.save, self._ladder.export_state()))
+        done, _ = await asyncio.wait({write}, timeout=self._save_timeout_s)
+        if not done:
+            # Collect the late outcome so that a late error is not reported as "never retrieved".
+            write.add_done_callback(lambda finished: finished.exception())
+            self._save_failed(
+                f"saving the state did not finish within {self._save_timeout_s:g} s", mono
+            )
+            return
+        error = write.exception()
+        if isinstance(error, OSError):
+            self._save_failed(f"saving the state failed ({type(error).__name__})", mono)
+            return
+        if error is not None:
+            raise error
+        self._unsaved = False
+        self._save_retry_at = None
+        if self._persistence != "file":
+            log_event(_LOGGER, logging.INFO, "notifier_state_file", "the state is saved again")
+        self._persistence = "file"
+        self._persistence_reason = None
+
+    def _save_failed(self, reason: str, mono: float) -> None:
+        """Record a failed or overdue save and schedule the next attempt."""
+        self._save_retry_at = mono + _SAVE_RETRY_S
+        if self._persistence_reason != reason:
+            log_event(_LOGGER, logging.WARNING, "notifier_state_memory", reason)
+        self._persistence = "memory"
+        self._persistence_reason = reason
 
     def snapshot(self) -> NotifierSnapshot:
         """Return the notifier's state for ``/status`` and ``/metrics``."""

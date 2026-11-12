@@ -6,7 +6,7 @@ settings and runs each as a supervised task:
 ========== =====================================================================
 task       what it does (about once per ``tick_s``)
 ========== =====================================================================
-follow     reads the gateway's phase file and feeds (file I/O in a worker thread)
+follow     reads the gateway's phase file and feeds (file I/O on the feed's own thread)
 probe      one step of the read-only API probe
 http       serves /livez, /readyz, /status and /metrics
 notify     evaluates the alert rules and queues due notifications
@@ -42,6 +42,7 @@ from brokersre_sidecar.model import (
     StatusDocument,
     build_status,
 )
+from brokersre_sidecar.model.feed import FeedBatch
 from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot, TaskSnapshot
 from brokersre_sidecar.notify import (
     Dispatcher,
@@ -68,11 +69,13 @@ from brokersre_sidecar.probe import (
 from brokersre_sidecar.redaction import SecretRegistry
 from brokersre_sidecar.supervisor import Supervisor, TaskFactory
 from brokersre_sidecar.vocab import Phase, ProbeStatus
+from brokersre_sidecar.worker import SerialWorker
 
 _LOGGER = logging.getLogger(__name__)
 
 STATE_FILE_NAME = "notifier-state.json"
-# A read of three small local files; anything longer means the volume is stuck.
+# A read of three small local files; anything longer means the volume is stuck. The read
+# is then waited for further (never started a second time) and the phase is unknown.
 _FEED_READ_TIMEOUT_S = 10.0
 # Time allowed at shutdown to deliver notifications that are already queued.
 _FLUSH_TIMEOUT_S = 3.0
@@ -157,6 +160,7 @@ class Application:
         http_client: httpx.AsyncClient | None = None,
         proc_root: Path = Path("/proc"),
         tick_s: float = 1.0,
+        feed_read_timeout_s: float = _FEED_READ_TIMEOUT_S,
     ) -> None:
         """Build every subsystem; nothing runs and no socket is opened yet.
 
@@ -171,6 +175,7 @@ class Application:
             proc_root: procfs mount point. Read only in the shared-namespace mode (socket
                 table of the namespace the gateway lives in).
             tick_s: Period of the follow, probe and notify loops.
+            feed_read_timeout_s: After this long a read of the volume counts as stuck.
         """
         self._settings = settings
         self._clock: Clock = clock if clock is not None else SystemClock()
@@ -180,6 +185,10 @@ class Application:
         self.feed = GatewayFeed(settings.log_dir, self._state)
         """The gateway feed (public so a test can make it fail)."""
         self._feed_ready = False
+        self._feed_read_timeout_s = feed_read_timeout_s
+        self._feed_worker = SerialWorker("sidecar-feed")
+        self._feed_read: asyncio.Future[FeedBatch] | None = None
+        self._feed_stuck = False
         self._last_phase: str | None = None
         self._last_status: ProbeStatus | None = None
 
@@ -388,9 +397,36 @@ class Application:
         log_event(_LOGGER, logging.INFO, "sidecar_stopped")
 
     async def _follow(self) -> None:
-        """Read the gateway's files in a worker thread and apply them to the model."""
+        """Read the gateway's files on the feed's own thread and apply them to the model.
+
+        One read at a time, ever. A read that does not return in time (a stuck volume) is
+        not abandoned and replaced: threads would pile up behind the same stuck call, and
+        the file offsets a late read advanced would be lost. The task keeps waiting for
+        that read, also across a restart of this task, and tells the model meanwhile that
+        the gateway cannot be seen.
+        """
         while True:
-            batch = await asyncio.wait_for(asyncio.to_thread(self.feed.read), _FEED_READ_TIMEOUT_S)
+            if self._feed_read is None:
+                self._feed_read = self._feed_worker.start(self.feed.read)
+            done, _ = await asyncio.wait({self._feed_read}, timeout=self._feed_read_timeout_s)
+            if not done:
+                self._state.observe_stalled()
+                if not self._feed_stuck:
+                    self._feed_stuck = True
+                    log_event(
+                        _LOGGER,
+                        logging.ERROR,
+                        "feed_read_stuck",
+                        "a read of the gateway's log volume has not returned; the gateway "
+                        "cannot be seen until it does",
+                        waited_s=self._feed_read_timeout_s,
+                    )
+                continue
+            read, self._feed_read = self._feed_read, None
+            batch = read.result()
+            if self._feed_stuck:
+                self._feed_stuck = False
+                log_event(_LOGGER, logging.INFO, "feed_read_resumed")
             self.feed.apply(batch)
             self._feed_ready = True
             phase = self._state.phase
@@ -508,6 +544,9 @@ class Application:
                 )
         if self._transport is not None:
             await self._transport.aclose()
+        if self._notifier is not None:
+            self._notifier.close()
+        self._feed_worker.close()
 
     def _livez(self) -> Response:
         """200 while the supervisor is running its tasks."""
