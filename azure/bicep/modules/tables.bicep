@@ -60,14 +60,11 @@ resource eventsTable 'Microsoft.OperationalInsights/workspaces/tables@2026-03-01
         { name: 'Host', type: 'string', description: 'HOST_LABEL of the Docker host; empty when the operator did not set it.' }
         { name: 'BootId', type: 'string', description: '16 hex characters identifying one container start (boot_id).' }
         { name: 'Seq', type: 'long', description: 'Sequence number, monotonic per BootId; a gap means lost events.' }
-        { name: 'Src', type: 'string', description: 'Emitting component: entrypoint, ibc, xvfb, vnc, socat, doctor or metrics.' }
+        { name: 'Src', type: 'string', description: 'Emitting component: entrypoint, ibc, xvfb, vnc, socat, healthcheck, doctor or metrics.' }
         { name: 'Level', type: 'string', description: 'info, warn or error.' }
         { name: 'Event', type: 'string', description: 'snake_case event name, for example login_completed or twofa_initiated.' }
-        { name: 'Phase', type: 'string', description: 'Gateway phase attached to the event, when the event carries one.' }
-        { name: 'Code', type: 'int', description: 'Numeric code attached to the event, for example IB API code 1100; empty when absent.' }
-        { name: 'AccountTail', type: 'string', description: 'Last three characters of an IBKR account id; the full id never leaves the host.' }
         { name: 'Msg', type: 'string', description: 'Human-readable message; never a raw IBC or Gateway line.' }
-        { name: 'Props', type: 'dynamic', description: 'Every other key of the event line, kept as a JSON object.' }
+        { name: 'Props', type: 'dynamic', description: 'The data object of the event (for example gateway_version on container_start, config_hash on config_rendered) plus any key the contract adds later.' }
       ]
     }
   }
@@ -106,6 +103,8 @@ resource metricsTable 'Microsoft.OperationalInsights/workspaces/tables@2026-03-0
         { name: 'CloseWaitSockets', type: 'long', description: 'API sockets stuck in CLOSE_WAIT (api_close_wait_sockets).' }
         { name: 'DiskFreeBytesLogs', type: 'long', description: 'Free bytes on the log volume (disk_free_bytes_logs).' }
         { name: 'DiskFreeBytesSettings', type: 'long', description: 'Free bytes on the settings volume (disk_free_bytes_settings).' }
+        { name: 'DiskTotalBytesLogs', type: 'long', description: 'Size in bytes of the log volume (disk_total_bytes_logs).' }
+        { name: 'DiskTotalBytesSettings', type: 'long', description: 'Size in bytes of the settings volume (disk_total_bytes_settings).' }
       ]
     }
   }

@@ -111,21 +111,6 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where isnotnull(Code)\n| summarize Events = count() by bin(TimeGenerated, {TimeRange:grain}), Code = tostring(Code)",
-        "size": 0,
-        "title": "Connectivity and error codes (1100 lost, 1101/1102 restored, 2103/2105/2157 farm broken)",
-        "noDataMessage": "No event with a code in this time range.",
-        "timeContextFromParameter": "TimeRange",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "visualization": "barchart"
-      },
-      "name": "codes"
-    },
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
         "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| summarize WorkingSetMiB = avg(MemWorkingSetBytes) / 1048576.0, JavaRssMiB = avg(JavaRssBytes) / 1048576.0, LimitMiB = avg(MemLimitBytes) / 1048576.0 by bin(TimeGenerated, {TimeRange:grain}), Instance",
         "size": 0,
         "title": "Memory (MiB): container working set, JVM resident set, container limit",
@@ -186,10 +171,10 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event in ('container_start', 'ibc_version')\n| extend ImageVersion = tostring(Props.image_version), GatewayVersion = tostring(Props.gateway_version), IbcVersion = iff(Event == 'ibc_version', Msg, '')\n| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Starts = countif(Event == 'container_start') by Instance, ImageVersion, GatewayVersion, IbcVersion\n| sort by LastSeen desc",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event == 'container_start'\n| extend GatewayVersion = tostring(Props.gateway_version), Channel = tostring(Props.channel), IbcVersion = tostring(Props.ibc_version), IbcRelease = tostring(Props.ibc_release), TradingMode = tostring(Props.trading_mode)\n| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Starts = count() by Instance, GatewayVersion, Channel, IbcVersion, IbcRelease, TradingMode\n| sort by LastSeen desc",
         "size": 0,
-        "title": "Image, Gateway and IBC versions over time (from container_start and ibc_version events; empty when the gateway image does not report them)",
-        "noDataMessage": "No container_start or ibc_version event in this time range.",
+        "title": "Gateway and IBC versions over time (from the container_start events)",
+        "noDataMessage": "No container_start event in this time range.",
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
@@ -201,7 +186,22 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Level in ('warn', 'error')\n| project TimeGenerated, Instance, Level, Event, Code, Phase, Msg\n| sort by TimeGenerated desc\n| take 100",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event in ('config_rendered', 'config_custom')\n| extend ConfigHash = tostring(Props.config_hash), TradingMode = tostring(Props.trading_mode), ReadOnlyApi = tostring(Props.read_only_api), AutoRestartTime = tostring(Props.auto_restart_time), TimeZone = tostring(Props.time_zone)\n| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Starts = count() by Instance, ConfigHash, Event, TradingMode, ReadOnlyApi, AutoRestartTime, TimeZone\n| sort by FirstSeen desc",
+        "size": 0,
+        "title": "Configuration changes (a new config_hash means the non-secret configuration changed)",
+        "noDataMessage": "No config_rendered or config_custom event in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "configuration"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Level in ('warn', 'error')\n| project TimeGenerated, Instance, Level, Src, Event, Msg\n| sort by TimeGenerated desc\n| take 100",
         "size": 0,
         "title": "Latest warnings and errors",
         "noDataMessage": "No warning or error event in this time range.",

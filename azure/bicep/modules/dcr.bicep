@@ -76,9 +76,6 @@ resource rule 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
           { name: 'Src', type: 'string' }
           { name: 'Level', type: 'string' }
           { name: 'Event', type: 'string' }
-          { name: 'Phase', type: 'string' }
-          { name: 'Code', type: 'int' }
-          { name: 'AccountTail', type: 'string' }
           { name: 'Msg', type: 'string' }
           { name: 'Props', type: 'dynamic' }
         ]
@@ -103,6 +100,8 @@ resource rule 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
           { name: 'CloseWaitSockets', type: 'long' }
           { name: 'DiskFreeBytesLogs', type: 'long' }
           { name: 'DiskFreeBytesSettings', type: 'long' }
+          { name: 'DiskTotalBytesLogs', type: 'long' }
+          { name: 'DiskTotalBytesSettings', type: 'long' }
         ]
       }
       'Custom-IBGatewayLogs_CL': {
