@@ -25,7 +25,9 @@ param dcrResourceId = '<output dcrResourceId>'
 param dcrLogsIngestionEndpoint = '<output logsIngestionEndpoint>'
 param dcrImmutableId = '<output dcrImmutableId>'
 
-// You, so that you can set the two secrets: az ad signed-in-user show --query id -o tsv
+// Optional. You, so that you can set the two secrets (az ad signed-in-user show --query id
+// -o tsv): this object id receives Key Vault Secrets Officer on the new vault. Set '' to
+// assign nothing (the template's default) and grant yourself the role another way.
 param vaultOperatorPrincipalId = '<your-own-object-id>'
 
 // Your workstation's public IP, to reach the vault for setting the secrets.
@@ -34,5 +36,7 @@ param keyVaultAllowedCidrs = [
 ]
 
 param tradingMode = 'paper'
+// The label of this gateway on every row; unique in the workspace (alerts tell gateways apart
+// by it).
 param instanceLabel = 'paper-1'
 param timeZone = 'America/New_York'

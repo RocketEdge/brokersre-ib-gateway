@@ -1,0 +1,35 @@
+# IB Gateway stack: credentials from Key Vault into tmpfs, then the compose services.
+# Installed to /etc/systemd/system by install.sh.
+#
+# Started once per boot. Until the operator has set both Key Vault secrets the start fails and
+# is retried with a growing delay (30 s doubling up to 10 minutes), so the stack comes up by
+# itself once the secrets exist. Stopping the unit removes the containers (volumes stay), so
+# Docker never restarts a gateway before its secrets are back in tmpfs after a reboot.
+#
+# The unit never restarts a running gateway on its own, and a Docker restart must not do it
+# either: the dependency on docker.service is Wants= plus After= (start order only). With
+# Requires= systemd would stop and restart this unit whenever docker.service is restarted
+# (a package upgrade, an administrator), and its ExecStop removes the gateway container: a
+# new IBKR login with second factor. The daemon itself keeps containers alive across its own
+# restart ("live-restore" in /etc/docker/daemon.json).
+[Unit]
+Description=IB Gateway stack (Key Vault secrets to tmpfs, then docker compose)
+Wants=docker.service network-online.target
+After=docker.service network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/local/sbin/fetch-secrets.sh
+ExecStart=/usr/local/sbin/ibgw-compose.sh up --detach --force-recreate --remove-orphans
+ExecStop=/usr/local/sbin/ibgw-compose.sh down
+Restart=on-failure
+RestartSec=30
+RestartSteps=6
+RestartMaxDelaySec=600
+TimeoutStartSec=900
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

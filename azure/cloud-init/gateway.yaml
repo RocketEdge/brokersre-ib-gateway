@@ -1,21 +1,22 @@
 #cloud-config
-# cloud-init for the one-click gateway VM (azure/bicep/vm.bicep).
+# cloud-init for the one-click gateway VM (azure/bicep/vm.bicep): the smallest possible
+# first-boot bootstrap, and nothing that depends on a deployment parameter.
 #
-# Purpose   Turn a fresh Ubuntu LTS VM into one IB Gateway host: Docker Engine from Docker's
-#           own apt repository, chrony, this repository at a pinned commit, the compose stack
-#           with the gateway image pinned by digest, the Vector profile wired to YOUR data
-#           collection rule with the VM's managed identity, and IBKR credentials that exist
-#           only in your Key Vault and in tmpfs.
-# Template  vm.bicep replaces every placeholder (an upper-case name between two pairs of
-#           underscores; plain text replace) before this file becomes the VM's customData.
-#           azure/tests/run.sh fails when a placeholder here is not replaced there, or the
-#           other way round; the embedded scripts are shellcheck-clean and fetch-secrets.sh
-#           has its own test with a fake curl.
-# Secrets   NONE in this file. The template takes no IBKR credential as a parameter; the
-#           operator sets the Key Vault secrets ib-username and ib-password after deployment
-#           and the VM's identity (Key Vault Secrets User, nothing more) reads them at start.
-# 2FA       Nothing here approves, automates or bypasses the second factor, and nothing
-#           restarts a running gateway: the stack is started once per boot.
+# Why so small  This file is the VM's customData, and customData cannot change after the VM
+#           was created: a redeployment with different customData is refused. Everything an
+#           operator may want to change later (image digests, the commit of this repository,
+#           labels, the raw-log switch) is therefore in the VM's userData, which can change in
+#           place, and everything that may need a fix later (the host scripts, the systemd
+#           unit of the stack) lives in the repository under azure/vm and is installed from
+#           the pinned commit. azure/tests/run.sh fails when this file contains a template
+#           placeholder or when its content changes without the recorded checksum changing
+#           with it (a reminder that existing VMs keep the old bootstrap).
+# What it does  Installs git, jq and chrony; ibgw-bootstrap.service then reads the userData,
+#           checks out the pinned commit and runs its azure/vm/install.sh bootstrap (Docker
+#           Engine, host scripts, configuration, the stack unit). The unit retries with a
+#           growing delay until it succeeded once, also across reboots.
+# Secrets   None here, none in userData. The IBKR credentials exist only in your Key Vault and
+#           in tmpfs on the VM (azure/vm/fetch-secrets.sh).
 package_update: true
 packages:
   - ca-certificates
@@ -26,251 +27,74 @@ packages:
   - jq
 
 write_files:
-  # Reads the two IBKR credentials from Key Vault with the VM's managed identity and writes
-  # them to tmpfs for the gateway (uid 1000). See the header of the script for its contract.
-  - path: /usr/local/sbin/fetch-secrets.sh
-    owner: root:root
-    permissions: "0755"
-    content: |
-      #!/usr/bin/env bash
-      # fetch-secrets.sh: IBKR credentials from Key Vault into tmpfs.
-      #
-      # Purpose   Read the secrets ib-username and ib-password of the Key Vault with the VM's
-      #           managed identity (instance metadata service) and write them to
-      #           /run/ibgateway-secrets (tmpfs: gone at power-off, never on a disk).
-      # Contract  On success both files exist, mode 0400, owner uid 1000 (the gateway's user),
-      #           in a directory of mode 0500; each file is written to a temporary name and
-      #           renamed, so a reader never sees half a secret. Exit 0.
-      #           On any failure nothing is half-written and the exit code is not 0; the
-      #           systemd unit retries with a growing delay. A secret that is not set yet
-      #           (404) is the expected state right after deployment.
-      # Secrecy   Neither the token nor a secret value is ever placed in a command line, an
-      #           environment variable or the output: curl reads the bearer header from stdin
-      #           and jq writes the value straight into the file.
-      # Env       IBGW_KEY_VAULT (default: the vault of this deployment), IBGW_SECRETS_DIR,
-      #           IBGW_SECRETS_UID; IBGW_IMDS_URL and IBGW_VAULT_SUFFIX exist for sovereign
-      #           clouds.
-      set -euo pipefail
-      umask 077
-
-      vault="${IBGW_KEY_VAULT:-__KEY_VAULT_NAME__}"
-      vault_suffix="${IBGW_VAULT_SUFFIX:-vault.azure.net}"
-      imds_url="${IBGW_IMDS_URL:-http://169.254.169.254/metadata/identity/oauth2/token}"
-      secrets_dir="${IBGW_SECRETS_DIR:-/run/ibgateway-secrets}"
-      secrets_uid="${IBGW_SECRETS_UID:-1000}"
-
-      log() { printf 'fetch-secrets: %s\n' "$1" >&2; }
-
-      work_dir="$(mktemp -d /run/fetch-secrets.XXXXXX)"
-      cleanup() { rm -rf "${work_dir}"; }
-      trap cleanup EXIT
-
-      # Token for Key Vault from the instance metadata service; kept in a private file.
-      if ! curl --silent --show-error --fail --retry 5 --retry-delay 2 --max-time 20 \
-        --header 'Metadata: true' --get \
-        --data-urlencode 'api-version=2018-02-01' \
-        --data-urlencode "resource=https://${vault_suffix}" \
-        "${imds_url}" --output "${work_dir}/token.json"; then
-        log "no token from the instance metadata service (is the VM's managed identity enabled?)"
-        exit 1
-      fi
-      if ! jq --join-output --exit-status '"header = \"Authorization: Bearer " + .access_token + "\""' \
-        "${work_dir}/token.json" >"${work_dir}/auth.curlrc"; then
-        log "the instance metadata service returned no access token"
-        exit 1
-      fi
-
-      for name in ib-username ib-password; do
-        status="$(curl --silent --show-error --retry 3 --retry-delay 2 --max-time 20 \
-          --config "${work_dir}/auth.curlrc" \
-          --output "${work_dir}/${name}.json" --write-out '%{http_code}' \
-          "https://${vault}.${vault_suffix}/secrets/${name}?api-version=7.4")" || status="000"
-        case "${status}" in
-          200) ;;
-          404)
-            log "secret ${name} is not set in Key Vault ${vault} yet; set it, this unit retries"
-            exit 2
-            ;;
-          401 | 403)
-            log "Key Vault ${vault} refused the VM's identity (HTTP ${status}): it needs Key Vault Secrets User and the subnet must be allowed"
-            exit 3
-            ;;
-          *)
-            log "Key Vault ${vault} could not be read (HTTP ${status})"
-            exit 4
-            ;;
-        esac
-        if ! jq --join-output --exit-status '.value | select(type == "string" and length > 0)' \
-          "${work_dir}/${name}.json" >"${work_dir}/${name}"; then
-          log "secret ${name} in Key Vault ${vault} is empty"
-          exit 5
-        fi
-      done
-
-      install -d -m 0500 -o "${secrets_uid}" -g "${secrets_uid}" "${secrets_dir}"
-      for name in ib-username ib-password; do
-        # Docker creates a DIRECTORY when a bind source is missing; never move a file into it.
-        if [[ -d "${secrets_dir}/${name}" ]]; then rmdir "${secrets_dir}/${name}"; fi
-        install -m 0400 -o "${secrets_uid}" -g "${secrets_uid}" "${work_dir}/${name}" "${secrets_dir}/.${name}.tmp"
-        mv -f -T "${secrets_dir}/.${name}.tmp" "${secrets_dir}/${name}"
-      done
-      log "ib-username and ib-password are in ${secrets_dir} (tmpfs)"
-
-  # docker compose with the files and profile of this VM; also the operator's entry point
-  # (ibgw-compose.sh ps, ibgw-compose.sh logs -f vector).
-  - path: /usr/local/sbin/ibgw-compose.sh
-    owner: root:root
-    permissions: "0755"
-    content: |
-      #!/usr/bin/env bash
-      # ibgw-compose.sh <docker compose arguments...>
-      # Runs docker compose for the gateway stack of this VM: the reference compose and the
-      # Azure override from the pinned checkout of the repository, plus the VM overlay that
-      # pins the images by digest and points the secrets at tmpfs. Profile azure = Vector with
-      # the VM's managed identity. Exit code: that of docker compose.
-      set -euo pipefail
-      pack=/opt/ibgateway/pack/compose
-      exec docker compose --project-name ibgw --env-file /opt/ibgateway/.env \
-        --file "${pack}/docker-compose.example.yml" \
-        --file "${pack}/docker-compose.azure.yml" \
-        --file /opt/ibgateway/docker-compose.vm.yml \
-        --profile azure "$@"
-
-  # First-boot installation, run once by runcmd below.
   - path: /usr/local/sbin/ibgw-bootstrap.sh
     owner: root:root
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
-      # ibgw-bootstrap.sh: first-boot installation of the gateway host. Idempotent.
+      # ibgw-bootstrap.sh: first boot of the gateway host. Idempotent.
       #
-      # Steps     1. Docker Engine and the compose plugin from Docker's apt repository; the
-      #              repository key is accepted only with Docker's published fingerprint.
-      #           2. This repository at the pinned commit (a commit id is content-addressed:
-      #              what is checked out is exactly what the operator reviewed).
-      #           3. Enable and start ibgw-stack.service (secrets, then the compose stack).
-      # Errors    Any failure stops the script with a non-zero exit; cloud-init records it in
-      #           /var/log/cloud-init-output.log. Re-run by hand after fixing the cause.
+      # Reads the VM's userData from the instance metadata service, checks out the commit of
+      # the repository it names (a commit id is content-addressed: what is checked out is
+      # exactly what the operator reviewed) and hands over to that commit's
+      # azure/vm/install.sh. Leaves /var/lib/ibgateway/bootstrap.done behind on success, which
+      # stops ibgw-bootstrap.service from running again.
+      # Exit: 0 done; anything else failed (the unit retries; see journalctl -u ibgw-bootstrap).
       set -euo pipefail
-      export DEBIAN_FRONTEND=noninteractive
-      docker_key_fingerprint=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
-      pack_repository='__PACK_REPOSITORY__'
-      pack_commit='__PACK_COMMIT__'
+      root=/opt/ibgateway
+      url='http://169.254.169.254/metadata/instance/compute/userData?api-version=2021-01-01&format=text'
+      work="$(mktemp -d)"
+      cleanup() { rm -rf "${work}"; }
+      trap cleanup EXIT
 
-      install -m 0755 -d /etc/apt/keyrings
-      curl --silent --show-error --fail --location --retry 5 --retry-delay 3 --max-time 60 \
-        https://download.docker.com/linux/ubuntu/gpg --output /etc/apt/keyrings/docker.asc
-      if ! gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q "^fpr:.*:${docker_key_fingerprint}:$"; then
-        echo "ibgw-bootstrap: the Docker repository key does not have the expected fingerprint" >&2
-        rm -f /etc/apt/keyrings/docker.asc
-        exit 1
+      curl --silent --show-error --fail --retry 5 --retry-delay 3 --max-time 20 \
+        --header 'Metadata: true' "${url}" --output "${work}/userdata.b64"
+      base64 --decode "${work}/userdata.b64" >"${work}/userdata.json"
+      if ! repository="$(jq --raw-output --exit-status '.packRepository | select(type == "string" and test("^https://[A-Za-z0-9./_-]+$"))' "${work}/userdata.json")" \
+        || ! commit="$(jq --raw-output --exit-status '.packCommit | select(type == "string" and test("^[0-9a-f]{40}$"))' "${work}/userdata.json")"; then
+        echo "ibgw-bootstrap: the VM's userData has no valid packRepository and packCommit" >&2
+        exit 2
       fi
-      chmod 0644 /etc/apt/keyrings/docker.asc
-      # shellcheck disable=SC1091  # present on every Ubuntu system
-      . /etc/os-release
-      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
-        "$(dpkg --print-architecture)" "${UBUNTU_CODENAME:-${VERSION_CODENAME}}" >/etc/apt/sources.list.d/docker.list
-      apt-get update
-      apt-get install --yes --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-      install -m 0755 -d /opt/ibgateway/pack
-      git -C /opt/ibgateway/pack init --quiet
-      git -C /opt/ibgateway/pack fetch --quiet --depth 1 "${pack_repository}" "${pack_commit}"
-      git -C /opt/ibgateway/pack checkout --quiet --detach FETCH_HEAD
-      if [[ "$(git -C /opt/ibgateway/pack rev-parse HEAD)" != "${pack_commit}" ]]; then
+      install -m 0755 -d "${root}/pack" /var/lib/ibgateway
+      git -C "${root}/pack" init --quiet
+      git -C "${root}/pack" fetch --quiet --depth 1 "${repository}" "${commit}"
+      git -C "${root}/pack" checkout --quiet --detach FETCH_HEAD
+      if [[ "$(git -C "${root}/pack" rev-parse HEAD)" != "${commit}" ]]; then
         echo "ibgw-bootstrap: the checkout is not the pinned commit" >&2
         exit 1
       fi
 
-      systemctl daemon-reload
-      systemctl enable chrony.service
-      systemctl enable ibgw-stack.service
-      systemctl start --no-block ibgw-stack.service
+      "${root}/pack/azure/vm/install.sh" bootstrap
+      touch /var/lib/ibgateway/bootstrap.done
 
-  # Docker daemon: containers keep running while the daemon itself is restarted or upgraded
-  # (a gateway restart would force a new IBKR login with a second factor), and container
-  # logs are bounded for every container on the host.
-  - path: /etc/docker/daemon.json
+  - path: /etc/systemd/system/ibgw-bootstrap.service
     owner: root:root
     permissions: "0644"
     content: |
-      {
-        "live-restore": true,
-        "log-driver": "json-file",
-        "log-opts": {
-          "max-size": "10m",
-          "max-file": "5"
-        }
-      }
-
-  # Settings of the compose stack (no secret in here).
-  - path: /opt/ibgateway/.env
-    owner: root:root
-    permissions: "0644"
-    content: |
-      # Rendered by cloud-init from the parameters of azure/bicep/vm.bicep. No secret here.
-      TRADING_MODE=__TRADING_MODE__
-      READ_ONLY_API=__READ_ONLY_API__
-      TIME_ZONE=__TIME_ZONE__
-      AUTO_RESTART_TIME=__AUTO_RESTART_TIME__
-      IBGW_INSTANCE=__IBGW_INSTANCE__
-      HOST_LABEL=__HOST_LABEL__
-      DCR_LOGS_ENDPOINT=__DCR_LOGS_ENDPOINT__
-      DCR_IMMUTABLE_ID=__DCR_IMMUTABLE_ID__
-      IBGW_REDACT_USERNAME_FILE=__IBGW_REDACT_USERNAME_FILE__
-      SHIP_RAW_LOGS=no
-
-  # VM overlay: images pinned by digest, secrets read from tmpfs.
-  - path: /opt/ibgateway/docker-compose.vm.yml
-    owner: root:root
-    permissions: "0644"
-    content: |
-      # Rendered by cloud-init from the parameters of azure/bicep/vm.bicep; merged over the
-      # reference compose and the Azure override of the pinned checkout (ibgw-compose.sh).
-      services:
-        ib-gateway:
-          image: "__GATEWAY_IMAGE__"
-        vector:
-          image: "__VECTOR_IMAGE__"
-      secrets:
-        ib-username:
-          file: /run/ibgateway-secrets/ib-username
-        ib-password:
-          file: /run/ibgateway-secrets/ib-password
-
-  # One unit orders the two steps: credentials into tmpfs first, then the compose stack.
-  - path: /etc/systemd/system/ibgw-stack.service
-    owner: root:root
-    permissions: "0644"
-    content: |
-      # IB Gateway stack: credentials from Key Vault into tmpfs, then the compose services.
-      # Started once per boot. Until the operator has set both Key Vault secrets the start
-      # fails and is retried with a growing delay (30 s doubling up to 10 minutes), so the
-      # stack comes up by itself once the secrets exist. Stopping the unit removes the
-      # containers (volumes stay), so Docker never restarts a gateway before its secrets are
-      # back in tmpfs after a reboot. The unit never restarts a running gateway on its own.
+      # First-boot installation of the gateway host, retried until it succeeded once.
+      # A failure (no network yet, a registry or package mirror down) is retried with a
+      # growing delay: 30 s doubling up to 15 minutes, and again after a reboot.
       [Unit]
-      Description=IB Gateway stack (Key Vault secrets to tmpfs, then docker compose)
-      Requires=docker.service
-      After=docker.service network-online.target
+      Description=IB Gateway host bootstrap (pinned checkout, Docker, host scripts)
+      ConditionPathExists=!/var/lib/ibgateway/bootstrap.done
       Wants=network-online.target
+      After=network-online.target cloud-final.service
       StartLimitIntervalSec=0
 
       [Service]
       Type=oneshot
-      RemainAfterExit=yes
-      ExecStartPre=/usr/local/sbin/fetch-secrets.sh
-      ExecStart=/usr/local/sbin/ibgw-compose.sh up --detach --force-recreate --remove-orphans
-      ExecStop=/usr/local/sbin/ibgw-compose.sh down
+      ExecStart=/usr/local/sbin/ibgw-bootstrap.sh
       Restart=on-failure
       RestartSec=30
       RestartSteps=6
-      RestartMaxDelaySec=600
-      TimeoutStartSec=900
-      TimeoutStopSec=180
+      RestartMaxDelaySec=900
+      TimeoutStartSec=1800
 
       [Install]
       WantedBy=multi-user.target
 
 runcmd:
-  - [/usr/local/sbin/ibgw-bootstrap.sh]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, ibgw-bootstrap.service]
+  - [systemctl, start, --no-block, ibgw-bootstrap.service]
