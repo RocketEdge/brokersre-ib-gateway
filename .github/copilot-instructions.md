@@ -183,7 +183,10 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `azure/cloud-init/gateway.yaml` is pinned by `gateway.yaml.sha256`: change both
   deliberately, because existing VMs keep the old bootstrap. `vmConfig` in `vm.bicep` and
   `required_keys` in `azure/vm/apply-config.sh` change together. The account-id pattern
-  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`.
+  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`. A helper image used by a
+  check must be listed in `helper_images` in `run.sh` (pulled before any check): a first
+  `docker run` of an image writes its pull notice to standard error, and a check that
+  compares standard error then fails on a fresh machine only.
 - A consumer must not alert on how long a phase has lasted: an unanswered second-factor
   prompt flips the phase between `2fa-pending` and `login` every three minutes. Use events
   (`docs/log-contract.md`), as the Azure rule "human needed" does.

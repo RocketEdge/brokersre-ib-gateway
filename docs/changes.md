@@ -37,6 +37,12 @@ Next step.
     stops the gateway when Docker restarts: settings travel in userData and are applied by a
     script; the unit uses `Wants=` and Docker keeps containers alive across its own restart
     (by reading systemd's and Docker's rules; not observed on a VM).
+  - *The suite passed on the development host and failed on its first run in GitHub Actions.*
+    Several checks compare a tool's output together with its standard error; on a machine
+    that has not pulled a helper image yet, Docker's "Unable to find image ... Pulling" notice
+    lands in the compared value. Reproduced locally by removing the cached image; the suite
+    now pulls every helper image before any check runs, and the workflow runs every group
+    even after one failed, so one run shows all that is wrong.
   - Not established: everything that needs Azure (L19). The alert queries were type-checked,
     not executed: the only local engine is Microsoft's Kusto emulator, whose licence must be
     accepted by a person first (`KUSTO_EMULATOR_EULA=accept azure/tests/run.sh kql-run`).
