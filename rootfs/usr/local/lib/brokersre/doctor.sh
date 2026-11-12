@@ -49,6 +49,10 @@
 
 # shellcheck source=/dev/null
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/log.sh"
+# For relay_allow_cidr_valid only: the preflight and the relay must judge RELAY_ALLOW_CIDR
+# with the same rule. Sourcing the file defines functions and starts nothing.
+# shellcheck source=/dev/null
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/start-socat.sh"
 
 # The checks in the order they run and are reported. `ibkr_reachable` is appended by --online.
 doctor_checks=(trading_mode credentials secret_values auto_restart_time restart_window time_zone
@@ -66,6 +70,7 @@ doctor_known_names=(
   CUSTOM_CONFIG IBC_LAUNCH SOCAT_RESTART_DELAY JAVA_USER_HOME _JAVA_OPTIONS LOG_MAX_BYTES LOG_KEEP
   JAVA_HEAP_MB RELAY_MODE TWOFA_MAX_PROMPTS LOGIN_STALL_S DOCTOR_STRICT STRICT_ENV SAMPLE_INTERVAL_S
   DISK_MIN_FREE_PCT IBGW_INSTANCE BOOT_ID DOCTOR_TCP DOCTOR_RESULT_FILE HEALTHCHECK_API
+  RELAY_ALLOW_CIDR RELAY_REFUSED_REPORT_S
   MEM_HIGH_PCT MEM_HIGH_FOR_S RELAY_POLL_S IBC_KNOWN_WINDOWS IBC_CMD
   IB_GATEWAY_VERSION IB_GATEWAY_CHANNEL IBC_VERSION IBC_RELEASE_TAG IBC_PATH TWS_PATH LOG_DIR
   RUN_DIR IBC_PATTERNS IBC_TEMPLATE JTS_TEMPLATE BROKERSRE_LIB
@@ -819,16 +824,30 @@ check_read_only_api() {
   fi
 }
 
-# check_relay_exposure: always SKIP. The container cannot see how the host publishes the relay
-# port, so it cannot tell whether the API is reachable from the internet; the result carries
-# the advice instead of a verdict.
+# check_relay_exposure: SKIP, or FAIL for an unusable RELAY_ALLOW_CIDR.
+#
+# The container cannot see how the host publishes the relay port, so it cannot tell whether
+# the API is reachable from the internet; the result carries the advice instead of a verdict.
+#   FAIL  RELAY_ALLOW_CIDR is set and is not one IPv4 network in CIDR form: the relay refuses
+#         to start with such a value (start_socat), so the gateway could not serve any client.
+#   SKIP  otherwise; a valid RELAY_ALLOW_CIDR is named in the detail. It limits the peers the
+#         relay serves but says nothing about the host's port binding, so the verdict stays.
 check_relay_exposure() {
-  local name=relay_exposure port="4003 (live) or 4004 (paper)"
+  local name=relay_exposure port="4003 (live) or 4004 (paper)" allow="${RELAY_ALLOW_CIDR:-}" detail
   case "${TRADING_MODE:-}" in
     live) port="4003" ;;
     paper) port="4004" ;;
   esac
-  doctor_result SKIP "${name}" "the container cannot see how the host publishes the relay port" \
+  detail="the container cannot see how the host publishes the relay port"
+  if [ -n "${allow}" ]; then
+    if ! relay_allow_cidr_valid "${allow}"; then
+      doctor_result FAIL "${name}" "RELAY_ALLOW_CIDR is not one IPv4 network in CIDR form, so the relay will not start" \
+        "set RELAY_ALLOW_CIDR to one network such as 10.0.0.0/8 or 172.18.0.0/16, or remove it"
+      return 0
+    fi
+    detail="the relay serves peers in ${allow} only (RELAY_ALLOW_CIDR); ${detail}"
+  fi
+  doctor_result SKIP "${name}" "${detail}" \
     "publish relay port ${port} on 127.0.0.1 or a private address only, never on 0.0.0.0 of a host the internet can reach"
 }
 

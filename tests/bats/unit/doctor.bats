@@ -1026,6 +1026,20 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [[ "$(fix)" == *"4003"* ]]
 }
 
+@test "relay_exposure: a valid RELAY_ALLOW_CIDR is named, and the verdict stays a SKIP" {
+  TRADING_MODE=paper RELAY_ALLOW_CIDR=172.18.0.0/16 run check relay_exposure
+  one_result SKIP relay_exposure
+  [[ "$(detail)" == *"172.18.0.0/16"* ]]
+  [[ "$(detail)" == *"cannot see"* ]]
+}
+
+@test "relay_exposure: an invalid RELAY_ALLOW_CIDR is a FAIL, because the relay would not start" {
+  TRADING_MODE=paper RELAY_ALLOW_CIDR='10.0.0.0/8,range=0.0.0.0/0' run check relay_exposure
+  one_result FAIL relay_exposure
+  [[ "$(detail)" == *"RELAY_ALLOW_CIDR"* ]]
+  [[ "$(fix)" == *"10.0.0.0/8"* ]]
+}
+
 # ---------------------------------------------------------------------------------------------
 # 12. disk_space
 # ---------------------------------------------------------------------------------------------
