@@ -35,26 +35,42 @@ _FARM_CODES: dict[int, tuple[FarmKind, FarmCondition]] = {
     2158: ("sec_def", "ok"),
 }
 
-_FARM_NAME_RE = re.compile(r"^[A-Za-z0-9.]{1,32}$")
+# A farm name as IBKR writes it: lower-case letters and digits around one of the stems below,
+# optionally a dotted site suffix (usfarm, usfarm.nj, cashfarm, ushmds, secdefnj, usfuture,
+# usopt). The notice text comes from the gateway, and a character filter alone would let any
+# alphanumeric token through (a username is alphanumeric too), so a name that does not have
+# this shape is reported as ``other``: the kind of farm is kept, the text is not.
+_FARM_NAME_RE = re.compile(
+    r"^[a-z0-9]{0,10}(?:farm|hmds|secdef|future|opt|bond)[a-z0-9]{0,8}(?:[.-][a-z0-9]{1,6})?$"
+)
+_MAX_FARM_NAME = 24
 _MAX_FARMS = 32
 _ON_DEMAND_PREFIX = "demand."
+OTHER_FARM = "other"
+"""Name reported for a farm whose notice did not carry a recognisable farm name."""
 
 
 def farm_name(message: str) -> str:
-    """Extract the farm name from a farm notice, or ``"unknown"``.
+    """Extract the farm name from a farm notice, or ``"other"``.
 
     The notices end in ``...:usfarm`` or, for the inactive form, ``...upon demand.usfarm``.
-    The result is restricted to letters, digits and dots and must not look like an account
-    id: the text comes from the gateway and ends up in ``/status``.
+    Only that last token is looked at, lower-cased, and only when it has the shape of an
+    IBKR farm name (see ``_FARM_NAME_RE``) is it returned. Nothing else of the notice ever
+    leaves this function, so gateway free text cannot reach ``/status``, ``/readyz`` or an
+    alert through a farm notice.
     """
     text = message.strip()
     candidate = text.rsplit(":", 1)[1] if ":" in text else (text.split() or [""])[-1]
-    candidate = candidate.strip()
+    candidate = candidate.strip().lower()
     if candidate.startswith(_ON_DEMAND_PREFIX):
         candidate = candidate[len(_ON_DEMAND_PREFIX) :]
-    if _FARM_NAME_RE.fullmatch(candidate) and not ACCOUNT_RE.fullmatch(candidate):
+    if (
+        len(candidate) <= _MAX_FARM_NAME
+        and _FARM_NAME_RE.fullmatch(candidate)
+        and not ACCOUNT_RE.search(candidate.upper())
+    ):
         return candidate
-    return "unknown"
+    return OTHER_FARM
 
 
 class ApiConditionTracker:

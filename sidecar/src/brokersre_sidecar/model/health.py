@@ -28,8 +28,8 @@ class FarmState:
 
     Attributes:
         kind: Which service the farm provides.
-        name: Farm name as reported (for example ``usfarm``), reduced to ``[A-Za-z0-9.]``;
-            ``unknown`` when the message did not name one.
+        name: Farm name (for example ``usfarm``) when the notice carried one that looks
+            like an IBKR farm name; otherwise ``other``. Never any other gateway text.
         condition: ``ok`` (2104/2106/2158), ``broken`` (2103/2105/2157) or ``inactive``
             (2107/2108: idle, connects on demand; not a fault).
     """

@@ -13,6 +13,7 @@ from brokersre_sidecar.probe import (
     active_reset_window,
     count_close_wait,
     count_foreign_listeners,
+    farm_name,
 )
 from testkit import FakeClock
 
@@ -170,3 +171,33 @@ def test_an_unreadable_proc_never_triggers() -> None:
     h.observe(5)
     h.listeners = None
     assert h.observe(600) is False
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Market data farm connection is OK:usfarm", "usfarm"),
+        ("Market data farm connection is OK:usfarm.nj", "usfarm.nj"),
+        ("Market data farm connection is OK:USFARM", "usfarm"),
+        ("Market data farm connection is OK:usfuture", "usfuture"),
+        ("Market data farm connection is OK:usopt", "usopt"),
+        ("HMDS data farm connection is OK:ushmds", "ushmds"),
+        ("Sec-def data farm connection is OK:secdefnj", "secdefnj"),
+        (
+            "Market data farm connection is inactive but should be available upon demand.cashfarm",
+            "cashfarm",
+        ),
+        # Anything that does not look like an IBKR farm name is not shown at all: the text
+        # comes from the gateway, and a token such as a username is alphanumeric too.
+        ("Market data farm connection is broken:jdoe123", "other"),
+        ("Market data farm connection is broken:CANARYUSER", "other"),
+        ("Market data farm connection is broken:DU1234567", "other"),
+        ("Market data farm connection is broken:has space", "other"),
+        ("Market data farm connection is broken:" + "farm" * 10, "other"),
+        ("", "other"),
+    ],
+)
+def test_a_farm_name_is_shown_only_when_it_looks_like_an_ibkr_farm(
+    message: str, expected: str
+) -> None:
+    assert farm_name(message) == expected

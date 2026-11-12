@@ -64,7 +64,7 @@ class Farm(_Model):
     """One IBKR data farm reported on the probe's API connection."""
 
     kind: Literal["market_data", "historical_data", "sec_def"]
-    name: str = Field(pattern=r"^[A-Za-z0-9.]{1,32}$")
+    name: str = Field(pattern=r"^[a-z0-9.-]{1,24}$")
     condition: Literal["ok", "broken", "inactive"]
 
 

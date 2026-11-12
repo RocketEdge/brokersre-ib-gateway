@@ -130,7 +130,13 @@ def write_gateway_volume(root: Path, phase: bytes, now: datetime, *, boots: int 
 
 
 async def evaluate_scenario(
-    root: Path, phase: bytes, *, api: str, boots: int = 1, quiet_for: float = 0.0
+    root: Path,
+    phase: bytes,
+    *,
+    api: str,
+    boots: int = 1,
+    quiet_for: float = 0.0,
+    link_lost: bool = True,
 ) -> tuple[dict[AlertClass, Any], str | None, str]:
     """Run the real feed, model, probe and rules over a canary-laden volume."""
     clock = FakeClock(T0)
@@ -139,10 +145,15 @@ async def evaluate_scenario(
     GatewayFeed(root, state).poll()
     ib = FakeIb(clock)
     ib.greeting = (
-        (2103, f"Market data farm connection is broken:{USERNAME}"),
+        # Free text before the colon, and after it: a token that is alphanumeric like a
+        # farm name (so the character filter alone would let it through), an account
+        # id, and one real farm name that must survive.
+        (2103, f"{USERNAME} market data farm of {ACCOUNT} is broken:CANARYALNUM"),
         (2105, f"HMDS data farm connection is broken:{ACCOUNT}"),
-        (1100, f"Connectivity lost for {USERNAME} {ACCOUNT}"),
+        (2157, "Sec-def data farm connection is broken:secdefnj"),
     )
+    if link_lost:
+        ib.greeting += ((1100, f"Connectivity lost for {USERNAME} {ACCOUNT}"),)
     if api == "down":
         ib.connect_behaviour = "hang"
     ib.skew_s = 45.0
@@ -308,3 +319,18 @@ def test_credentials_sit_only_in_their_designated_slot(tmp_path: Path) -> None:
     telegram = channels["telegram"].requests(built)[0]
     assert "CANARY_TELEGRAM_TOKEN" in telegram.url
     assert isinstance(Secret("x"), Secret)
+
+
+async def test_a_farm_notice_reaches_an_alert_only_as_fixed_text_kind_and_a_real_farm_name(
+    tmp_path: Path,
+) -> None:
+    """The sub-check of the canary, made explicit so it cannot pass for an unrelated reason."""
+    evaluations, _, api_status = await evaluate_scenario(
+        tmp_path, b"logged-in\n", api="ok", link_lost=False
+    )
+    detail = evaluations[AlertClass.API_UNHEALTHY].detail
+    assert api_status == "degraded"
+    assert "secdefnj" in detail  # a real farm name is shown
+    assert "market_data other" in detail  # an unrecognised name is replaced, the kind is kept
+    assert "CANARY" not in detail
+    assert not ACCOUNT_RE.search(detail)

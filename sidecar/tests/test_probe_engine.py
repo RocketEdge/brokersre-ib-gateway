@@ -303,11 +303,14 @@ async def test_shutdown_disconnects() -> None:
 async def test_farm_names_from_the_gateway_are_sanitised_and_bounded() -> None:
     h = Harness()
     await h.run(5)
-    h.ib.emit(2103, "Market data farm connection is broken:CANARY USER DU1234567")
     for number in range(100):
         h.ib.emit(2105, f"HMDS data farm connection is broken:farm{number}")
+    h.ib.emit(2103, "Market data farm connection is broken:CANARY USER DU1234567")
+    h.ib.emit(2157, "CANARYTEXT sec-def farm of jdoe123 is broken:jdoe123")
     snapshot = h.engine.snapshot()
     assert len(snapshot.farms) <= 32
     text = repr(snapshot)
     assert "CANARY" not in text
     assert "DU1234567" not in text
+    assert "jdoe123" not in text
+    assert "sec_def other" in snapshot.reason
