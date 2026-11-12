@@ -1,0 +1,16 @@
+// Scenario for rule A: the gateway started four minutes ago and asked for the second factor
+// two minutes ago. Nobody is late yet; the rule must be silent.
+// Query: alert-human-needed.kql
+// Expect: (no rows)
+let IbGwEvents_CL =
+    union
+        (print Offset = 4m, Event = "container_start"),
+        (print Offset = 2m, Event = "twofa_initiated")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "fresh", Host = "ibgw-vm",
+        BootId = "cccccccccccccccc", Seq = tolong(row_number()), Src = "ibc", Level = "warn", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 8 step 1
+    | extend Offset = 4m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "fresh", Host = "ibgw-vm",
+        BootId = "cccccccccccccccc", Seq = tolong(Step), Phase = iff(Offset > 2m, "login", "2fa-pending");

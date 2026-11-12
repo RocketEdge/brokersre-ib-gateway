@@ -1,0 +1,17 @@
+// Scenario for rule A: the gateway started 25 minutes ago and has been in phase `login` ever
+// since, without a prompt and without a login (a wrong password, a dialog that does not
+// advance). No second factor is pending, yet a human is needed: not_logged_in.
+// Query: alert-human-needed.kql
+// Expect: stuck|ibgw-vm|not_logged_in
+let IbGwEvents_CL =
+    union
+        (print Offset = 25m, Event = "container_start"),
+        (print Offset = 24m, Event = "login_dialog")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "stuck", Host = "ibgw-vm",
+        BootId = "eeeeeeeeeeeeeeee", Seq = tolong(row_number()), Src = "ibc", Level = "info", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 50 step 1
+    | extend Offset = 25m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "stuck", Host = "ibgw-vm",
+        BootId = "eeeeeeeeeeeeeeee", Seq = tolong(Step), Phase = "login";

@@ -1,17 +1,25 @@
 // Alert rule B "health" (azure/bicep/modules/alerts.bicep, every 5 minutes).
+// Dimensions: Instance, Condition
 //
-// One rule, five conditions (alert rules are billed per rule, so they share one). Fires per
+// One rule, seven conditions (alert rules are billed per rule, so they share one). Fires per
 // gateway instance and condition:
-//   connectivity_lost  IB API code 1100 at least 3 times in 15 minutes;
-//   memory_high        memory working set above 85 % of the container limit for 10 minutes
-//                      (every sample of the last 10 minutes, at least 10 samples);
-//   restart_loop       3 or more container starts (distinct BootId) in 30 minutes;
-//   oom_kill           the kernel killed a process of the container (event oom_kill, or the
-//                      OomKills counter rose) in the last 15 minutes;
-//   disk_low           the gateway reported a full log or settings volume (event disk_low).
+//   memory_high     memory working set above 85 % of the container limit for 10 minutes
+//                   (every sample of the last 10 minutes, at least 10 samples); never fires for
+//                   a container without a memory limit, because the share is not measured then;
+//   restart_loop    3 or more container starts (distinct BootId) in 30 minutes;
+//   oom_kill        the kernel killed a process of the container in the last 15 minutes (event
+//                   oom_kill, or the OomKills counter rose);
+//   disk_low        the gateway reported a nearly full volume (event disk_low) and has not
+//                   reported disk_ok since, in the container start that is running now;
+//   login_stalled   the login made no progress (event login_stalled) and has not resumed
+//                   (login_resumed) since, in the container start that is running now;
+//   needs_human     the gateway asked for a human (event needs_human) in the last 15 minutes;
+//   unknown_window  IBC met a dialog it does not know (event unknown_window) in the last 15 minutes.
 // Returns one row per instance and condition; nothing during the maintenance window (the daily
-// restart produces connectivity codes on purpose). A value that was not measured never makes a
-// condition true: memory_high needs both the working set and the limit.
+// restart logs out on purpose). The rule looks back two days (overrideQueryTimeRange) so that
+// a state reported once, hours ago, is still known.
+// Not here: IB API connectivity codes (1100 and friends). Only an API client sees them and no
+// component writes them to the log volume yet (ADR 0012, follow-up).
 //
 // The two lines below are replaced by the Bicep module with the maintenanceWindowUtc
 // parameter (time of day in UTC; equal values mean "no window"). Keep them exactly as they are.
@@ -22,14 +30,31 @@ let in_maintenance = maintenance_start != maintenance_end
     and iff(maintenance_start < maintenance_end,
         time_of_day >= maintenance_start and time_of_day < maintenance_end,
         time_of_day >= maintenance_start or time_of_day < maintenance_end);
-let connectivity_lost =
+// The container start each instance is running now; a state of an older start is over.
+let current_boot =
+    IbGwMetrics_CL
+    | where TimeGenerated > ago(2d)
+    | where isnotempty(BootId)
+    | summarize arg_max(TimeGenerated, BootId) by Instance
+    | project Instance, BootId;
+// "raised and not cleared since": the newest event of the pair, in the current start, is `raised`.
+let unresolved = (raised: string, cleared: string) {
+    IbGwEvents_CL
+    | where TimeGenerated > ago(2d)
+    | where Event in (raised, cleared)
+    | join kind=inner current_boot on Instance, BootId
+    | summarize arg_max(TimeGenerated, Event, Msg) by Instance
+    | where Event == raised
+    | project Instance, Condition = raised, Detail = Msg
+};
+// "happened recently": the newest such event of the last 15 minutes.
+let recent = (name: string) {
     IbGwEvents_CL
     | where TimeGenerated > ago(15m)
-    | where Code == 1100
-    | summarize Occurrences = count() by Instance
-    | where Occurrences >= 3
-    | project Instance, Condition = "connectivity_lost",
-        Detail = strcat(Occurrences, " x code 1100 in 15 min");
+    | where Event == name
+    | summarize arg_max(TimeGenerated, Msg) by Instance
+    | project Instance, Condition = name, Detail = Msg
+};
 let memory_high =
     IbGwMetrics_CL
     | where TimeGenerated > ago(10m)
@@ -62,12 +87,8 @@ let oom_kill =
     | where Kills > 0
     | project Instance, Condition = "oom_kill",
         Detail = strcat(Kills, " OOM kill(s) in 15 min");
-let disk_low =
-    IbGwEvents_CL
-    | where TimeGenerated > ago(15m)
-    | where Event == "disk_low"
-    | summarize arg_max(TimeGenerated, Msg) by Instance
-    | project Instance, Condition = "disk_low", Detail = Msg;
-union connectivity_lost, memory_high, restart_loop, oom_kill, disk_low
+union memory_high, restart_loop, oom_kill,
+    unresolved("disk_low", "disk_ok"), unresolved("login_stalled", "login_resumed"),
+    recent("needs_human"), recent("unknown_window")
 | where not(in_maintenance)
 | project Instance, Condition, Detail

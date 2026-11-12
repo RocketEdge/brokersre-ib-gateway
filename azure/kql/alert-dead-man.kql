@@ -1,18 +1,36 @@
 // Alert rule C "dead man" (azure/bicep/modules/alerts.bicep, every 15 minutes).
+// Dimensions: Instance, Host, Condition
 //
-// Fires, per gateway instance, when no metrics row has ARRIVED in the workspace for more than
-// 10 minutes: the gateway container is down, the shipper is down, the host is off or the
-// network path to Azure is broken. The gateway writes a sample every 30 seconds, so silence is
-// never normal. ingestion_time() is used instead of TimeGenerated on purpose: a shipper that
-// catches up after an outage sends old timestamps, and what matters is whether rows arrive.
+// Fires, per gateway (instance and host):
+//   no_metrics      no metrics row has ARRIVED in the workspace for more than 10 minutes: the
+//                   gateway container is down, the shipper is down, the host is off or the
+//                   network path to Azure is broken;
+//   stale_samples   rows still arrive, but the newest sample was TAKEN more than 10 minutes
+//                   ago: the shipper is replaying a backlog, or the gateway stopped sampling.
+//                   (Rule A ignores a gateway whose newest sample is older than 3 minutes;
+//                   this condition is what reports it.)
+// The gateway writes a sample every 30 seconds, so silence is never normal. Arrival is
+// measured with ingestion_time(), not TimeGenerated, on purpose: a shipper that catches up
+// after an outage sends old timestamps, and no_metrics must only ask whether rows arrive.
 // (ingestion_time() is not allowed in rules evaluated every minute; this rule runs every 15.)
+// Worst case from the last row to the notification: 10 minutes of silence, up to 15 minutes
+// until the next evaluation, plus the alert pipeline: 25 to 30 minutes.
 //
-// The rule looks back two days (overrideQueryTimeRange, the maximum for an alert rule), so an
-// instance is known for two days after its last row and then drops out; an instance that never
-// sent a row cannot be reported. Run by hand, the time range comes from the query window.
+// The rule looks back two days (overrideQueryTimeRange, the maximum for an alert rule), so a
+// gateway is known for two days after its last row and then drops out; a gateway that never
+// sent a row cannot be reported. Two gateways with the same Instance and Host would hide each
+// other here, which is why the shipper refuses to start without a label of its own.
 let silent_longer_than = 10m;
 IbGwMetrics_CL
-| summarize LastArrival = max(ingestion_time()), LastSample = max(TimeGenerated) by Instance
-| where LastArrival < ago(silent_longer_than)
-| project Instance, Condition = "no_metrics", LastArrival, LastSample,
-    Detail = strcat("no metrics row arrived for ", datetime_diff("minute", now(), LastArrival), " min")
+// A dimension value must not be empty; a gateway without a host label is shown as such.
+| extend Host = iff(isempty(Host), "(not set)", Host)
+| summarize LastArrival = max(ingestion_time()), LastSample = max(TimeGenerated) by Instance, Host
+| extend Condition = case(
+    LastArrival < ago(silent_longer_than), "no_metrics",
+    LastSample < ago(silent_longer_than), "stale_samples",
+    "")
+| where isnotempty(Condition)
+| project Instance, Host, Condition, LastArrival, LastSample,
+    Detail = iff(Condition == "no_metrics",
+        strcat("no metrics row arrived for ", datetime_diff("minute", now(), LastArrival), " min"),
+        strcat("rows arrive, but the newest sample is ", datetime_diff("minute", now(), LastSample), " min old"))

@@ -1,0 +1,21 @@
+// Scenario for rule A: the same flip for half an hour, and then the prompt was approved two
+// minutes ago (login_completed, phase logged-in). The rule must be silent: it clears when a
+// login completes.
+// Query: alert-human-needed.kql
+// Expect: (no rows)
+let IbGwEvents_CL =
+    union
+        (print Offset = 40m, Event = "container_start"),
+        (range Cycle from 0 to 10 step 1 | project Offset = 35m - Cycle * 3m, Event = "twofa_initiated"),
+        (range Cycle from 0 to 9 step 1 | project Offset = 35m - Cycle * 3m - 170s, Event = "twofa_timeout"),
+        (print Offset = 2m, Event = "login_completed")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "approved", Host = "ibgw-vm",
+        BootId = "bbbbbbbbbbbbbbbb", Seq = tolong(row_number()), Src = "ibc", Level = "info", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 80 step 1
+    | extend Offset = 40m - Step * 30s
+    | extend SincePrompt = (35m - Offset) % 3m
+    | project TimeGenerated = now() - Offset, Instance = "approved", Host = "ibgw-vm",
+        BootId = "bbbbbbbbbbbbbbbb", Seq = tolong(Step),
+        Phase = case(Offset <= 2m, "logged-in", Offset > 35m, "login", SincePrompt < 170s, "2fa-pending", "login");

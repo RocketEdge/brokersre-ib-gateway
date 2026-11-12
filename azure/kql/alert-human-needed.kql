@@ -1,14 +1,28 @@
 // Alert rule A "human needed" (azure/bicep/modules/alerts.bicep, every 5 minutes).
+// Dimensions: Instance, Host, Condition
 //
-// Fires, per gateway instance, when somebody has to act:
-//   twofa_pending   the gateway has been waiting for the second factor for more than 5 minutes;
-//   needs_human     the gateway has been in phase needs-human for more than 5 minutes;
+// Fires, per gateway (instance and host), when somebody has to act:
+//   twofa_pending   a second-factor prompt has been unanswered for more than 5 minutes;
+//   needs_human     the gateway asked for a human (event needs_human with no login since), or
+//                   its newest sample is in phase needs-human;
 //   not_logged_in   the gateway has not been logged in for more than 10 minutes, outside the
 //                   maintenance window (the daily restart logs out on purpose).
-// Source: the Phase column of IbGwMetrics_CL (one sample every 30 seconds).
-// Returns one row per instance and condition; the rule alerts when a row exists and resolves
-// by itself when the rows stop. An instance whose samples stopped arriving is NOT reported
-// here (its last phase is stale); that is the job of alert rule C (alert-dead-man.kql).
+//
+// Why events and not "the phase has been 2fa-pending for 5 minutes": with the gateway's
+// defaults an unanswered prompt times out after about three minutes, the phase flips to
+// `login` for a few seconds (event twofa_timeout) and back to `2fa-pending` with a new
+// prompt, for hours. No single phase ever lasts 5 minutes. The condition is therefore: the
+// EARLIEST prompt (twofa_initiated or twofa_dialog) that has no login_completed after it is
+// older than 5 minutes, and the session did not end after it (shutdown_requested,
+// ibc_exited). It clears when a login_completed arrives. Events are taken from the container
+// start that is running now (the BootId of the newest sample), at most 24 hours back, so a
+// prompt that started hours ago still counts.
+// not_logged_in looks at the samples and events together: no sample in phase logged-in and
+// no login_completed for 10 minutes, and the newest sample is not logged-in (a flip between
+// 2fa-pending and login never passes through logged-in, so this holds through the flip).
+//
+// A gateway whose samples stopped arriving is NOT reported here (its state is stale); that
+// is the job of alert rule C (alert-dead-man.kql).
 // Latency: evaluated every 5 minutes on data that takes up to a few minutes to arrive. For a
 // seconds-scale second-factor page use the sidecar notifier, not this rule.
 //
@@ -16,8 +30,9 @@
 // parameter (time of day in UTC; equal values mean "no window"). Keep them exactly as they are.
 let maintenance_start = time(00:00:00);
 let maintenance_end = time(00:00:00);
-let lookback = 30m;
-let waiting_longer_than = 5m;
+let event_lookback = 24h;
+let sample_lookback = 30m;
+let unanswered_longer_than = 5m;
 let not_logged_in_longer_than = 10m;
 let sample_must_be_newer_than = 3m;
 let time_of_day = now() - startofday(now());
@@ -25,27 +40,61 @@ let in_maintenance = maintenance_start != maintenance_end
     and iff(maintenance_start < maintenance_end,
         time_of_day >= maintenance_start and time_of_day < maintenance_end,
         time_of_day >= maintenance_start or time_of_day < maintenance_end);
-IbGwMetrics_CL
-| where TimeGenerated > ago(lookback)
-| where isnotempty(Phase)
-| summarize
-    FirstSample = min(TimeGenerated),
-    LastSample = max(TimeGenerated),
-    LastNotWaiting = maxif(TimeGenerated, Phase !in ("2fa-pending", "needs-human")),
-    LastLoggedIn = maxif(TimeGenerated, Phase == "logged-in"),
-    arg_max(TimeGenerated, Phase)
-    by Instance
+// The newest sample of each gateway: its phase, its container start, and when a sample last
+// showed logged-in. A dimension value must not be empty, hence the placeholder for Host.
+let newest_samples =
+    IbGwMetrics_CL
+    | where TimeGenerated > ago(sample_lookback)
+    | where isnotempty(Phase)
+    | extend Host = iff(isempty(Host), "(not set)", Host)
+    | summarize
+        FirstSample = min(TimeGenerated),
+        LastLoggedInSample = maxif(TimeGenerated, Phase == "logged-in"),
+        arg_max(TimeGenerated, Phase, BootId)
+        by Instance, Host
+    | project-rename LastSample = TimeGenerated;
+// The events of that container start.
+let boot_events =
+    IbGwEvents_CL
+    | where TimeGenerated > ago(event_lookback)
+    | extend Host = iff(isempty(Host), "(not set)", Host)
+    | join kind=inner (newest_samples | project Instance, Host, BootId) on Instance, Host, BootId
+    | project TimeGenerated, Instance, Host, Event;
+let last_login =
+    boot_events
+    | where Event == "login_completed"
+    | summarize LastLogin = max(TimeGenerated) by Instance, Host;
+// What is still open after the last completed login.
+let open_state =
+    boot_events
+    | join kind=leftouter last_login on Instance, Host
+    | extend AfterLogin = isnull(LastLogin) or TimeGenerated > LastLogin
+    | summarize
+        FirstOpenPrompt = minif(TimeGenerated, AfterLogin and Event in ("twofa_initiated", "twofa_dialog")),
+        OpenNeedsHuman = maxif(TimeGenerated, AfterLogin and Event == "needs_human"),
+        LastSessionEnd = maxif(TimeGenerated, Event in ("shutdown_requested", "ibc_exited")),
+        LastLogin = max(LastLogin)
+        by Instance, Host;
+newest_samples
 | where LastSample > ago(sample_must_be_newer_than)
-// When the whole lookback shows one state, the state is at least as old as the first sample.
-| extend WaitingSince = coalesce(LastNotWaiting, FirstSample)
-| extend NotLoggedInSince = coalesce(LastLoggedIn, FirstSample)
+| join kind=leftouter open_state on Instance, Host
+| extend PromptUnanswered = isnotnull(FirstOpenPrompt) and FirstOpenPrompt < ago(unanswered_longer_than)
+    and (isnull(LastSessionEnd) or LastSessionEnd < FirstOpenPrompt)
+| extend HumanAsked = isnotnull(OpenNeedsHuman) or Phase == "needs-human"
+// Not logged in since: the later of the last logged-in sample and the last completed login;
+// when neither exists in the look-back, at least since the first sample.
+| extend NotLoggedInSince = max_of(coalesce(LastLoggedInSample, FirstSample), coalesce(LastLogin, FirstSample))
+| extend NotLoggedIn = Phase !in ("logged-in", "test-mode")
+    and NotLoggedInSince < ago(not_logged_in_longer_than) and not(in_maintenance)
 | extend Condition = case(
-    Phase == "2fa-pending" and WaitingSince < ago(waiting_longer_than), "twofa_pending",
-    Phase == "needs-human" and WaitingSince < ago(waiting_longer_than), "needs_human",
-    Phase !in ("logged-in", "test-mode") and NotLoggedInSince < ago(not_logged_in_longer_than)
-        and not(in_maintenance), "not_logged_in",
+    PromptUnanswered, "twofa_pending",
+    HumanAsked, "needs_human",
+    NotLoggedIn, "not_logged_in",
     "")
 | where isnotempty(Condition)
-| extend Since = iff(Condition == "not_logged_in", NotLoggedInSince, WaitingSince)
-| project Instance, Condition, Phase, Since,
-    Detail = strcat("phase ", Phase, " for ", datetime_diff("minute", now(), Since), " min")
+| extend Since = case(
+    Condition == "twofa_pending", FirstOpenPrompt,
+    Condition == "needs_human", coalesce(OpenNeedsHuman, LastSample),
+    NotLoggedInSince)
+| project Instance, Host, Condition, Phase, Since,
+    Detail = strcat(Condition, " for ", datetime_diff("minute", now(), Since), " min; newest phase ", Phase)

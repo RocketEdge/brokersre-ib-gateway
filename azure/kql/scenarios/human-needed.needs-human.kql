@@ -1,0 +1,17 @@
+// Scenario for rule A: the gateway logged in an hour ago and reported needs_human one minute
+// ago (an unknown dialog blocks it). The rule must fire at once with needs_human.
+// Query: alert-human-needed.kql
+// Expect: blocked|ibgw-vm|needs_human
+let IbGwEvents_CL =
+    union
+        (print Offset = 70m, Event = "container_start"),
+        (print Offset = 60m, Event = "login_completed"),
+        (print Offset = 1m, Event = "needs_human")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "blocked", Host = "ibgw-vm",
+        BootId = "dddddddddddddddd", Seq = tolong(row_number()), Src = "entrypoint", Level = "error", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 40 step 1
+    | extend Offset = 20m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "blocked", Host = "ibgw-vm",
+        BootId = "dddddddddddddddd", Seq = tolong(Step), Phase = iff(Offset > 1m, "logged-in", "needs-human");
