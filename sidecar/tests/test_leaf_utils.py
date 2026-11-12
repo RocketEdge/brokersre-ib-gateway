@@ -176,3 +176,30 @@ def test_an_account_id_glued_to_other_text_is_still_shortened() -> None:
 )
 def test_text_that_only_resembles_an_account_id_is_left_alone(text: str) -> None:
     assert redact_accounts(text) == text
+
+
+def test_a_refused_rename_is_retried_on_windows_and_final_elsewhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows refuses a rename while another process (antivirus, indexer) has the target
+    # open for a moment. On POSIX a rename never fails for that reason: the error is real.
+    real_replace = os.replace
+    attempts: list[str] = []
+
+    def refused_twice(source: str | Path, target: str | Path) -> None:
+        attempts.append("try")
+        if len(attempts) < 3:
+            raise PermissionError("the file is in use")
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", refused_twice)
+    target = tmp_path / "state.json"
+    if sys.platform == "win32":
+        atomic_write_text(target, "new")
+        assert target.read_text(encoding="utf-8") == "new"
+        assert len(attempts) == 3
+    else:
+        with pytest.raises(PermissionError):
+            atomic_write_text(target, "new")
+        assert len(attempts) == 1
+    assert [p.name for p in tmp_path.iterdir() if p.name != "state.json"] == []

@@ -5,7 +5,32 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 from pathlib import Path
+
+# Windows refuses a rename while another process (antivirus, indexer) has the target open
+# for a moment; a few short retries get past that. On POSIX a rename never fails for that
+# reason, so a PermissionError there is final. (The image is Linux; Windows is a
+# development host.)
+_REPLACE_ATTEMPTS = 20 if sys.platform == "win32" else 1
+_REPLACE_RETRY_S = 0.01
+
+
+def _replace(source: Path, target: Path) -> None:
+    """Rename ``source`` over ``target``; see ``_REPLACE_ATTEMPTS`` for the one retry case.
+
+    Raises:
+        OSError: The rename failed (after the retries, where they apply).
+    """
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(source, target)
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_RETRY_S)
+        else:
+            return
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -29,7 +54,7 @@ def atomic_write_text(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _replace(temporary, path)
     except OSError:
         with contextlib.suppress(OSError):
             temporary.unlink()
