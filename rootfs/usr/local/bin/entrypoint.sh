@@ -61,7 +61,9 @@ for dir in "${LOG_DIR}" "${RUN_DIR}" "${TWS_SETTINGS_PATH}"; do
     exit 1
   fi
 done
-mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state"
+mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state" "${LOG_DIR}/events" "${LOG_DIR}/metrics"
+# From here on every event carries this start's boot id and a sequence number (log.sh).
+new_boot_id
 set_phase starting
 log_event entrypoint info container_start "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
 
@@ -87,5 +89,17 @@ start_ibc
 rc=0
 wait "${IBC_PID}" || rc=$?
 log_event ibc warn ibc_exited "IBC process exited with status ${rc}"
+if [ "$(current_phase)" = "needs-human" ]; then
+  # IBC was stopped on purpose because only a person can go on (for example: the second factor
+  # was not approved after TWOFA_MAX_PROMPTS prompts). Exiting here would let a restart policy
+  # start the next login at once, and the next, defeating the cap. The container stays up,
+  # unhealthy, with the phase needs-human, until a person restarts it; SIGTERM still runs the
+  # normal shutdown through the trap.
+  log_event entrypoint error needs_human "IBC has stopped and the gateway waits for a person; restart the container to log in again"
+  while true; do
+    sleep 3600 &
+    wait $! 2>/dev/null || true
+  done
+fi
 set_phase exited
 exit "${rc}"

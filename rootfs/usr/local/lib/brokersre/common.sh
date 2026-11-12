@@ -103,6 +103,30 @@ set_phase() {
   printf '%s\n' "$1" >"${LOG_DIR}/state/phase.tmp" && mv -f "${LOG_DIR}/state/phase.tmp" "${LOG_DIR}/state/phase"
 }
 
+# current_phase: print the phase token from the phase file, or `unknown` when the file is
+# missing or empty. Absence is never reported as a healthy phase.
+current_phase() {
+  local phase=""
+  if [ -r "${LOG_DIR}/state/phase" ]; then read -r phase <"${LOG_DIR}/state/phase" || true; fi
+  printf '%s' "${phase:-unknown}"
+}
+
+# new_boot_id: give this container start its identity (log contract v2).
+#
+# Exports BOOT_ID (16 lowercase hex characters, from the kernel's random UUID source) and
+# writes it atomically to ${LOG_DIR}/state/boot_id, so that every event of this start carries
+# the same id: processes started by the entrypoint inherit the variable, a process started
+# with `docker exec` (doctor) reads the file. A reader of the events and metrics files uses
+# the id to tell one container start from the next. Requires ${LOG_DIR}/state to exist.
+new_boot_id() {
+  local uuid
+  read -r uuid </proc/sys/kernel/random/uuid
+  uuid="${uuid//-/}"
+  BOOT_ID="${uuid:0:16}"
+  export BOOT_ID
+  printf '%s\n' "${BOOT_ID}" >"${LOG_DIR}/state/boot_id.tmp" && mv -f "${LOG_DIR}/state/boot_id.tmp" "${LOG_DIR}/state/boot_id"
+}
+
 # wait_for_unix_socket <path> <timeout_s>
 wait_for_unix_socket() {
   local path="$1" timeout="${2:-30}" waited=0
