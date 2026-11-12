@@ -38,7 +38,10 @@ NOTIFIER_ON = NotifierSnapshot(
         ChannelSnapshot("teams", 3, 1, 0, 0, T0, T0, "http_503"),
         ChannelSnapshot("pagerduty", 0, 0, 0, 2, None, None, None),
     ),
-    active_alerts=(ActiveAlertSnapshot("twofa_pending", "critical", T0, True, 1),),
+    active_alerts=(
+        ActiveAlertSnapshot("twofa_pending", "critical", T0, True, 1, 0),
+        ActiveAlertSnapshot("api_unhealthy", "error", T0, False, 0, 3),
+    ),
     state_persistence="memory",
     state_persistence_reason="the state directory is not writable",
 )
@@ -124,7 +127,16 @@ def test_a_ready_gateway_is_reported_with_every_contract_field() -> None:
             "since": "2026-11-12T15:00:00.000Z",
             "notified": True,
             "escalation_step": 1,
-        }
+            "failed_attempts": 0,
+        },
+        {
+            "class": "api_unhealthy",
+            "severity": "error",
+            "since": "2026-11-12T15:00:00.000Z",
+            "notified": False,
+            "escalation_step": 0,
+            "failed_attempts": 3,
+        },
     ]
     assert document["tasks"][1] == {
         "name": "probe",
@@ -275,6 +287,9 @@ def test_the_frozen_metric_names_are_exposed_with_measured_values() -> None:
         'ibgw_notify_failures_total{channel="pagerduty"}': 0,
         'ibgw_notify_sent_total{channel="teams"}': 3,
         'ibgw_notify_sent_total{channel="pagerduty"}': 0,
+        'ibgw_notify_dropped_total{channel="teams"}': 0,
+        'ibgw_notify_dropped_total{channel="pagerduty"}': 0,
+        "ibgw_notify_undelivered_alerts": 1,
         'ibgw_sidecar_task_restarts_total{task="follow"}': 0,
         'ibgw_sidecar_task_restarts_total{task="probe"}': 2,
     }

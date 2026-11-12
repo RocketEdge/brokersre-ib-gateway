@@ -114,9 +114,12 @@ class ActiveAlertSnapshot:
         alert_class: ``vocab.AlertClass`` value.
         severity: ``vocab.Severity`` value.
         since: When the condition was first seen active.
-        notified: True when a notification for this episode was sent (False while it is
-            held back by de-duplication).
-        escalation_step: Escalations already sent for this episode (0-2).
+        notified: True when at least one channel accepted a notification of this
+            episode (False while it is held back by de-duplication, while no channel
+            has accepted it yet, and when no channel is configured).
+        escalation_step: Highest escalation delivered for this episode (0-2).
+        failed_attempts: Attempts of the pending notification that no channel accepted;
+            it is sent again with a capped back-off while this is above zero.
     """
 
     alert_class: str
@@ -124,6 +127,7 @@ class ActiveAlertSnapshot:
     since: datetime
     notified: bool
     escalation_step: int
+    failed_attempts: int = 0
 
 
 @dataclass(frozen=True, slots=True)

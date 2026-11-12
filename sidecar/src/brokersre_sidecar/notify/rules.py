@@ -47,10 +47,13 @@ class Evaluation:
     Attributes:
         state: The verdict.
         detail: Numbers and fixed words describing an ``ACTIVE`` verdict; empty otherwise.
+        superseded_by: For an ``INACTIVE`` verdict that is a hand-over rather than a
+            recovery: the alert class that describes the gateway now.
     """
 
     state: Condition
     detail: str = ""
+    superseded_by: AlertClass | None = None
 
 
 @dataclass(frozen=True, slots=True)

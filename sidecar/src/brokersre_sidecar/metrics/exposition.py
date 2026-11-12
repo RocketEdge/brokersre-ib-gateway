@@ -197,6 +197,21 @@ def render_metrics(
             channel.sent_total,
             f'{{channel="{channel.name}"}}',
         )
+    for channel in notifier.channels:
+        out.add(
+            "ibgw_notify_dropped_total",
+            "counter",
+            "Notifications discarded because a channel's outbox was full.",
+            channel.dropped_total,
+            f'{{channel="{channel.name}"}}',
+        )
+    if notifier.enabled:
+        out.add(
+            "ibgw_notify_undelivered_alerts",
+            "gauge",
+            "Active alerts that no channel has accepted yet (they are sent again).",
+            sum(1 for alert in notifier.active_alerts if not alert.notified),
+        )
     for task in tasks:
         out.add(
             "ibgw_sidecar_task_restarts_total",

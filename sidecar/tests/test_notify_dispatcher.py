@@ -209,3 +209,71 @@ async def test_a_bug_in_a_channel_is_counted_and_surfaces_to_the_supervisor() ->
         await dispatcher.run_channel("teams")
     (stats,) = dispatcher.snapshot()
     assert (stats.failures_total, stats.last_error, stats.queue_depth) == (1, "internal_error", 0)
+
+
+class Outcomes:
+    """Collects what ``on_done`` reports."""
+
+    def __init__(self) -> None:
+        self.reported: list[bool] = []
+
+    def __call__(self, accepted: bool) -> None:
+        self.reported.append(accepted)
+
+
+async def test_the_caller_learns_that_at_least_one_channel_accepted_the_message() -> None:
+    dead = ScriptedChannel("teams", DeliveryError("http_401", retryable=False))
+    alive = ScriptedChannel("slack")
+    dispatcher, _ = dispatcher_for(dead, alive)
+    outcome = Outcomes()
+    async with running(dispatcher):
+        dispatcher.enqueue(make_message(), ["teams", "slack", "teams"], outcome)
+        await dispatcher.drain()
+    assert outcome.reported == [True]  # once, although two channels were involved
+
+
+async def test_the_caller_learns_that_no_channel_accepted_the_message() -> None:
+    first = ScriptedChannel("teams", *[DeliveryError("connect", retryable=True)] * 4)
+    second = ScriptedChannel("slack", DeliveryError("http_404", retryable=False))
+    dispatcher, _ = dispatcher_for(first, second)
+    outcome = Outcomes()
+    async with running(dispatcher):
+        dispatcher.enqueue(make_message(), ["teams", "slack"], outcome)
+        await dispatcher.drain()
+    assert outcome.reported == [False]
+    assert first.attempts == 4  # the retries happened before the verdict
+
+
+async def test_a_message_no_channel_is_eligible_for_is_reported_as_not_delivered_at_once() -> None:
+    pager = ScriptedChannel("pagerduty", heartbeat=False)
+    dispatcher, _ = dispatcher_for(pager)
+    outcome = Outcomes()
+    dispatcher.enqueue(make_message(), ["not-configured"], outcome)
+    dispatcher.enqueue(make_message(kind=MessageKind.HEARTBEAT), ["pagerduty"], outcome)
+    assert outcome.reported == [False, False]
+
+
+async def test_a_message_dropped_from_a_full_outbox_is_reported_as_not_delivered() -> None:
+    channel = ScriptedChannel("teams")
+    dispatcher, _ = dispatcher_for(channel, outbox_size=1)
+    first, second = Outcomes(), Outcomes()
+    dispatcher.enqueue(make_message("old"), ["teams"], first)
+    dispatcher.enqueue(make_message("new"), ["teams"], second)
+    assert first.reported == [False]
+    async with running(dispatcher):
+        await dispatcher.drain()
+    assert second.reported == [True]
+    assert dispatcher.snapshot()[0].dropped_total == 1
+
+
+async def test_a_bug_in_a_channel_is_reported_as_not_delivered() -> None:
+    class Broken(ScriptedChannel):
+        async def send(self, message: Message) -> None:
+            raise RuntimeError("bug")
+
+    dispatcher, _ = dispatcher_for(Broken("teams"))
+    outcome = Outcomes()
+    dispatcher.enqueue(make_message(), ["teams"], outcome)
+    with pytest.raises(RuntimeError):
+        await dispatcher.run_channel("teams")
+    assert outcome.reported == [False]

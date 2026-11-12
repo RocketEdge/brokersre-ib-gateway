@@ -13,6 +13,7 @@ import pytest
 from brokersre_sidecar.model import GatewaySnapshot
 from brokersre_sidecar.model.health import ProbeSnapshot
 from brokersre_sidecar.notify import (
+    DeliveryError,
     Dispatcher,
     LadderConfig,
     LadderEngine,
@@ -56,7 +57,11 @@ class World:
             self.clock,
             RecordingSleep(self.clock),
         )
-        self.notifier = Notifier(
+        self.notifier = self.build_notifier(state_dir)
+
+    def build_notifier(self, state_dir: Path | None) -> Notifier:
+        """Build a notifier around the current dispatcher."""
+        return Notifier(
             rules=RuleEngine(RuleConfig()),
             ladder=LadderEngine(
                 LadderConfig(
@@ -137,9 +142,10 @@ async def test_de_duplication_state_survives_a_restart_of_the_sidecar(tmp_path: 
     before.notifier.load_state()
     before.gateway = {"phase": "2fa-pending"}
     await before.tick()
+    await before.tick(1)  # the delivery result is saved by the next evaluation
     saved = json.loads((tmp_path / "notifier-state.json").read_text(encoding="utf-8"))
-    assert saved["schema"] == "brokersre.sidecar.notifier-state.v1"
-    assert saved["classes"]["twofa_pending"]["notified"] is True
+    assert saved["schema"] == "brokersre.sidecar.notifier-state.v2"
+    assert saved["classes"]["twofa_pending"]["delivered"] is True
 
     after = World(tmp_path, before.clock)
     after.notifier.load_state()
@@ -228,3 +234,70 @@ async def test_messages_carry_the_api_status_and_the_rule_detail(tmp_path: Path)
     world.probe = {"status_since": world.clock.now() - timedelta(seconds=1)}
     await world.tick(60)
     assert [message.kind for message in world.teams.sent] == ["firing", "resolved"]
+
+
+class Dead:
+    """A channel without a route to its service: every attempt fails as retryable."""
+
+    name = "teams"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def wants(self, message: Message) -> bool:
+        return True
+
+    async def send(self, message: Message) -> None:
+        self.attempts += 1
+        raise DeliveryError("connect", retryable=True)
+
+
+async def test_an_alert_no_channel_accepted_is_not_notified_and_is_sent_again(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's reproduction: delivery failed, yet the alert was recorded as notified."""
+    world = World(tmp_path)
+    dead = Dead()
+    world.dispatcher = Dispatcher({"teams": dead}, world.clock, RecordingSleep(world.clock))
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    world.gateway = {"phase": "2fa-pending"}
+    await world.tick()
+    assert dead.attempts == 4  # one try and three retries inside the dispatcher
+    alert = world.notifier.snapshot().active_alerts[0]
+    assert (alert.alert_class, alert.notified, alert.failed_attempts) == ("twofa_pending", False, 1)
+    # The ladder sends it again, 30 s after the failure.
+    before = dead.attempts
+    for _ in range(40):
+        await world.tick(1)
+    assert dead.attempts > before
+    assert world.notifier.snapshot().active_alerts[0].notified is False
+    saved = json.loads((tmp_path / "notifier-state.json").read_text(encoding="utf-8"))
+    assert saved["classes"]["twofa_pending"]["delivered"] is False
+
+    # The sidecar restarts where its channel works: it announces, it does not "resolve".
+    after = World(tmp_path, world.clock)
+    after.notifier.load_state()
+    after.gateway = {"phase": "2fa-pending"}
+    await after.tick(5)
+    assert [(m.alert_class, m.kind) for m in after.teams.sent] == [("twofa_pending", "firing")]
+    await after.tick(1)
+    assert after.notifier.snapshot().active_alerts[0].notified is True
+    after.gateway = {"phase": "logged-in"}
+    await after.tick(60)
+    assert [m.kind for m in after.teams.sent] == ["firing", "resolved"]
+
+
+async def test_an_alert_that_was_never_delivered_clears_without_a_resolved(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    dead = Dead()
+    world.dispatcher = Dispatcher({"teams": dead}, world.clock, RecordingSleep(world.clock))
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    world.gateway = {"phase": "2fa-pending"}
+    await world.tick()
+    world.gateway = {"phase": "logged-in"}
+    attempts = dead.attempts
+    await world.tick(10)
+    assert dead.attempts == attempts  # nothing more was sent: no "resolved" into the void
+    assert world.notifier.snapshot().active_alerts == ()

@@ -15,7 +15,14 @@
           "title": "Escalation Step",
           "type": "integer"
         },
+        "failed_attempts": {
+          "description": "Attempts of the pending notification that no channel accepted",
+          "minimum": 0,
+          "title": "Failed Attempts",
+          "type": "integer"
+        },
         "notified": {
+          "description": "A channel accepted a notification of this episode",
           "title": "Notified",
           "type": "boolean"
         },
@@ -41,7 +48,8 @@
         "severity",
         "since",
         "notified",
-        "escalation_step"
+        "escalation_step",
+        "failed_attempts"
       ],
       "title": "ActiveAlert",
       "type": "object"

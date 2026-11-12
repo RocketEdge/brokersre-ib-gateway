@@ -117,8 +117,11 @@ class ActiveAlert(_Model):
     alert_class: str = Field(alias="class", pattern=r"^[a-z_]{1,40}$")
     severity: Literal["info", "warning", "error", "critical"]
     since: Timestamp
-    notified: bool
+    notified: bool = Field(description="A channel accepted a notification of this episode")
     escalation_step: int = Field(ge=0, le=2)
+    failed_attempts: int = Field(
+        ge=0, description="Attempts of the pending notification that no channel accepted"
+    )
 
 
 class Notifier(_Model):
@@ -276,6 +279,7 @@ def build_status(
                         "since": format_utc(alert.since),
                         "notified": alert.notified,
                         "escalation_step": alert.escalation_step,
+                        "failed_attempts": alert.failed_attempts,
                     }
                     for alert in notifier.active_alerts
                 ],

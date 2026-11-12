@@ -242,10 +242,14 @@ pair. It has no threshold of its own for them, so the two cannot disagree.
   (30 minutes). Then the ladder is silent until the condition clears.
 - A class is announced at most once per 15 minutes. A condition that flaps is held back
   and announced when the 15 minutes end, if it is still active.
+- An alert counts as notified only when at least one channel accepted the message. Until
+  then it is sent again (after 30 s, doubling to every 5 minutes) for as long as the
+  condition lasts; `/status` shows `notified: false` and the number of failed attempts.
 - When a notified condition clears, a `resolved` message goes to every channel that heard
-  about it.
-- The state is kept in `notifier-state.json` under `SIDECAR_STATE_DIR` (written
-  atomically), so a restart of the sidecar neither repeats nor forgets a notification.
+  about it. A condition nobody was told about clears silently.
+- The state, including what was not delivered yet, is kept in `notifier-state.json` under
+  `SIDECAR_STATE_DIR` (written atomically). After a restart a delivered alert is not
+  repeated and an undelivered one is announced, not forgotten.
 
 ## Metrics
 
@@ -265,6 +269,8 @@ Metric names are frozen. A value that was not measured is **omitted**, never exp
 | `ibgw_pids`, `ibgw_java_rss_bytes`, `ibgw_java_threads`, `ibgw_open_fds` | gauge | Gateway process figures. |
 | `ibgw_notify_failures_total{channel}` | counter | Notifications given up on after all retries. |
 | `ibgw_notify_sent_total{channel}` | counter | Notifications delivered. |
+| `ibgw_notify_dropped_total{channel}` | counter | Notifications discarded because the channel's outbox was full. |
+| `ibgw_notify_undelivered_alerts` | gauge | Active alerts that no channel has accepted yet. They are sent again with a capped back-off. |
 | `ibgw_sidecar_task_restarts_total{task}` | counter | Restarts of a sidecar task after a crash. |
 | `ibgw_sidecar_info{version}` | gauge | Constant 1. |
 
