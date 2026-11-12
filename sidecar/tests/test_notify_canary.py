@@ -220,6 +220,7 @@ async def test_no_canary_reaches_any_channel_for_any_alert_class_and_kind(tmp_pa
         (b"needs-human\n", {"api": "ok"}),
         (b"existing-session\n", {"api": "ok"}),
         (b"exited\n", {"api": "ok"}),
+        (b"stopped\n", {"api": "ok"}),
         (b"login\n", {"api": "ok", "boots": 4}),
         (b"logged-in\n", {"api": "down"}),
         (b"logged-in\n", {"api": "ok"}),

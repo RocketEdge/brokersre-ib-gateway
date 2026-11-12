@@ -80,9 +80,16 @@ _SPECS = (
     AlertSpec(
         AlertClass.GATEWAY_EXITED,
         Severity.CRITICAL,
-        "The gateway process exited",
-        "Read the container log for the reason, then start the container again when it is "
-        "safe. A start needs a new login and two-factor approval.",
+        "The gateway stopped unexpectedly",
+        "Read the gateway container's log for the reason. If it is not running, start it "
+        "when it is safe: a start needs a new login and two-factor approval.",
+    ),
+    AlertSpec(
+        AlertClass.GATEWAY_STOPPED,
+        Severity.INFO,
+        "The gateway was stopped on request",
+        "No action needed if the stop was intended. The gateway stays down until someone "
+        "starts it; a start needs a new login and two-factor approval.",
     ),
     AlertSpec(
         AlertClass.API_UNHEALTHY,

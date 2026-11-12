@@ -475,3 +475,12 @@ def test_a_hand_over_is_worded_as_superseded_not_as_resolved() -> None:
         "away. Follow the needs_human alert."
     )
     assert "Resolved" not in handed_over.plain_text()
+
+
+def test_a_requested_stop_is_an_information_message() -> None:
+    stopped = message(MessageKind.FIRING, AlertClass.GATEWAY_STOPPED, phase="stopped")
+    assert stopped.severity == "info"
+    assert stopped.title == "The gateway was stopped on request"
+    exited = message(MessageKind.FIRING, AlertClass.GATEWAY_EXITED, phase="exited")
+    assert exited.severity == "critical"
+    assert exited.title == "The gateway stopped unexpectedly"

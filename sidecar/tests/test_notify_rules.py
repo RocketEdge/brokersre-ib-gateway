@@ -366,3 +366,49 @@ def test_the_second_factor_alert_is_handed_over_not_resolved(
     assert verdict.state is INACTIVE
     assert verdict.superseded_by is successor
     assert result[successor].state is ACTIVE
+
+
+def test_a_requested_shutdown_is_announced_as_information_not_as_an_exit() -> None:
+    events = {"shutdown_requested": gateway_event("shutdown_requested", T0 - timedelta(seconds=9))}
+    for phase in ("stopping", "stopped"):
+        states = evaluate(gateway={"phase": phase, "last_events": events})
+        assert states[AlertClass.GATEWAY_STOPPED] is ACTIVE, phase
+        assert states[AlertClass.GATEWAY_EXITED] is INACTIVE, phase
+    assert evaluate()[AlertClass.GATEWAY_STOPPED] is INACTIVE
+    assert evaluate(gateway={"phase": None})[AlertClass.GATEWAY_STOPPED] is UNKNOWN
+
+
+def test_ibc_ending_on_its_own_is_an_unexpected_exit() -> None:
+    states = evaluate(gateway={"phase": "exited"})
+    assert states[AlertClass.GATEWAY_EXITED] is ACTIVE
+    assert states[AlertClass.GATEWAY_STOPPED] is INACTIVE
+    assert details(gateway={"phase": "exited"})[AlertClass.GATEWAY_EXITED] == (
+        "gateway phase is exited: IBC ended on its own"
+    )
+
+
+def test_a_restart_without_a_requested_shutdown_is_announced_for_fifteen_minutes() -> None:
+    # The container was killed and started again: it is running now, but it was down.
+    crashed = {
+        "phase": "login",
+        "last_restart_at": T0 - timedelta(minutes=2),
+        "last_restart_unexpected": True,
+    }
+    assert evaluate(gateway=crashed)[AlertClass.GATEWAY_EXITED] is ACTIVE
+    assert details(gateway=crashed)[AlertClass.GATEWAY_EXITED] == (
+        "the gateway container restarted without a requested shutdown"
+    )
+    later = crashed | {"last_restart_at": T0 - timedelta(minutes=16)}
+    assert evaluate(gateway=later)[AlertClass.GATEWAY_EXITED] is INACTIVE
+    deliberate = crashed | {"last_restart_unexpected": False}
+    assert evaluate(gateway=deliberate)[AlertClass.GATEWAY_EXITED] is INACTIVE
+
+
+def test_a_pending_second_factor_is_handed_over_to_the_stop_alert() -> None:
+    result = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(T0, **twofa("stopped", twofa_initiated=timedelta(minutes=5))),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    assert result[AlertClass.TWOFA_PENDING].superseded_by is AlertClass.GATEWAY_STOPPED

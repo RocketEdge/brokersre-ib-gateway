@@ -37,6 +37,8 @@ _TWOFA_EVENTS = ("twofa_initiated", "twofa_dialog", "twofa_timeout")
 _TWOFA_SUCCESSORS: dict[str, AlertClass] = {
     Phase.NEEDS_HUMAN: AlertClass.NEEDS_HUMAN,
     Phase.EXITED: AlertClass.GATEWAY_EXITED,
+    Phase.STOPPING: AlertClass.GATEWAY_STOPPED,
+    Phase.STOPPED: AlertClass.GATEWAY_STOPPED,
 }
 
 
@@ -147,7 +149,8 @@ class RuleEngine:
             AlertClass.EXISTING_SESSION: self._phase_is(phase, known, Phase.EXISTING_SESSION),
             AlertClass.LOGIN_STALLED: self._login_stalled(gateway, known),
             AlertClass.UNKNOWN_WINDOW: self._unknown_window(gateway, now),
-            AlertClass.GATEWAY_EXITED: self._phase_is(phase, known, Phase.EXITED),
+            AlertClass.GATEWAY_EXITED: self._gateway_exited(gateway, known, now),
+            AlertClass.GATEWAY_STOPPED: self._gateway_stopped(gateway, known),
             AlertClass.API_UNHEALTHY: self._api_unhealthy(probe, now, mono),
             AlertClass.RESTART_STORM: self._restart_storm(gateway),
             AlertClass.RESOURCE_ALERT: self._resource_alert(gateway, now),
@@ -210,6 +213,40 @@ class RuleEngine:
         if pair is None:
             return _UNKNOWN
         return Evaluation(_ACTIVE, detail) if pair.open else _INACTIVE
+
+    def _gateway_exited(self, gateway: GatewaySnapshot, known: bool, now: datetime) -> Evaluation:
+        """Active when the gateway went away without being asked to.
+
+        Two kinds of evidence: the phase ``exited`` (IBC ended on its own), and a boot id
+        that changed although the previous boot never logged ``shutdown_requested`` (the
+        container was killed or crashed and is running again). The second is a point in
+        time, so it is held for ``event_hold_s``. A requested stop is ``gateway_stopped``.
+        """
+        if not known:
+            return _UNKNOWN
+        if gateway.phase == Phase.EXITED:
+            return Evaluation(_ACTIVE, "gateway phase is exited: IBC ended on its own")
+        hold = timedelta(seconds=self._config.event_hold_s)
+        if (
+            gateway.last_restart_unexpected
+            and gateway.last_restart_at is not None
+            and now - gateway.last_restart_at <= hold
+        ):
+            return Evaluation(
+                _ACTIVE, "the gateway container restarted without a requested shutdown"
+            )
+        return _INACTIVE
+
+    @staticmethod
+    def _gateway_stopped(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the gateway is down because a shutdown was requested."""
+        if not known:
+            return _UNKNOWN
+        if gateway.phase in (Phase.STOPPING, Phase.STOPPED):
+            return Evaluation(
+                _ACTIVE, f"gateway phase is {gateway.phase}: a shutdown was requested"
+            )
+        return _INACTIVE
 
     def _fresh(self, gateway: GatewaySnapshot, name: str, now: datetime) -> bool:
         """True when event ``name`` happened within the hold time."""

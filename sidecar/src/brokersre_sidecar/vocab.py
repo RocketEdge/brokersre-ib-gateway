@@ -71,6 +71,7 @@ class AlertClass(StrEnum):
     LOGIN_STALLED = "login_stalled"
     UNKNOWN_WINDOW = "unknown_window"
     GATEWAY_EXITED = "gateway_exited"
+    GATEWAY_STOPPED = "gateway_stopped"
     API_UNHEALTHY = "api_unhealthy"
     RESTART_STORM = "restart_storm"
     RESOURCE_ALERT = "resource_alert"
