@@ -9,6 +9,8 @@
 # repository and only to the scanned digest; a tag that resolves to anything else afterwards
 # fails the publish.
 
+bats_require_minimum_version 1.5.0 # `run !`
+
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../../../scripts/promote-tags.sh"
   WORK="$(mktemp -d)"
@@ -75,7 +77,7 @@ teardown() {
   run "$SCRIPT" "$IMAGE" "$DIGEST" "$IMAGE:stable"
   [ "$status" -eq 1 ]
   [[ "$output" != *"promoted"* ]]
-  ! grep -q '^docker buildx imagetools inspect ' "${CALLS}"
+  run ! grep -q '^docker buildx imagetools inspect ' "${CALLS}"
 }
 
 @test "an answer that is not a manifest descriptor fails the publish" {

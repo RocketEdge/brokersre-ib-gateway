@@ -274,7 +274,7 @@ count() {
   grep -q '^gh label create os-vulnerability -R example/repo' "${CALLS}"
   grep -q '^gh label create channel:stable -R example/repo' "${CALLS}"
   # No --force: an existing label keeps its colour and description.
-  ! grep -q -- '--force' "${CALLS}"
+  run ! grep -q -- '--force' "${CALLS}"
   label_line="$(grep -n '^gh label create os-vulnerability' "${CALLS}" | cut -d: -f1)"
   create_line="$(grep -n '^gh issue create' "${CALLS}" | cut -d: -f1)"
   [ "${label_line}" -lt "${create_line}" ]
@@ -285,7 +285,7 @@ count() {
     : > "${WORK}/last-body"
     RUN_URL="$url" run "$SCRIPT" stable rebuild CVE-2026-109518 "$REF"
     [ "$status" -eq 0 ]
-    ! grep -q -e 'workflow run' -e 'evil' -e 'javascript' -e 'http://' "${WORK}/last-body"
+    run ! grep -q -e 'workflow run' -e 'evil' -e 'javascript' -e 'http://' "${WORK}/last-body"
     grep -q -- '- Last scan: 2026-11-13 05:30 UTC$' "${WORK}/last-body"
   done
 }
@@ -332,7 +332,7 @@ count() {
   echo "42 --title injected" > "${WORK}/open-issue"
   run "$SCRIPT" stable rebuild CVE-2026-109518 "$REF"
   [ "$status" -eq 2 ]
-  ! grep -q -e '^gh issue edit' -e '^gh issue create' -e '^gh issue close' -e '^gh issue view' "${CALLS}"
+  run ! grep -q -e '^gh issue edit' -e '^gh issue create' -e '^gh issue close' -e '^gh issue view' "${CALLS}"
 }
 
 @test "bad arguments are refused before gh is called" {
