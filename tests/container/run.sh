@@ -54,6 +54,13 @@ wait_for() { # seconds command...
 }
 in_container() { docker exec ibgw-test bash -c "$1"; }
 port_open() { in_container "timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$1'"; }
+# gateway_jvm_running: true when a process named exactly `java` runs IBC's main class.
+# Not `pgrep -f ibcalpha.ibc`: inside `bash -c` that pattern matches the very shell that runs
+# it, so such a check passes whether or not the Gateway is there.
+gateway_jvm_running() {
+  # shellcheck disable=SC2016  # evaluated inside the container
+  in_container 'for p in $(pgrep -x java); do if tr "\0" " " <"/proc/${p}/cmdline" | grep -q "ibcalpha\.ibc"; then exit 0; fi; done; exit 1'
+}
 
 echo "== structure =="
 if [ "$(docker run --rm --entrypoint id "${IMAGE}" -u)" = "1000" ]; then pass "runs as uid 1000"; else fail "uid" "not 1000"; fi
@@ -104,7 +111,7 @@ if wait_for 20 in_container 'b=$(cat /var/log/ibgateway/state/boot_id); tail -1 
 else
   fail "sampler" "no valid sample: $(in_container 'tail -1 /var/log/ibgateway/metrics/metrics.jsonl 2>/dev/null | cut -c1-200')"
 fi
-if in_container 'p=$(pgrep -f sampler.sh | head -1); test -n "${p}" && ! tr "\0" "\n" <"/proc/${p}/environ" | grep -q -e "^TWS_PASSWORD=" -e "^TWS_USERID="'; then
+if in_container 'p=$(pgrep -f "[s]ampler.sh" | head -1); test -n "${p}" && ! tr "\0" "\n" <"/proc/${p}/environ" | grep -q -e "^TWS_PASSWORD=" -e "^TWS_USERID="'; then
   pass "the sampler runs without any credential in its environment"
 else
   fail "sampler environment" "sampler not running or a credential is in its environment"
@@ -208,7 +215,7 @@ if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server lis
   fail "ibc smoke" "7462 never listened"
   docker logs ibgw-test | tail -30
 fi
-if in_container 'pgrep -f ibcalpha.ibc >/dev/null'; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
+if gateway_jvm_running; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
 # A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
 # Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
 if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -q "^_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home "'; then
@@ -241,6 +248,54 @@ if docker logs ibgw-test 2>&1 | grep -q '"event":"shutdown_complete"'; then pass
   fail "shutdown event" "missing"
   docker logs ibgw-test 2>&1 | tail -5
 fi
+
+echo "== rejected-login latch (offline, --network none) =="
+# After IBKR has rejected the credentials, a later start with the same secret files must not
+# send them again: a restart policy or a reboot would repeat the login until IBKR locks the
+# account. The record of a rejection is written here by hand, for exactly the secret files of
+# this suite, as the classifier writes it; then the image is started as usual (IBC enabled).
+latch_env=(-e TWS_USERID_FILE=/run/secrets/ib-username -e TWS_PASSWORD_FILE=/run/secrets/ib-password)
+docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
+fingerprint="$(docker run --rm -v "${host_secrets}:/run/secrets:ro" "${latch_env[@]}" --entrypoint bash "${IMAGE}" \
+  -c 'source /usr/local/lib/brokersre/log.sh; source /usr/local/lib/brokersre/login-latch.sh; credential_fingerprint' 2>/dev/null || true)"
+if [[ "${fingerprint}" =~ ^files:[0-9a-f]{16}$ ]]; then pass "the image computes a fingerprint for the mounted secret files"; else fail "latch fingerprint" "got '${fingerprint}'"; fi
+docker run --rm -v ibgw-test-logs:/var/log/ibgateway --entrypoint bash "${IMAGE}" \
+  -c "mkdir -p /var/log/ibgateway/state && printf 'v1 %s 2026-11-11T23:23:04.155Z\n' '${fingerprint}' >/var/log/ibgateway/state/login-rejected" || true
+run_container --network none -e SAMPLE_INTERVAL_S=2 -v ibgw-test-logs:/var/log/ibgateway
+if wait_for 30 bash -c 'docker logs ibgw-test 2>&1 | grep -q "\"event\":\"login_rejected_latched\""'; then
+  pass "a recorded rejection for unchanged secret files is announced (login_rejected_latched)"
+else
+  fail "latch event" "no login_rejected_latched event"
+  docker logs ibgw-test 2>&1 | tail -5
+fi
+if in_container 'test "$(cat /var/log/ibgateway/state/phase)" = needs-human'; then pass "latched start: phase needs-human"; else fail "latch phase" "phase is $(in_container 'cat /var/log/ibgateway/state/phase' 2>/dev/null)"; fi
+# Give IBC the time it would need to appear if the latch had not held, then look for it.
+sleep 10
+if in_container 'pgrep -x java >/dev/null'; then fail "latch holds" "a Java process runs: a login was attempted"; else pass "latched start: no IBC, no Gateway, no login"; fi
+if docker logs ibgw-test 2>&1 | grep -q '"event":"ibc_starting"'; then fail "latch holds" "ibc_starting was emitted"; else pass "latched start: IBC was never started"; fi
+if [ "$(docker inspect -f '{{.State.Running}}' ibgw-test 2>/dev/null)" = "true" ]; then pass "latched start: the container stays up (no restart loop)"; else fail "latch hold" "the container exited"; fi
+if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh >/dev/null 2>&1'; then fail "latch health" "reported healthy"; else pass "latched start: unhealthy"; fi
+if in_container 'test -s /var/log/ibgateway/state/login-rejected'; then pass "latched start: the record is kept"; else fail "latch record" "the record was removed"; fi
+if wait_for 20 in_container 'jq -e -s "length > 0 and (.[-1].phase == \"needs-human\")" /var/log/ibgateway/metrics/metrics.jsonl'; then pass "latched start: resource samples go on (a waiting gateway is not a silent one)"; else fail "latch samples" "no sample in phase needs-human"; fi
+if docker logs ibgw-test 2>&1 | grep -q -e dummyuser -e dummypassword; then fail "latch secrecy" "a credential appears in the events"; else pass "latched start: no credential in the events"; fi
+docker stop -t 30 ibgw-test >/dev/null 2>&1 &
+stop_pid=$!
+if wait_for 20 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true'; then pass "latched start: SIGTERM stops the container at once"; else fail "latch stop" "still running after 20 s"; fi
+wait "${stop_pid}" 2>/dev/null || true
+# The operator corrects the credentials: rewriting a secret file gives it a new modification
+# time, which releases the latch, and the next start launches IBC again.
+sleep 1
+printf 'dummypassword-not-real' >"${secrets_dir}/ib-password"
+chmod 0644 "${secrets_dir}/ib-password"
+run_container --network none -v ibgw-test-logs:/var/log/ibgateway
+if wait_for 30 bash -c 'docker logs ibgw-test 2>&1 | grep -q "\"event\":\"login_latch_cleared\""'; then pass "a rewritten secret file releases the latch (login_latch_cleared)"; else
+  fail "latch release" "no login_latch_cleared event"
+  docker logs ibgw-test 2>&1 | tail -5
+fi
+if wait_for "${SMOKE_TIMEOUT}" gateway_jvm_running; then pass "after the release IBC starts again"; else fail "latch release" "IBC did not start"; fi
+if in_container 'test ! -e /var/log/ibgateway/state/login-rejected'; then pass "after the release the record is gone"; else fail "latch release" "the record is still there"; fi
+docker rm -f ibgw-test >/dev/null 2>&1 || true
+docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
 
 echo "== reference compose (compose/docker-compose.example.yml) =="
 # The example is what users copy, so it is tested as shipped: its hardening settings are

@@ -25,11 +25,16 @@
 #     asking.
 #   - the classifier never moves the phase out of stopping, stopped or exited (write_phase):
 #     the event is still emitted, the phase stays with the entrypoint.
+#   - rejected-login latch (login-latch.sh): IBKR's rejection (`login_failed_dialog`) is
+#     recorded on the log volume so that no later start sends the same credentials again
+#     (`login_latch_set`); a completed login removes the record (`login_latch_cleared`).
 #   - exit status is 0 at end of input.
 set -u
 LIB="$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck source=/dev/null
 source "${LIB}/log.sh"
+# shellcheck source=/dev/null
+source "${LIB}/login-latch.sh"
 
 LOG_DIR="${LOG_DIR:-/var/log/ibgateway}"
 PATTERNS_FILE="${IBC_PATTERNS:-/etc/brokersre/ibc-patterns.tsv}"
@@ -80,11 +85,19 @@ window_is_known() {
   return 1
 }
 
-# after_event EVENT: bookkeeping that spans several lines (the second-factor prompt cap).
+# after_event EVENT: bookkeeping that outlives the line (the second-factor prompt cap, the
+# rejected-login latch).
 after_event() {
   case "$1" in
     login_completed)
       prompts=0
+      # These credentials work: a rejection recorded earlier no longer applies.
+      login_latch_clear ibc "a login completed"
+      ;;
+    login_failed_dialog)
+      if login_latch_set; then
+        log_event ibc warn login_latch_set "IBKR rejected the credentials; this is recorded, and a later start with the same secret files will not log in until they are corrected"
+      fi
       ;;
     twofa_initiated)
       prompts=$((prompts + 1))
