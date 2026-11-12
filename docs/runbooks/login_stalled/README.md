@@ -26,9 +26,11 @@ gateway's own; the sidecar only relays the pair `login_stalled` / `login_resumed
 
 1. IBKR is not reachable: fix the host's network or wait for IBKR
    (<https://brokerage.ibkr.com/en/software/systemStatus.php>). The gateway keeps trying.
-2. A window blocks the login: handle it on the Gateway's screen through VNC. VNC is off
-   unless the gateway was started with `VNC_SERVER_PASSWORD_FILE`; turning it on takes a new
-   start of the container, which is a new login.
+2. A window blocks the login: look at it, and if needed handle it, on the Gateway's screen
+   through the [break-glass console](../../console.md). The console is off unless the
+   gateway was started with it, and it is view-only unless `VNC_VIEW_ONLY=no`. Turning it on,
+   or changing from view-only to input, takes a new start of the container, which is a new
+   login: the window may not come back, and the login may ask for a second factor.
 3. Report the title of the window (the title only) in an issue of this repository, so that
    it can be classified.
 4. If neither applies, restart once, with the person who approves the second factor ready:

@@ -30,7 +30,8 @@ flowchart TB
   ep --> render["render-config.sh: _FILE secrets -> /run/brokersre/config.ini (0600); jts.ini on first start"]
   ep --> javaenv["java-env.sh: _JAVA_OPTIONS (writable user.home, heap)"]
   ep --> xvfb["Xvfb :1"]
-  ep --> vnc["x11vnc -localhost (only with VNC_SERVER_PASSWORD)"]
+  ep --> vnc["x11vnc -localhost -noremote, view-only unless VNC_VIEW_ONLY=no (only with VNC_SERVER_PASSWORD)"]
+  vnc -- "-afteraccept / -gone" --> vnchook["vnc-hook.sh: vnc_client_connected, vnc_client_disconnected"]
   ep --> relay["relay supervisor: socat 0.0.0.0:4003|4004 -> 127.0.0.1:4001|4002, only while the phase is logged-in"]
   ep --> tail["tail-gateway-logs.sh -> /var/log/ibgateway/jts/ (resumes after a restart)"]
   ep --> sampler["sampler.sh -> /var/log/ibgateway/metrics/metrics.jsonl (cgroup v2, /proc)"]
@@ -57,9 +58,10 @@ flowchart LR
   classify["classifier"] --> le
   relay["relay supervisor"] --> le
   sampler["sampler"] --> le
+  vnchook["console hook"] --> le
   le[["log_event: flock, boot_id, seq"]] --> out["stdout (docker logs)"]
   le --> file["events/events.jsonl (size-capped)"]
-  file --> reader["sidecar or shipper (read-only mount)"]
+  file --> reader["sidecar or shipper (read-only mount; docs/recipes)"]
 ```
 
 ## Contract with a sidecar

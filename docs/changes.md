@@ -5,6 +5,57 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Console made safe and logged, upgrade check, log-shipper recipes, passkey facts, three design notes
+
+- **What changed:** the break-glass console is view-only unless `VNC_VIEW_ONLY=no`, runs
+  without x11vnc's remote control, and reports every visit (`vnc_client_connected`,
+  `vnc_client_disconnected`); `compose/docker-compose.console.yml` and `docs/console.md` give
+  the route to it (ADR 0017). New: `scripts/check-upgrade.sh` (`brokersre.upgrade-check.v1`),
+  `docs/recipes/` (Vector for Loki, OTLP, Datadog) with `tests/recipes/run.sh`,
+  `docs/passkeys.md`, and three design notes under `docs/specs/`. Log contract v2 gains the
+  two console events and `data.view_only` on `vnc_enabled`; nothing was renamed. The README's
+  link to IBKR's reauthentication page was dead (404) and points at the page's new address.
+- **Result:** unit, CI-script, container, compose and recipe suites green (counts in the pull
+  request). With the image's real x11vnc 0.9.17: view-only discards a pointer event and
+  `VNC_VIEW_ONLY=no` lets it through; a wrong password gets nobody in; the password is in no
+  argument list, environment, file or event.
+- **What did NOT work / root cause:**
+  - *View-only could be switched off unseen.* x11vnc accepts remote-control commands from any
+    process on the display (`x11vnc -R noviewonly`); the pointer then followed the client
+    while the event still said view-only. Fixed with `-noremote`; the container suite tries
+    the command before it measures.
+  - *A hook's output had nowhere to go.* x11vnc prints `PORT=5900` on stdout even with
+    `-quiet`, so its stdout stays discarded, and it closes every descriptor above 2 for a
+    hook. The container's stdout is handed over as descriptor 0 and the hook writes there.
+  - *No idle limit.* x11vnc has no option that disconnects an idle client (`-timeout` and
+    `-readtimeout` mean something else); none was built.
+  - *No web console.* No maintained noVNC image from a publisher that can be verified runs as
+    a non-root user; the upstream projects publish none.
+  - *No published port reaches the console.* x11vnc listens on the container's own loopback;
+    the route is a bridge a person opens with `docker compose exec` behind a loopback port.
+  - *The formatted registry lookup was throttled.* `docker buildx imagetools inspect --format`
+    fetches every platform's manifest; two registries answered 429. The raw manifest is one
+    request and its SHA-256 is the tag's digest.
+  - *Vector 0.61 does not expand `${VAR}`* unless started with
+    `--dangerously-allow-env-var-interpolation`: the recipes read no environment variable.
+    A new volume takes owner and mode from the image directory it is mounted over, so a
+    non-root Vector keeps its checkpoints in `/var/tmp`. A first draft of the shipper's
+    compose file would have mounted the gateway's secrets folder into the shipper; its
+    secrets now live in a folder of their own.
+  - *The stack below this branch had a gap.* Two commits of the supply-chain branch (the
+    suites' `quiet_grep` helper) were added after the branch above it had forked, so every
+    later branch ran its container and compose suites without them. Found when this branch's
+    new "is the password in the log?" checks needed the helper. The branches were brought up
+    with merges, and the nine quiet greps and fifteen negated assertions of this branch that
+    could not fail on Linux were converted.
+  - *A session open at shutdown has no `vnc_client_disconnected`*: x11vnc is ended with the
+    other helpers before it runs the hook.
+  - Not established: the console during a real login, the SSH tunnel and a desktop viewer;
+    the recipes against a real Loki, collector or Datadog; whether IB Gateway accepts a
+    passkey (IBKR lists TWS 10.46.1d, not IB Gateway).
+- **Next step:** try the console and one recipe on a logged-in paper session; decide whether
+  input should be switchable without a restart, with an event of its own.
+
 ### 2026-11-12 — A runbook for every alert class of the sidecar
 
 - **What changed:** `docs/runbooks/` holds an index and one page per alert class (16), each

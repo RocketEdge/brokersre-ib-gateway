@@ -18,6 +18,7 @@
 | [0014](0014-paper-login-qualification.md) | A paper-login qualification that is not a test: one attended login, behind a reviewer | Accepted (2026-11-12) |
 | [0015](0015-login-controller-succession.md) | Login controller succession: stay on the IBC fork behind a narrow contract | Proposed (2026-11-12) |
 | [0016](0016-rejected-login-latch.md) | A rejected login is not repeated: the latch on the log volume | Accepted (2026-11-12) |
+| [0017](0017-break-glass-console.md) | The break-glass console: view-only, logged, no web console | Accepted (2026-11-12) |
 
 Template: Status, Context (with sources), Decision, Consequences (positive and negative),
 Revisit trigger. Never renumber or delete; supersede with a new record.

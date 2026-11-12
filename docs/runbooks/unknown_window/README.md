@@ -23,9 +23,10 @@ missing from them raises this alert too ([limitations](../../limitations.md), L1
 
 1. If the phase reaches `logged-in`, nothing is blocked. Go to step 3.
 2. If the phase stays `login`, the window blocks the login and
-   [login_stalled](../login_stalled/README.md) follows after `LOGIN_STALL_S`. Handle the
-   window on the Gateway's screen through VNC (off unless the gateway was started with
-   `VNC_SERVER_PASSWORD_FILE`).
+   [login_stalled](../login_stalled/README.md) follows after `LOGIN_STALL_S`. Look at the
+   window, and if needed handle it, through the [break-glass console](../../console.md): off
+   unless the gateway was started with it, view-only unless `VNC_VIEW_ONLY=no`, and each of
+   those two changes takes a new start of the container, which is a new login.
 3. Report the title of the window (the title only) in an issue of this repository, so that
    it can be classified and stops alerting.
 

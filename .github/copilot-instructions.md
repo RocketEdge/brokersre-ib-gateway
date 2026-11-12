@@ -10,13 +10,15 @@ derived from gnzsnz/ib-gateway-docker and consumed by RocketEdge BrokerSRE. This
 eval "$(scripts/bake-env.sh)"                                        # variables from versions.json (jq)
 docker buildx bake --print stable latest > /dev/null                 # bake definition resolves
 docker buildx bake stable --set '*.platform=linux/amd64' --load      # local build
-hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh examples/*.sh
+hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
 git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
 tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table), on the host (needs jq)
 scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json                     # VEX document valid (add Trivy `--pkg-types library --list-all-pkgs --format json` reports to compare)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy); offline
+IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy, console override); offline
+tests/recipes/run.sh                                                                     # docs/recipes: vector validate, then an offline run against a stand-in receiver (needs only Docker)
+scripts/check-upgrade.sh --container <name>                                              # channel tag vs running digest; one JSON document; exit 0/10/2; asks only
 (cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
 (cd examples/csharp && dotnet build -warnaserror && dotnet test && dotnet format GatewayClient.slnx --verify-no-changes)
 bash azure/tests/run.sh [group...]                                                       # Azure pack, offline (Docker + Bicep CLI, no Azure login); the group kql-run is opt-in
@@ -47,7 +49,10 @@ All of these must be green before claiming a change done; run them fresh.
    `ARG`: Dependabot cannot see those) and its Python dependencies in `sidecar/uv.lock`. The
    Windows kit pins a `busybox` image by digest for two host-side probes in the one constant
    `$script:GwProbeImage` (`windows/src/Checks.ps1`); `windows/tests/Kit.Tests.ps1` fails on a
-   second copy.
+   second copy. The log-shipper recipes name the Vector image once, in
+   `docs/recipes/docker-compose.vector.yml`; `tests/recipes/run.sh` fails on a second copy
+   and when it differs from the Azure pack's pin, so the repository carries one Vector
+   version: bump the two files and `vm.bicep` together.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
@@ -74,7 +79,9 @@ All of these must be green before claiming a change done; run them fresh.
    a start whose secret files IBKR already rejected: no IBC, phase `needs-human`, container
    held. A state that needs a person holds the container; it never exits into the restart
    policy. The latch stores the modification times of the secret files as a hash, never
-   anything derived from a credential.
+   anything derived from a credential. The break-glass console (ADR 0017) is for a person:
+   view-only unless `VNC_VIEW_ONLY=no`, started with `-noremote` so the mode cannot change
+   while the container runs, every visit an event; nothing in the image connects to it.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
@@ -130,7 +137,13 @@ sidecar/                                              optional second image (Pyt
 compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
 windows/                                              host kit for Windows 10/11: setup, doctor, harden, start, uninstall (.ps1) over BrokerSre.Gateway.psm1 + src/{Native,Core,Secrets,Stack,Checks,Harden,Commands}.ps1; templates/compose.yaml.tmpl; tests/ (Pester); README.md (ADR 0011)
 .github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
-docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, runbooks/ (one page per sidecar alert class), adr/
+rootfs/usr/local/lib/brokersre/vnc-hook.sh            x11vnc -afteraccept/-gone hook -> vnc_client_connected, vnc_client_disconnected (ADR 0017)
+compose/docker-compose.console.yml                    break-glass console over the reference compose (secret, VNC_VIEW_ONLY, loopback bridge port); docs/console.md
+tests/container/vnc-client.sh                         RFB 3.8 client in bash with DES: the tests' stand-in for a person on the console
+scripts/check-upgrade.sh                              channel tag vs running digest (brokersre.upgrade-check.v1); asks only; docs/upgrade-check.md
+docs/recipes/                                         Vector recipes (Loki, OTLP, Datadog), docker-compose.vector.yml (the recipes' one Vector pin), README.md
+tests/recipes/                                        run.sh (validate + offline run against a stand-in), receiver.yaml, fixtures/; CI job recipes
+docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, console.md, upgrade-check.md, passkeys.md, recipes/, specs/ (design notes, nothing built), runbooks/ (one page per sidecar alert class), adr/
 ```
 
 ## Gotchas
@@ -283,3 +296,26 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - A screenshot needs no tool: `Xvfb -fbdir <dir>` keeps the framebuffer in `<dir>/Xvfb_screen0`
   (XWD), and `screenshot.sh` copies it. Do not add `xwd`, `import` or a converter to the image
   for this (invariant 4). The option stays opt-in while a picture can show the username.
+- x11vnc 0.9.17: `PORT=5900` goes to stdout even with `-quiet`; hooks (`-afteraccept`, `-gone`)
+  inherit descriptors 0 to 2 only, so the container's stdout is passed as descriptor 0 and
+  the hook command ends in `>&0`; `-gone` also runs for a connection that never authenticated;
+  without `-noremote` any process on the display lifts `-viewonly` (`x11vnc -R noviewonly`);
+  there is no idle-disconnect option. Because of `-noremote`, a test that asks where the
+  pointer is (`x11vnc -Q pointer_pos`) starts a second, throwaway x11vnc first.
+- A VNC client must authenticate (DES) before x11vnc runs `-afteraccept`; the image has no
+  client, so tests use `tests/container/vnc-client.sh` (`docker exec -i <c> bash -s -- ... <file`).
+- Vector 0.61: `${VAR}` is not expanded unless started with
+  `--dangerously-allow-env-var-interpolation` (recipes use files and `SECRET[files.x]`);
+  `to_unix_timestamp(x, unit: "nanoseconds")` is fallible; the `http_server` source removes a
+  request's `Content-Encoding` itself; the `datadog_agent` source rejects attributes beyond
+  the agent's fixed fields; the image runs as root and `/var/lib/vector` is root's. A new
+  named volume takes owner and mode from the image directory it is mounted over.
+- `docker buildx imagetools inspect --format ...` fetches every platform's manifest (Docker Hub
+  and public ECR answered 429); `--raw` is one request and `sha256sum` of it is the digest.
+- gitleaks `generic-api-key` flags a word containing `auth` or `key` next to `=` and a hex
+  string (`FAKE_VNC_SESSION=unauthenticated BOOT_ID=...`, `datadog_key="..."`): name and
+  generate test values accordingly.
+- A stack of branches must be re-checked after a commit is added below: a branch that forked
+  earlier does not get it (the `quiet_grep` fix was missing from every branch above the
+  supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
+  building on the top.
