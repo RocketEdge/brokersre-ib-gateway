@@ -218,10 +218,20 @@ Describe 'Rules of the repository' {
         $rows.Count | Should -BeGreaterThan 5
         $phases = New-Object System.Collections.Generic.List[string]
         foreach ($row in $rows) { if ($row[2].Length -gt 0) { $phases.Add($row[2]) } }
+        # Log contract v2 lists the phases as a table under the heading "Phase file `state/phase`":
+        # one row per phase, the token (or several, comma separated) in the first column.
         $contract = [System.IO.File]::ReadAllText((Join-Path $repository 'docs\log-contract.md'))
-        $tokenLine = [regex]::Match($contract, '(?m)^\| `state/phase` \|.*$').Value
-        $tokenLine | Should -Not -BeNullOrEmpty
-        foreach ($match in [regex]::Matches($tokenLine.Substring($tokenLine.IndexOf('one token')), '`([a-z0-9-]+)`')) { $phases.Add($match.Groups[1].Value) }
+        $section = [regex]::Match($contract, '(?ms)^## Phase file `state/phase`\s*$(.*?)^## ').Groups[1].Value
+        $section | Should -Not -BeNullOrEmpty -Because 'docs/log-contract.md has a section "Phase file `state/phase`"'
+        $documented = New-Object System.Collections.Generic.List[string]
+        foreach ($line in ($section -split "`n")) {
+            if ($line -notmatch '^\|\s*`') { continue }
+            $firstCell = ($line -split '\|')[1]
+            foreach ($match in [regex]::Matches($firstCell, '`([a-z0-9-]+)`')) { $documented.Add($match.Groups[1].Value) }
+        }
+        # A contract that lists fewer phases than the image has always had means the parsing broke.
+        $documented.Count | Should -BeGreaterThan 8
+        foreach ($phase in $documented) { $phases.Add($phase) }
         foreach ($phase in @($phases | Sort-Object -Unique)) {
             (Get-GwPhaseMessage -Phase $phase -ApiPort 4002 -ContainerName 'c').Text | Should -Not -Match 'Unknown state' -Because $phase
         }
