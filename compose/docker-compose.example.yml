@@ -1,9 +1,11 @@
 # Reference compose for brokersre-ib-gateway. Pin the image by DIGEST in production (the
-# publish workflow prints it); the tag below is for local evaluation only.
+# publish workflow prints it): IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...
+# The tag below is for local evaluation only.
 # Secrets come from files (Docker secrets); never put TWS_USERID/TWS_PASSWORD in this file.
+# This file is started as shipped by tests/container/run.sh, so every setting here is tested.
 services:
   ib-gateway:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+    image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -13,6 +15,29 @@ services:
       - /run/brokersre:size=16m,uid=1000,gid=1000,mode=0750
     security_opt:
       - no-new-privileges:true
+    # Nothing in the image needs a Linux capability (uid 1000, ports above 1024).
+    cap_drop:
+      - ALL
+    # On `docker compose stop/down` the entrypoint asks IBC to log out and waits up to 60 s.
+    # Docker's default of 10 s would kill the Gateway mid-logout, and the next start could then
+    # meet its own half-closed session.
+    stop_grace_period: 90s
+    # IB Gateway with many subscriptions runs out of file descriptors at the common default of
+    # 1024.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # Bounds for a runaway: the Gateway JVM uses a few hundred threads and, with the default
+    # 768 MB heap, well under 2 GB. Raise IBGW_MEM_LIMIT together with the heap.
+    pids_limit: 2048
+    mem_limit: ${IBGW_MEM_LIMIT:-2g}
+    # The container's stdout carries only the JSON events; cap it so it cannot fill the host.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       TWS_USERID_FILE: /run/secrets/ib-username
       TWS_PASSWORD_FILE: /run/secrets/ib-password
@@ -25,6 +50,7 @@ services:
       TIME_ZONE: ${TIME_ZONE:-America/New_York}
       EXISTING_SESSION_DETECTED_ACTION: primary
       IBC_COMMAND_SERVER_PORT: "7462"               # loopback only; reachable by a sidecar sharing this network namespace
+      IBC_LAUNCH: ${IBC_LAUNCH:-yes}                # "no" starts everything except IBC (offline tests)
       # VNC_SERVER_PASSWORD_FILE: /run/secrets/vnc-password   # break-glass only; bound to 127.0.0.1 inside the container
     secrets:
       - ib-username
@@ -43,11 +69,13 @@ services:
       start_period: 300s
       retries: 3
 
+# The files are read relative to this compose file: compose/secrets/ib-username and
+# compose/secrets/ib-password (README, "Quick start"). IBGW_SECRETS_DIR points elsewhere.
 secrets:
   ib-username:
-    file: ./secrets/ib-username
+    file: ${IBGW_SECRETS_DIR:-./secrets}/ib-username
   ib-password:
-    file: ./secrets/ib-password
+    file: ${IBGW_SECRETS_DIR:-./secrets}/ib-password
 
 volumes:
   ibgw-settings:

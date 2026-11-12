@@ -47,7 +47,6 @@ RUN chmod +x /tmp/setup/ibgateway.sh \
  && install_dir="/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}" \
  && if [ -d "${install_dir}/jre" ]; then echo "${install_dir}/jre" > "${install_dir}/.install4j/inst_jre.cfg"; fi \
  && sed -i "s/-Xmx768m/-Xmx${JAVA_HEAP_MB}m/" "${install_dir}/ibgateway.vmoptions" \
- && printf '%s\n' '-Djava.util.prefs.userRoot=/run/brokersre/prefs' '-Djava.io.tmpdir=/tmp' >> "${install_dir}/ibgateway.vmoptions" \
  && rm -f /tmp/setup/ibgateway.sh
 RUN curl -fsSL "${IBC_RELEASE_BASE}/${IBC_RELEASE_TAG}/IBCLinux-${IBC_VERSION}.zip" -o /tmp/setup/ibc.zip \
  && echo "${IBC_SHA256}  /tmp/setup/ibc.zip" | sha256sum -c - \

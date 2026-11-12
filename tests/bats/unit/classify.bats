@@ -65,6 +65,41 @@ teardown() {
   [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
 }
 
+@test "REAL failed login (10.50.1g): version, login dialog and exactly one failure event" {
+  # IBC logs Opened, Activated and Focused for every dialog; one dialog must be one event.
+  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-failed-login.log"
+  run bash -c "'${BROKERSRE_LIB}/classify-ibc-log.sh' < '${REAL}' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'ibc_version\nlogin_dialog\nlogin_failed_dialog' ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "login" ]
+}
+
+@test "the real fixture is labelled as real and holds only IBC lines" {
+  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-failed-login.log"
+  run head -1 "${REAL}"
+  [[ "$output" == "# REAL LOG, scrubbed"* ]]
+  run bash -c "tail -n +2 '${REAL}' | grep -c -v -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]+ IBC: '"
+  [ "$output" == "0" ]
+}
+
+@test "a dialog that IBC reports as Opened, Activated and Focused is one event" {
+  for title in "Existing session detected" "Re-login is required" "Unrecognized Username or Password"; do
+    run bash -c "printf '%s\n' \
+      '2026-11-11 23:23:04:155 IBC: detected dialog entitled: ${title}; event=Opened' \
+      '2026-11-11 23:23:04:158 IBC: detected dialog entitled: ${title}; event=Activated' \
+      '2026-11-11 23:23:04:160 IBC: detected dialog entitled: ${title}; event=Focused' \
+      | '${BROKERSRE_LIB}/classify-ibc-log.sh' | wc -l"
+    [ "$output" == "1" ]
+  done
+}
+
+@test "the Gateway main window (same title as the login window) does not reset the phase" {
+  mkdir -p "${LOG_DIR}/state"; echo logged-in > "${LOG_DIR}/state/phase"
+  run bash -c "printf '%s\n' '2026-11-11 23:23:02:900 IBC: detected frame entitled: IBKR Gateway; event=Opened' | '${BROKERSRE_LIB}/classify-ibc-log.sh'"
+  [ -z "$output" ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
+}
+
 @test "timestamps are UTC ISO-8601 with milliseconds" {
   run bash -c "printf '%s\n' '2026-11-01 09:03:07:000 IBC: Login has completed' | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .ts"
   [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$ ]]

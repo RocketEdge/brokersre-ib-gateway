@@ -126,6 +126,8 @@ jobs:
           jq --arg ch "$CHANNEL" --arg v "$REMOTE" --arg dt "$REMOTE_DT" --arg x64 "$SHA_X64" --arg arm "$SHA_ARM" \
              '.channels[$ch] = {version:$v, build_datetime:$dt, sha256:{x64:$x64, arm:$arm}}' versions.json > versions.json.new
           mv versions.json.new versions.json
+          # The README's version table is generated from versions.json (CI checks it).
+          scripts/readme-versions.sh
           rm -rf archive
           git diff --stat
       - uses: peter-evans/create-pull-request@v8.1.2
@@ -137,8 +139,11 @@ jobs:
           # setting "Allow GitHub Actions to create and approve pull requests" and does not start
           # CI by itself.
           token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
-          # Only the pin may ever be committed: never an installer (ADR 0007).
-          add-paths: versions.json
+          # Only the pin and the table generated from it may ever be committed: never an
+          # installer (ADR 0007).
+          add-paths: |
+            versions.json
+            README.md
           branch: update-${{ matrix.channel }}-to-${{ steps.cmp.outputs.remote }}
           title: "build(${{ matrix.channel }}): IB Gateway ${{ steps.cmp.outputs.local }} -> ${{ steps.cmp.outputs.remote }}"
           commit-message: "build(${{ matrix.channel }}): pin IB Gateway ${{ steps.cmp.outputs.remote }} with RocketEdge-computed SHA-256"

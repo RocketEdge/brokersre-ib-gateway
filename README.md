@@ -36,25 +36,88 @@ by or endorsed by Interactive Brokers.
 Registry: `ghcr.io/rocketedge/brokersre-ib-gateway`. The pinned versions live in
 [versions.json](versions.json).
 
+<!-- versions:start -->
 | IBKR channel | IB Gateway | IBC | Tags |
 |---|---|---|---|
-| stable | 10.50.1f | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1f` |
+| stable | 10.50.1g | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1g` |
 | latest | 10.51.1e | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.51`, `10.51.1e` |
+<!-- versions:end -->
 
-`latest` is **IBKR's channel name**, not Docker's convention; this repository never publishes a
-moving "newest build" tag under another name. In production pin the **digest** printed by the
-publish workflow and in each release's `digests-<channel>.json`.
+The table is generated from `versions.json` by `scripts/readme-versions.sh` (CI fails when it is
+stale). `latest` is **IBKR's channel name**, not Docker's convention; this repository never
+publishes a moving "newest build" tag under another name. In production pin the **digest**
+printed by the publish workflow and in each release's `digests-<channel>.json`.
 
 ## Quick start
 
-```bash
-mkdir -p secrets && printf '%s' 'your-username' > secrets/ib-username && printf '%s' 'your-password' > secrets/ib-password
-docker compose -f compose/docker-compose.example.yml up -d
-docker compose -f compose/docker-compose.example.yml logs -f   # JSON events; raw IBC log is on the ibgw-logs volume
+You need Docker with Linux containers (Docker Desktop on Windows or macOS, Docker Engine on
+Linux), a clone of this repository, and an IBKR username used by nothing else: IBKR allows one
+session per username. The example starts in **paper** mode with the read-only API.
+
+### 1. Store the two secrets as files
+
+The secret files live in `compose/secrets/` (ignored by git). Write them as UTF-8 **without** a
+byte-order mark. On Windows do not use `>` or `echo`: Windows PowerShell 5.1 writes UTF-16 that
+way, and the gateway refuses such a file (`secret_unreadable`) rather than send IBKR a wrong
+password.
+
+Windows (PowerShell 5.1 or 7), from the repository folder:
+
+```powershell
+New-Item -ItemType Directory -Force compose\secrets | Out-Null
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText("$PWD\compose\secrets\ib-username", (Read-Host 'IBKR username'), $utf8)
+$secure = Read-Host 'IBKR password' -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try { [IO.File]::WriteAllText("$PWD\compose\secrets\ib-password", [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr), $utf8) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 ```
 
-Acknowledge the IB Key prompt on your device when the `twofa_dialog` event appears. The API is
-then reachable on the published port (`4001` live, `4002` paper by default in the example).
+Linux, macOS, WSL or Git Bash:
+
+```bash
+mkdir -p compose/secrets
+read -r -p 'IBKR username: ' u && printf '%s' "$u" > compose/secrets/ib-username
+read -r -s -p 'IBKR password: ' p && printf '%s' "$p" > compose/secrets/ib-password && echo
+unset u p
+```
+
+You should see two files, `compose/secrets/ib-username` and `compose/secrets/ib-password`, and
+the password never appeared on screen.
+
+### 2. Start the gateway
+
+```bash
+docker compose -f compose/docker-compose.example.yml up -d
+docker compose -f compose/docker-compose.example.yml logs -f
+```
+
+You should see JSON events ending with `ibc_starting`, `ibc_version` and `login_dialog`. If IBKR
+asks for a second factor, the event `twofa_dialog` appears: approve the prompt in IBKR Mobile.
+The image never answers a second factor for you. Stop following the log with Ctrl+C.
+
+### 3. Check that it is logged in
+
+```bash
+docker compose -f compose/docker-compose.example.yml exec ib-gateway cat /var/log/ibgateway/state/phase
+docker compose -f compose/docker-compose.example.yml ps
+```
+
+You should see `logged-in`, and `(healthy)` in the status column. The API is then reachable on
+`127.0.0.1:4002` (paper) or `127.0.0.1:4001` (live). While the phase is `login` or
+`2fa-pending` the container reports `unhealthy` on purpose.
+
+### 4. If it does not log in
+
+| You see | Cause | Fix |
+|---|---|---|
+| event `secret_unreadable` and the container stops | A secret file is empty or UTF-16 | Write it again with the commands in step 1 |
+| event `login_failed_dialog`, phase stays `login` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
+| event `existing_session` | The username is logged in somewhere else | Close the other session, or use a dedicated username |
+| event `dirs_not_writable` | A tmpfs or volume is not writable by uid 1000 | Keep the `uid=1000,gid=1000` mount options of the example |
+
+To go live, set `TRADING_MODE=live` (and `READ_ONLY_API=no` only if your strategy places
+orders), pin the image by digest, and read [Security posture](#security-posture).
 
 ## Environment variables
 

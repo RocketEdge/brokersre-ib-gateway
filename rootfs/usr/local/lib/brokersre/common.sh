@@ -7,8 +7,56 @@
 # shellcheck source=/dev/null
 source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
 
+# secret_refused FILE_VAR REASON: stop with the secret_unreadable event. The message names the
+# variable and the reason, never the file's content.
+secret_refused() {
+  log_event entrypoint error secret_unreadable "$1 $2"
+  exit 1
+}
+
+# read_secret_file FILE_VAR PATH: read one secret from PATH into the global SECRET_VALUE.
+#
+# Contract: on return SECRET_VALUE holds the secret exactly as the user typed it; on any doubt
+# the container stops (secret_unreadable) instead of logging in with a corrupted password, since
+# repeated bad logins can lock an IBKR account. Runs in the caller's shell (never in a command
+# substitution), so the exit really ends the entrypoint and nothing is captured from stdout.
+#
+# Secret files written on Windows are the reason for the normalisation:
+#   - Notepad and Set-Content end the file with CR LF: trailing CR and LF bytes are removed;
+#   - "UTF-8 with BOM" starts the file with EF BB BF: the byte-order mark is removed;
+#   - Windows PowerShell 5.1 `>` and Out-File write UTF-16: that cannot be a valid secret file
+#     (every second byte is NUL), so it is refused with the fix in the message.
+# Bytes inside the secret (spaces, `$`, `*`, backslashes, non-ASCII UTF-8) are kept as they are.
+read_secret_file() {
+  local file_var="$1" path="$2" probe
+  # Byte semantics for the prefix and suffix tests below, whatever locale the container has.
+  local LC_ALL=C
+  SECRET_VALUE=""
+  if [ ! -f "${path}" ] || [ ! -r "${path}" ]; then
+    secret_refused "${file_var}" "points at an unreadable file"
+  fi
+  # `read -d ''` succeeds only when it meets a NUL byte; UTF-16 text always contains one.
+  if IFS= read -r -d '' probe <"${path}"; then
+    secret_refused "${file_var}" "is not a UTF-8 text file (it contains NUL bytes, so it is probably UTF-16 written by Windows PowerShell '>' or Out-File); write it as UTF-8 without a byte-order mark"
+  fi
+  probe="$(<"${path}")"
+  case "${probe}" in
+    $'\xff\xfe'* | $'\xfe\xff'*)
+      secret_refused "${file_var}" "starts with a UTF-16 byte-order mark; write it as UTF-8 without a byte-order mark"
+      ;;
+  esac
+  probe="${probe#$'\xef\xbb\xbf'}"
+  while [[ "${probe}" == *$'\r' || "${probe}" == *$'\n' ]]; do
+    probe="${probe%?}"
+  done
+  if [ -z "${probe}" ]; then
+    secret_refused "${file_var}" "points at an empty file"
+  fi
+  SECRET_VALUE="${probe}"
+}
+
 # file_env VAR [DEFAULT]: populate $VAR from $VAR_FILE if set (Docker secrets), refusing the
-# ambiguous case where both are set.
+# ambiguous case where both are set. A value read from a file is normalised by read_secret_file.
 file_env() {
   local var="$1" file_var="${1}_FILE" default="${2:-}"
   if [ -n "${!var:-}" ] && [ -n "${!file_var:-}" ]; then
@@ -19,11 +67,9 @@ file_env() {
   if [ -n "${!var:-}" ]; then
     value="${!var}"
   elif [ -n "${!file_var:-}" ]; then
-    if [ ! -r "${!file_var}" ]; then
-      log_event entrypoint error secret_unreadable "${file_var} points at an unreadable file"
-      exit 1
-    fi
-    value="$(<"${!file_var}")"
+    read_secret_file "${file_var}" "${!file_var}"
+    value="${SECRET_VALUE}"
+    unset SECRET_VALUE
   fi
   export "${var}=${value}"
 }

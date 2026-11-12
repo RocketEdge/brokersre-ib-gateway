@@ -29,6 +29,7 @@ if command -v cygpath >/dev/null 2>&1; then host_secrets="$(cygpath -m "${secret
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
   docker rm -f ibgw-test >/dev/null 2>&1 || true
+  docker volume rm ibgw-test-settings ibgw-test-logs >/dev/null 2>&1 || true
   rm -rf "${secrets_dir}"
 }
 trap cleanup EXIT
@@ -107,13 +108,29 @@ fi
 docker rm -f ibgw-test >/dev/null 2>&1 || true
 docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
 
-echo "== IBC smoke (offline, --network none) =="
-run_container --network none
+echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) =="
+# The reference compose runs read-only with every capability dropped, so the smoke test does
+# too: IBC and the Gateway JVM must start in exactly that configuration.
+docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
+run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
 if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
   fail "ibc smoke" "7462 never listened"
   docker logs ibgw-test | tail -30
 fi
 if in_container 'pgrep -f ibcalpha.ibc >/dev/null'; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
+# A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
+# Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
+if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -qx "_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home"'; then
+  pass "Gateway JVM gets a user.home on the settings volume"
+else
+  fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
+fi
+if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
+  pass "Java home exists, is writable and private (0700) under a read-only root"
+else
+  fail "java home dir" "missing, not writable or not 0700"
+fi
 if in_container 'test -s /var/log/ibgateway/ibc/ibc.log'; then pass "raw IBC log captured to the volume"; else fail "ibc log" "empty"; fi
 if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh'; then fail "healthcheck" "reported healthy without a login"; else pass "healthcheck honestly unhealthy before login"; fi
 docker stop -t 90 ibgw-test >/dev/null 2>&1 &
@@ -124,6 +141,37 @@ if docker logs ibgw-test 2>&1 | grep -q '"event":"shutdown_complete"'; then pass
   fail "shutdown event" "missing"
   docker logs ibgw-test 2>&1 | tail -5
 fi
+
+echo "== reference compose (compose/docker-compose.example.yml) =="
+# The example is what users copy, so it is tested as shipped: its hardening settings are
+# asserted on the rendered configuration and the stack is started from it (without IBC).
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+compose_file="${repo_root}/compose/docker-compose.example.yml"
+if command -v cygpath >/dev/null 2>&1; then compose_file="$(cygpath -m "${compose_file}")"; fi
+compose_ref() { IBGW_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no docker compose -p ibgw-ref-test -f "${compose_file}" "$@"; }
+rendered="$(compose_ref config --format json 2>/dev/null)"
+compose_has() { # description jq-filter
+  if printf '%s' "${rendered}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e ".services[\"ib-gateway\"] | $2" >/dev/null 2>&1; then pass "compose: $1"; else fail "compose" "$1"; fi
+}
+compose_has "read-only root filesystem" '.read_only == true'
+compose_has "every capability dropped" '.cap_drop == ["ALL"]'
+compose_has "no-new-privileges" '.security_opt | index("no-new-privileges:true") != null'
+compose_has "stop_grace_period of at least 90 s (the entrypoint waits 60 s for IBC to log out)" '.stop_grace_period | test("^(1m30s|[2-9]m|1m[3-5][0-9]s)")'
+compose_has "open-file limit raised to 65536" '.ulimits.nofile.soft == 65536 and .ulimits.nofile.hard == 65536'
+compose_has "process limit set" '.pids_limit > 0'
+compose_has "container log size capped" '.logging.options["max-size"] != null and .logging.options["max-file"] != null'
+compose_has "API ports published on loopback by default" '[.ports[] | .host_ip] | all(. == "127.0.0.1")'
+compose_ref down -v >/dev/null 2>&1 || true
+if compose_ref up -d >/dev/null 2>&1 \
+  && wait_for 60 bash -c "docker inspect -f '{{.State.Health.Status}}' ibgw-ref-test-ib-gateway-1 2>/dev/null | grep -qx healthy \
+    || docker exec ibgw-ref-test-ib-gateway-1 bash -c 'TRADING_MODE=paper IBC_LAUNCH=no /usr/local/lib/brokersre/healthcheck.sh'"; then
+  pass "compose: the example starts as shipped (hardened, test mode) and is healthy"
+else
+  fail "compose up" "$(compose_ref logs 2>&1 | tail -5)"
+fi
+s_start=${SECONDS}
+compose_ref down -v >/dev/null 2>&1 || true
+if [ $((SECONDS - s_start)) -lt 60 ]; then pass "compose: down completes inside the grace period"; else fail "compose down" "took $((SECONDS - s_start)) s"; fi
 
 echo "== command server disabled =="
 run_container --network none -e IBC_COMMAND_SERVER_PORT=0

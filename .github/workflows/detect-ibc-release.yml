@@ -39,6 +39,8 @@ jobs:
           sha=$(sha256sum "/tmp/ibc/IBCLinux-${version}.zip" | cut -d' ' -f1)
           jq --arg v "$version" --arg t "$tag" --arg s "$sha" '.ibc.version=$v | .ibc.release_tag=$t | .ibc.sha256=$s' versions.json > versions.json.new
           mv versions.json.new versions.json
+          # The README's version table is generated from versions.json (CI checks it).
+          scripts/readme-versions.sh
           echo "sha=$sha" >> "$GITHUB_ENV"
           git diff --stat
       - uses: peter-evans/create-pull-request@v8.1.2

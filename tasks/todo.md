@@ -21,3 +21,14 @@
 - [x] `latest` re-pinned to IBKR's 2026-11-05 re-upload of 10.51.1e (owner decision 2026-11-10); `fetch-installer.sh` verified on amd64 and arm64
 - [x] Follow-up: `detect-releases.yml` compares only `buildVersion`; also compare the installers' SHA-256 so a same-version re-upload opens a pull request (IBKR re-uploaded 10.51.1e on 2026-11-05) — done 2026-11-11 as an `ibkr-reupload` issue (ADR 0009)
 - [ ] Follow-up: a push-triggered `publish.yml` publishes both channels; publish only the channels whose `versions.json` entry changed (a `latest`-only re-pin republished `stable` too)
+
+## Roadmap P0 (2026-11-12, branch `feat/p0-windows-safe-start`)
+
+- [x] First real login attempt (operator-run, paper, 10.50.1g): read-only login hang root-caused and fixed (`java-env.sh`, `_JAVA_OPTIONS`); L01 to L03 partly resolved
+- [x] Windows-written secret files (CR/LF, UTF-8 BOM accepted; UTF-16 and empty refused); credentials escaped for IBC's `.properties` parser
+- [x] Classifier patterns checked against a real log (login window title, one event per dialog); real scrubbed fixture added
+- [x] VNC password out of the process list; log rotation (`rotating-append.sh`) and a restart-safe mirror
+- [x] Reference compose hardened and started as shipped by the container suite; quick start rewritten for Windows and Linux; README version table generated from `versions.json`
+- [ ] Repeat the paper login with working credentials: record a successful session, second-factor prompt, daily restart and competing session; extend the real fixtures; close L01 to L03
+- [ ] Paired change in the BrokerSRE agent: its copy of the IBC patterns carries the same two wrong assumptions (login window title, three log lines per dialog)
+- [ ] Next: log contract v2 (events and metrics on the log volume, `needs-human` phase), preflight `doctor`, relay gated on login, runtime heap
