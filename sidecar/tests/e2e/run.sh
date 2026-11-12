@@ -181,7 +181,18 @@ fi
 
 echo
 echo "--- what the receiver saw:"
-docker logs "${RC}" 2>&1 | grep -o '"class":"[a-z_]*","kind":"[a-z]*"\|^PING' | sort | uniq -c
+docker logs "${RC}" 2>&1 | docker run --rm -i --entrypoint python "${SC_IMAGE}" -c '
+import collections, json, sys
+seen = collections.Counter()
+for line in sys.stdin:
+    if line.startswith("POST "):
+        message = json.loads(line[5:])
+        seen[message["class"] + " " + message["kind"] + " (" + message["severity"] + ")"] += 1
+    else:
+        seen[line.split()[0]] += 1
+for what, count in sorted(seen.items()):
+    print(f"{count:4d}  {what}")
+'
 echo
 if [ "${failures}" -eq 0 ]; then echo "END-TO-END PASSED"; else echo "${failures} END-TO-END CHECK(S) FAILED"; fi
 exit "${failures}"
