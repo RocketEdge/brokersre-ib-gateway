@@ -24,7 +24,21 @@ source "${BROKERSRE_LIB}/java-env.sh"
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/start-ibc.sh"
 
-IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID=""
+IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID="" SAMPLER_PID=""
+
+# stop_sampler: end the resource sampler and give it up to 8 s to write its last sample.
+# The last sample matters: when the kernel's OOM killer took the Gateway, the counter that
+# says so is only visible until this container's cgroup is gone.
+stop_sampler() {
+  if [ -n "${SAMPLER_PID}" ] && kill -0 "${SAMPLER_PID}" 2>/dev/null; then
+    kill "${SAMPLER_PID}" 2>/dev/null || true
+    for _ in $(seq 1 80); do
+      kill -0 "${SAMPLER_PID}" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  SAMPLER_PID=""
+}
 
 # shellcheck disable=SC2317,SC2329  # invoked through the TERM/INT trap, which shellcheck cannot follow
 shutdown() {
@@ -43,6 +57,7 @@ shutdown() {
     done
     if kill -0 "${IBC_PID}" 2>/dev/null; then kill -KILL "${IBC_PID}" 2>/dev/null || true; fi
   fi
+  stop_sampler
   for p in "${TAIL_PID}" "${SOCAT_PID}" "${VNC_PID}" "${XVFB_PID}"; do
     if [ -n "${p}" ]; then kill "${p}" 2>/dev/null || true; fi
   done
@@ -79,6 +94,10 @@ start_vnc
 start_socat
 "${BROKERSRE_LIB}/tail-gateway-logs.sh" &
 TAIL_PID=$!
+# Resource sampler: metrics/metrics.jsonl plus the oom_kill, disk_low, login_stalled and
+# memory_high events. Started after render_config, so no secret is left in its environment.
+"${BROKERSRE_LIB}/sampler.sh" &
+SAMPLER_PID=$!
 
 if [ "${IBC_LAUNCH}" = "no" ]; then
   log_event entrypoint warn ibc_not_launched "IBC_LAUNCH=no: IBC and IB Gateway are NOT started (test mode)"
@@ -103,5 +122,6 @@ if [ "$(current_phase)" = "needs-human" ]; then
     wait $! 2>/dev/null || true
   done
 fi
+stop_sampler
 set_phase exited
 exit "${rc}"

@@ -66,7 +66,7 @@ labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencon
 if [[ "${labels}" == MIT\ 3.* ]]; then pass "OCI labels present (${labels})"; else fail "labels" "${labels}"; fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="
-run_container -e IBC_LAUNCH=no
+run_container -e IBC_LAUNCH=no -e SAMPLE_INTERVAL_S=2
 if wait_for 30 port_open 4004; then pass "socat relay listening on 4004"; else
   fail "relay" "4004 not listening"
   docker logs ibgw-test | tail -20
@@ -96,6 +96,18 @@ if in_container 'b=$(cat /var/log/ibgateway/state/boot_id); [[ "${b}" =~ ^[0-9a-
   pass "every event carries the boot id and the sequence 1..n without a gap"
 else
   fail "boot id / seq" "missing boot id or a gap in seq"
+fi
+# The resource sampler reads this container's own cgroup and /proc (no Docker socket): a real
+# kernel must give it plausible numbers, and the sample carries this start's boot id.
+if wait_for 20 in_container 'b=$(cat /var/log/ibgateway/state/boot_id); tail -1 /var/log/ibgateway/metrics/metrics.jsonl | jq -e --arg b "${b}" ".src == \"metrics\" and .boot_id == \$b and .seq >= 1 and .phase == \"test-mode\" and .mem_working_set_bytes > 0 and .pids > 0" >/dev/null'; then
+  pass "metrics/metrics.jsonl has a sample with real memory and process numbers"
+else
+  fail "sampler" "no valid sample: $(in_container 'tail -1 /var/log/ibgateway/metrics/metrics.jsonl 2>/dev/null | cut -c1-200')"
+fi
+if in_container 'p=$(pgrep -f sampler.sh | head -1); test -n "${p}" && ! tr "\0" "\n" <"/proc/${p}/environ" | grep -q -e "^TWS_PASSWORD=" -e "^TWS_USERID="'; then
+  pass "the sampler runs without any credential in its environment"
+else
+  fail "sampler environment" "sampler not running or a credential is in its environment"
 fi
 
 echo "== read-only root filesystem =="
