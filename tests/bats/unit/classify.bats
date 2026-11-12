@@ -34,7 +34,9 @@ teardown() {
   [ "$status" -eq 0 ]
   # One event per thing that happened: the Re-login dialog and IBC's "Re-login to session" are
   # one re-login, and IBC's stop message ("Login has completed: exiting via ...") is no login.
-  expected=$'ibc_version\nlogin_dialog\ntwofa_initiated\ntwofa_dialog\nlogin_completed\ndaily_restart\nlogin_completed\nexisting_session\nrelogin_required\nlogin_failed_dialog\nlogin_failed\nlogin_completed'
+  # A rejected login is recorded (login_latch_set) and the next completed login removes the
+  # record (login_latch_cleared): login-latch.bats covers that pair.
+  expected=$'ibc_version\nlogin_dialog\ntwofa_initiated\ntwofa_dialog\nlogin_completed\ndaily_restart\nlogin_completed\nexisting_session\nrelogin_required\nlogin_failed_dialog\nlogin_latch_set\nlogin_failed\nlogin_completed\nlogin_latch_cleared'
   [ "$output" == "$expected" ]
 }
 
@@ -73,7 +75,8 @@ teardown() {
   REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-failed-login.log"
   run bash -c "'${BROKERSRE_LIB}/classify-ibc-log.sh' < '${REAL}' | jq -r .event"
   [ "$status" -eq 0 ]
-  [ "$output" == $'ibc_version\nlogin_dialog\nlogin_failed_dialog' ]
+  # The rejection is one event; login_latch_set says that it was recorded for later starts.
+  [ "$output" == $'ibc_version\nlogin_dialog\nlogin_failed_dialog\nlogin_latch_set' ]
   # IBC leaves the rejected-credentials dialog open and never retries: a person must act.
   [ "$(cat "${LOG_DIR}/state/phase")" == "needs-human" ]
 }
@@ -229,7 +232,8 @@ classify() {
       '2026-11-11 23:23:04:155 IBC: detected dialog entitled: ${title}; event=Opened' \
       '2026-11-11 23:23:04:158 IBC: detected dialog entitled: ${title}; event=Activated' \
       '2026-11-11 23:23:04:160 IBC: detected dialog entitled: ${title}; event=Focused' \
-      | '${BROKERSRE_LIB}/classify-ibc-log.sh' | wc -l"
+      | '${BROKERSRE_LIB}/classify-ibc-log.sh' | grep -c -v '\"event\":\"login_latch_set\"'"
+    # The dialog itself is one event (the record of a rejection is a second, different one).
     [ "$output" == "1" ]
   done
 }

@@ -49,3 +49,10 @@
 - [x] Workflow `qualify-paper.yml` (manual, by digest, from `main`), ADR 0014; GitHub environment `paper-qualification` created (required reviewer, `main` only, secrets `PAPER_USERID` and `PAPER_PASSWORD`)
 - [ ] First qualified run: needs paper credentials that IBKR accepts (the first attempt on 2026-11-12 was rejected); then update the environment secrets and dispatch the workflow
 - [ ] After three recorded passes: move `stable` only after a `qualified-paper` attestation exists
+
+## Roadmap P3: rejected-login latch (2026-11-12, branch `feat/p3-login-latch`)
+
+- [x] `login-latch.sh`: record IBKR's rejection on the log volume, hold later starts with the same secret files (no IBC, phase `needs-human`), release when a secret file is rewritten; ADR 0016
+- [x] Preflight check `login_latch`; events `login_latch_set`, `login_rejected_latched`, `login_latch_cleared`, `login_latch_unreadable`
+- [ ] Observe one real cycle: rejection, corrected secret file, login (L18)
+- [ ] Real logs of other rejections (expired password, locked account) and whether they need the latch too (L18)

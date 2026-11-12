@@ -29,8 +29,23 @@ source "${BROKERSRE_LIB}/start-socat.sh"
 source "${BROKERSRE_LIB}/java-env.sh"
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/start-ibc.sh"
+# shellcheck source=/dev/null
+source "${BROKERSRE_LIB}/login-latch.sh"
 
 IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID="" SAMPLER_PID=""
+
+# hold_for_human: keep the container up, in the phase it has, until it is stopped.
+#
+# For the states in which only a person can go on (phase needs-human). Exiting instead would
+# hand the container to its restart policy, which starts the next login at once, and the next:
+# exactly what those states must prevent. The container stays up and unhealthy; SIGTERM still
+# runs the normal shutdown through the trap. Never returns.
+hold_for_human() {
+  while true; do
+    sleep 3600 &
+    wait $! 2>/dev/null || true
+  done
+}
 
 # stop_sampler: ask the sampler for its last sample and wait for it, at most 6 s.
 #
@@ -114,6 +129,25 @@ elif [ "${doctor_status}" -ne 0 ]; then
   log_event doctor warn doctor_warning "the preflight could not run or ended abnormally (exit status ${doctor_status}); the start continues"
 fi
 
+# Rejected-login latch (login-latch.sh): when IBKR rejected these very credentials at an
+# earlier start, do not send them again. The fingerprint (modification times of the secret
+# files, never their content) is taken here, while the credential variables still exist, and
+# exported for the classifier, which records a rejection of this start under it.
+LOGIN_CRED_FINGERPRINT="$(credential_fingerprint)"
+export LOGIN_CRED_FINGERPRINT
+if [ "${IBC_LAUNCH}" != "no" ] && login_latch_apply; then
+  set_phase needs-human
+  log_event entrypoint error login_rejected_latched "IBKR rejected these credentials at ${LOGIN_LATCH_SINCE} and the secret files have not changed since, so no login is attempted. Correct the secret files and start the container again (credentials passed as variables: set LOGIN_LATCH=clear for one start)"
+  # No login means no configuration is rendered, which is where the credentials normally
+  # leave this shell: drop them here, before the one child of this state starts.
+  unset TWS_USERID TWS_PASSWORD VNC_SERVER_PASSWORD
+  # The resource samples go on, so a reader of the log volume sees a gateway that is up and
+  # waiting, not one that fell silent.
+  "${BROKERSRE_LIB}/sampler.sh" &
+  SAMPLER_PID=$!
+  hold_for_human
+fi
+
 set_ports
 render_config
 # Before any helper starts: a Java home that cannot be written must stop the container here,
@@ -147,10 +181,7 @@ if [ "$(current_phase)" = "needs-human" ]; then
   # unhealthy, with the phase needs-human, until a person restarts it; SIGTERM still runs the
   # normal shutdown through the trap.
   log_event entrypoint error needs_human "IBC has stopped and the gateway waits for a person; restart the container to log in again"
-  while true; do
-    sleep 3600 &
-    wait $! 2>/dev/null || true
-  done
+  hold_for_human
 fi
 stop_sampler
 set_phase exited

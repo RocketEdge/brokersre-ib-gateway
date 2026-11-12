@@ -46,7 +46,11 @@ All of these must be green before claiming a change done; run them fresh.
 6. **Honest health**: unhealthy while not logged in, including during a pending 2FA; nothing in
    this image restarts the Gateway on its own. The second-factor cap (`TWOFA_MAX_PROMPTS`)
    stops IBC and holds the container in phase `needs-human`; it never restarts, answers or
-   bypasses anything.
+   bypasses anything. The rejected-login latch (`login-latch.sh`, ADR 0016) does the same at
+   a start whose secret files IBKR already rejected: no IBC, phase `needs-human`, container
+   held. A state that needs a person holds the container; it never exits into the restart
+   policy. The latch stores the modification times of the secret files as a hash, never
+   anything derived from a credential.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
@@ -70,7 +74,7 @@ Dockerfile                 two-stage build; ARGs come from docker-bake.hcl <- ve
 docker-bake.hcl            targets stable/latest, tags, labels; scripts/bake-env.sh exports variables
 scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first)
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
-rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
+rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
 scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
@@ -159,3 +163,10 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - ib_async 2.1.0: `readonly=True` still requests positions; `IB._onError` opens an
   account-summary subscription on every 1102; `timeout` applies per connect step; its loggers
   print IBKR's message text. The Python sample works around each (see its docstrings).
+- `pgrep -f <text>` inside `bash -c '...'` (and so inside `docker exec ... bash -c`) matches the
+  very shell that runs it: such a check can never fail. Look for the process by exact name
+  (`pgrep -x java`) and read its `/proc/<pid>/cmdline`, or write the pattern as `[s]ampler.sh`.
+  Found when a new test failed for that reason and an old one turned out to pass for it.
+- Adding a preflight check changes the count in about ten assertions of `doctor.bats` (rows,
+  "n passed", indexes into the event list) and the list in `docs/log-contract.md`; a new
+  variable goes into `doctor.sh`, `docs/env-vars.md` and `scripts/migrate-from-gnzsnz.sh`.

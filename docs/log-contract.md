@@ -51,6 +51,15 @@ reader must ignore keys and events it does not know.
 `ibc_starting`, `ibc_not_launched`, `ibc_exited`, `needs_human`, `shutdown_requested`,
 `shutdown_complete`.
 
+Rejected-login latch ([ADR 0016](adr/0016-rejected-login-latch.md)):
+
+| Event | Level | Source | When |
+|---|---|---|---|
+| `login_latch_set` | warn | `ibc` | right after `login_failed_dialog`: the rejection was recorded in `state/login-rejected` |
+| `login_rejected_latched` | error | `entrypoint` | at a start: IBKR rejected these secret files before and they have not changed. No login is attempted, phase `needs-human`, the container stays up |
+| `login_latch_cleared` | info | `entrypoint` or `ibc` | the record was removed: a secret file was rewritten, `LOGIN_LATCH=clear` is set, or a login completed |
+| `login_latch_unreadable` | warn | `entrypoint` | a record that could not be read was removed; the start continues |
+
 ### Events classified from IBC's output (`rootfs/etc/brokersre/ibc-patterns.tsv`)
 
 | Event | Level | Phase set | Source line pattern | Evidence |
@@ -87,8 +96,9 @@ prompts by `twofa_initiated`.
 | `doctor_warning` | warn | once per warning of a check other than `ignored_variables` (for example a `TIME_ZONE` that cannot be verified, a heap above 75 % of the memory limit, free disk below `DISK_MIN_FREE_PCT`), once per check that crashed, and once when the preflight could not run at all. Never stops a start |
 | `config_deprecated` | warn (error with `STRICT_ENV=yes`) | once per ignored or unknown variable; msg `ignored_variables: <NAME> is ignored: <reason> (fix: <replacement>)` |
 
-Check names: `trading_mode`, `credentials`, `secret_values`, `auto_restart_time`,
-`restart_window`, `time_zone`, `ignored_variables`, `writable_dirs`, `heap_vs_memory`,
+Check names: `trading_mode`, `credentials`, `secret_values`, `login_latch`,
+`auto_restart_time`, `restart_window`, `time_zone`, `ignored_variables`, `writable_dirs`,
+`heap_vs_memory`,
 `read_only_api`, `relay_exposure`, `disk_space`, and with `--online` `ibkr_reachable`.
 `doctor --json` prints one document:
 `{"schema":"brokersre.doctor.v1","result":"pass|warn|fail","checks":[{"name","status","detail","fix"}]}`.
@@ -124,7 +134,7 @@ line of IBC's output still becomes an event but no longer moves the phase.
 | `logged-in` | login completed; the API is expected to be usable |
 | `restarting` | daily restart in progress |
 | `existing-session` | another session of the same username exists |
-| `needs-human` | nothing will change until a person acts: IBKR rejected the login, or the second factor was not approved after `TWOFA_MAX_PROMPTS` prompts. The container stays up and unhealthy; it does not exit, so a restart policy cannot start another login |
+| `needs-human` | nothing will change until a person acts: IBKR rejected the login (in this start, or in an earlier one with the same secret files: `login_rejected_latched`), or the second factor was not approved after `TWOFA_MAX_PROMPTS` prompts. The container stays up and unhealthy; it does not exit, so a restart policy cannot start another login |
 | `stopping`, `stopped` | graceful shutdown |
 | `exited` | IBC exited on its own |
 | `test-mode` | `IBC_LAUNCH=no` |
@@ -143,6 +153,7 @@ fires. Decide "a person is needed" from the events: a `twofa_initiated` without 
 | Path | Writer | Content |
 |---|---|---|
 | `state/phase`, `state/boot_id` | entrypoint, classifier | see above (`state/.phase.lock` is the writers' lock; it carries no information) |
+| `state/login-rejected` | classifier; removed by the entrypoint or the classifier | present while a rejected login is on record: one line `v1 <fingerprint> <UTC time>`. The fingerprint is `files:<16 hex>` (from the modification times of the secret files), `env`, `none` or `unknown`; it holds no part of a credential |
 | `events/events.jsonl` | every component, through `log.sh` | the events, identical to stdout |
 | `metrics/metrics.jsonl` | `sampler.sh` | one resource sample per line (below) |
 | `ibc/ibc.log` | `rotating-append.sh` behind IBC's stdout | raw IBC log, appended across restarts |

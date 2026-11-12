@@ -22,6 +22,7 @@ flowchart LR
 flowchart TB
   tini["tini (PID 1)"] --> ep["entrypoint.sh"]
   ep --> doctor["doctor.sh --startup: preflight; a failed check stops the start before any login"]
+  ep --> latch["login-latch.sh: IBKR rejected these secret files before? Then no IBC: phase needs-human, container held"]
   ep --> render["render-config.sh: _FILE secrets -> /run/brokersre/config.ini (0600); jts.ini on first start"]
   ep --> javaenv["java-env.sh: _JAVA_OPTIONS (writable user.home, heap)"]
   ep --> xvfb["Xvfb :1"]
