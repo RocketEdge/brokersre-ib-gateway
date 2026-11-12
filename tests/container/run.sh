@@ -151,6 +151,31 @@ else
   fail "preflight non-strict" "$(docker logs ibgw-test 2>&1 | tail -4 | cut -c1-300)"
 fi
 
+# A defect of the preflight itself must never stop a gateway. A stand-in doctor that ends with
+# status 1 but leaves no verdict (as an aborted script would) is mounted over the real one: the
+# container must start anyway and say that the preflight ended abnormally.
+fake_doctor="$(mktemp -d)"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"${fake_doctor}/doctor.sh"
+chmod 0755 "${fake_doctor}" "${fake_doctor}/doctor.sh"
+host_fake_doctor="${fake_doctor}"
+if command -v cygpath >/dev/null 2>&1; then host_fake_doctor="$(cygpath -m "${fake_doctor}")"; fi
+run_container -e IBC_LAUNCH=no -v "${host_fake_doctor}/doctor.sh:/usr/local/lib/brokersre/doctor.sh:ro"
+if wait_for 30 port_open 4004 \
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_warning"' | grep -q 'ended abnormally (exit status 1)'; then
+  pass "a preflight that aborts (status 1, no verdict) does not stop the start; it is reported"
+else
+  fail "preflight abort" "exit=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
+docker rm -f ibgw-test >/dev/null 2>&1 || true
+rm -rf "${fake_doctor}"
+# The real preflight leaves its verdict where the entrypoint looks for it.
+run_container -e IBC_LAUNCH=no -e AUTO_RESTART_TIME='11:45 PM'
+if wait_for 30 port_open 4004 && in_container 'v=$(cat /run/brokersre/doctor.result); test "${v}" = pass || test "${v}" = warn'; then
+  pass "the preflight's verdict file holds pass or warn after a start that went ahead"
+else
+  fail "verdict file" "$(in_container 'cat /run/brokersre/doctor.result' 2>&1 | head -c 200)"
+fi
+
 echo "== read-only root filesystem =="
 # A tmpfs is root-owned 0755 unless the mount says otherwise, and the gateway runs as uid 1000;
 # the reference compose passes uid=1000,gid=1000 on every tmpfs and the harness does the same.

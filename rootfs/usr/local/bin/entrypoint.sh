@@ -95,12 +95,23 @@ log_event_data entrypoint info container_start \
   "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
 
 # Preflight (doctor.sh): name every configuration problem and its fix before anything starts.
-# A failed check stops the container here, before any login is attempted (DOCTOR_STRICT=no
-# downgrades it to a warning); a warning never stops it. It runs before render_config because
-# it inspects the secret files.
-if ! "${BROKERSRE_LIB}/doctor.sh" --startup; then
+# A start is stopped only on positive evidence that a check failed: exit status 1 AND the
+# verdict `fail` in the result file this run wrote (DOCTOR_STRICT=no turns a failure into a
+# warning and the verdict into `warn`). Any other non-zero end is a defect of the preflight
+# itself, which must never stop a gateway: it is logged and the start continues, with the
+# checks further down (dirs, credentials, Java home) still behind it.
+# It runs before render_config because it inspects the secret files.
+doctor_result_file="${DOCTOR_RESULT_FILE:-${RUN_DIR}/doctor.result}"
+doctor_status=0
+doctor_verdict=""
+rm -f "${doctor_result_file}" 2>/dev/null || true
+"${BROKERSRE_LIB}/doctor.sh" --startup || doctor_status=$?
+if [ -r "${doctor_result_file}" ]; then read -r doctor_verdict <"${doctor_result_file}" || true; fi
+if [ "${doctor_status}" -eq 1 ] && [ "${doctor_verdict}" = "fail" ]; then
   set_phase exited
   exit 1
+elif [ "${doctor_status}" -ne 0 ]; then
+  log_event doctor warn doctor_warning "the preflight could not run or ended abnormally (exit status ${doctor_status}); the start continues"
 fi
 
 set_ports
