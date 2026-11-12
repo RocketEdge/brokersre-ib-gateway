@@ -1,0 +1,4 @@
+// Deliberately wrong (test fixture): an alert query that does not state its dimensions.
+IbGwMetrics_CL
+| summarize Rows = count() by Instance
+| extend Condition = "x"

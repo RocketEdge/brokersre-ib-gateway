@@ -11,8 +11,8 @@
 //                              COMPILED Bicep template, so queries are checked against what
 //                              will really be deployed.
 //           kql directory      every *.kql file is checked. A file named alert-*.kql must also
-//                              return the string columns Instance and Condition, because the
-//                              alert rules split by exactly these dimensions.
+//                              declare its dimensions ("// Dimensions: Instance, Host, ...") and
+//                              return each of them as a string column: the rule splits by them.
 //           workbook.json      every query of the workbook is checked (tiles and drop-down
 //                              parameters); the workbook tokens {Instance} and
 //                              {TimeRange:grain} are replaced by literals first.
@@ -22,6 +22,7 @@
 using System.Text.Json;
 using Kusto.Language;
 using Kusto.Language.Symbols;
+using Kusto.Language.Syntax;
 
 if (args.Length != 3)
 {
@@ -41,6 +42,17 @@ foreach (string path in Directory.GetFiles(kqlDirectory, "*.kql").OrderBy(p => p
     string name = Path.GetFileName(path);
     bool isAlert = name.StartsWith("alert-", StringComparison.Ordinal);
     failures += Check(name, File.ReadAllText(path), globals, requireAlertColumns: isAlert);
+}
+
+// Scenarios: timelines written as let-tables that shadow the real tables, each followed (here
+// and when somebody pastes it into a query window) by the alert query it is meant for.
+string scenarioDirectory = Path.Combine(kqlDirectory, "scenarios");
+if (Directory.Exists(scenarioDirectory))
+{
+    foreach (string path in Directory.GetFiles(scenarioDirectory, "*.kql").OrderBy(p => p, StringComparer.Ordinal))
+    {
+        failures += CheckScenario(Path.GetFileName(path), File.ReadAllText(path), kqlDirectory, globals);
+    }
 }
 
 int workbookQueries = 0;
@@ -122,7 +134,7 @@ static ScalarSymbol ScalarType(string type) => type.ToLowerInvariant() switch
 /// <param name="name">Label printed for the query.</param>
 /// <param name="query">KQL text.</param>
 /// <param name="globals">Analysis context with the table schema.</param>
-/// <param name="requireAlertColumns">When true the query must return string columns Instance and Condition.</param>
+/// <param name="requireAlertColumns">When true the query must declare its alert dimensions and return each as a string column.</param>
 /// <returns>0 when the query is valid, 1 otherwise.</returns>
 static int Check(string name, string query, GlobalState globals, bool requireAlertColumns)
 {
@@ -145,7 +157,20 @@ static int Check(string name, string query, GlobalState globals, bool requireAle
         }
         else if (requireAlertColumns)
         {
-            foreach (string required in new[] { "Instance", "Condition" })
+            // The file states the dimensions its rule splits by ("// Dimensions: Instance, Host,
+            // Condition"); the Bicep module must split by exactly these (template-checks.jq).
+            string? declared = query.Split('\n')
+                .Select(l => l.Trim())
+                .FirstOrDefault(l => l.StartsWith("// Dimensions:", StringComparison.Ordinal));
+            string[] dimensions = declared is null
+                ? []
+                : declared["// Dimensions:".Length..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (dimensions.Length == 0 || !dimensions.Contains("Instance") || !dimensions.Contains("Condition"))
+            {
+                problems.Add("an alert query must declare its dimensions in a comment line, at least: // Dimensions: Instance, Condition");
+            }
+
+            foreach (string required in dimensions)
             {
                 ColumnSymbol? column = result.Columns.FirstOrDefault(c => c.Name == required);
                 if (column is null)
@@ -167,6 +192,105 @@ static int Check(string name, string query, GlobalState globals, bool requireAle
     }
 
     Console.WriteLine($"FAIL  {name}");
+    foreach (string problem in problems)
+    {
+        Console.WriteLine($"      {problem}");
+    }
+
+    return 1;
+}
+
+/// <summary>
+/// Checks one scenario file: a timeline of literal rows for an alert query, with the rows the
+/// query is expected to return.
+/// </summary>
+/// <remarks>
+/// A scenario names its query ("// Query: alert-x.kql") and its expectation ("// Expect: a|b|c",
+/// one line per expected row with the values of the rule's dimensions, or "// Expect: (no rows)").
+/// The scenario followed by the query must be valid KQL, and the let-tables that stand in for
+/// the real tables may only use columns the deployed tables have, with the same types; otherwise
+/// a scenario could pass on a column that does not exist. The expectation itself is NOT
+/// evaluated here: that needs a Kusto engine (the emulator, or the workspace after deployment).
+/// </remarks>
+/// <param name="name">File name of the scenario.</param>
+/// <param name="scenario">Text of the scenario file.</param>
+/// <param name="kqlDirectory">Directory that holds the alert query files.</param>
+/// <param name="globals">Analysis context with the table schema.</param>
+/// <returns>0 when the scenario is well-formed, 1 otherwise.</returns>
+static int CheckScenario(string name, string scenario, string kqlDirectory, GlobalState globals)
+{
+    string label = $"scenario: {name}";
+    string[] lines = scenario.Split('\n').Select(l => l.Trim()).ToArray();
+    string? queryFile = lines.FirstOrDefault(l => l.StartsWith("// Query:", StringComparison.Ordinal))?["// Query:".Length..].Trim();
+    List<string> expectations = lines
+        .Where(l => l.StartsWith("// Expect:", StringComparison.Ordinal))
+        .Select(l => l["// Expect:".Length..].Trim())
+        .ToList();
+    List<string> problems = [];
+    if (queryFile is null || !File.Exists(Path.Combine(kqlDirectory, queryFile)))
+    {
+        problems.Add("a scenario must name an existing query file: // Query: alert-x.kql");
+    }
+
+    if (expectations.Count == 0)
+    {
+        problems.Add("a scenario must say what it expects: // Expect: <dimension values separated by |>, or // Expect: (no rows)");
+    }
+
+    if (problems.Count == 0)
+    {
+        string query = File.ReadAllText(Path.Combine(kqlDirectory, queryFile!));
+        string combined = scenario + "\n" + query;
+        int dimensions = query.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.StartsWith("// Dimensions:", StringComparison.Ordinal))
+            .Select(l => l["// Dimensions:".Length..].Split(',', StringSplitOptions.RemoveEmptyEntries).Length)
+            .FirstOrDefault();
+        foreach (string expectation in expectations.Where(e => e != "(no rows)"))
+        {
+            if (expectation.Split('|').Length != dimensions)
+            {
+                problems.Add($"expectation '{expectation}' must have {dimensions} values, one per dimension of {queryFile}");
+            }
+        }
+
+        KustoCode code = KustoCode.ParseAndAnalyze(combined, globals);
+        foreach (LetStatement let in code.Syntax.GetDescendants<LetStatement>())
+        {
+            string letName = let.Name.SimpleName;
+            TableSymbol? deployed = globals.Database.Tables.FirstOrDefault(t => t.Name == letName);
+            if (deployed is null)
+            {
+                continue;
+            }
+
+            if (let.Expression is not Expression expression || expression.ResultType is not TableSymbol shadow)
+            {
+                problems.Add($"{letName} must be a table");
+                continue;
+            }
+
+            foreach (ColumnSymbol column in shadow.Columns)
+            {
+                ColumnSymbol? deployedColumn = deployed.Columns.FirstOrDefault(c => c.Name == column.Name);
+                if (deployedColumn is null)
+                {
+                    problems.Add($"{letName}.{column.Name} is not a column of the deployed table");
+                }
+                else if (deployedColumn.Type != column.Type)
+                {
+                    problems.Add($"{letName}.{column.Name} is {column.Type.Name}, the deployed column is {deployedColumn.Type.Name}");
+                }
+            }
+        }
+
+        if (problems.Count == 0)
+        {
+            return Check(label, combined, globals, requireAlertColumns: true);
+        }
+    }
+
+    Console.WriteLine($"FAIL  {label}");
     foreach (string problem in problems)
     {
         Console.WriteLine($"      {problem}");

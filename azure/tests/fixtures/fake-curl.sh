@@ -54,6 +54,15 @@ respond() {
 }
 
 case "${url}" in
+  http://169.254.169.254/metadata/instance/compute/userData*)
+    # The VM's userData as the instance metadata service returns it: base64 of what the
+    # template stored (FAKE_USERDATA_FILE holds the plain JSON).
+    if [[ "${FAKE_SCENARIO}" == no-identity ]]; then
+      echo "curl: (22) The requested URL returned error: 404" >&2
+      exit 22
+    fi
+    respond 200 "$(base64 --wrap=0 "${FAKE_USERDATA_FILE:?}")"
+    ;;
   http://169.254.169.254/*)
     if [[ "${FAKE_SCENARIO}" == no-identity ]]; then
       echo "curl: (22) The requested URL returned error: 400" >&2

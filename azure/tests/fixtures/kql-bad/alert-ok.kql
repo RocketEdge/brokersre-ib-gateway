@@ -1,0 +1,5 @@
+// A valid alert query; the deliberately broken scenario next to it refers to it.
+// Dimensions: Instance, Condition
+IbGwMetrics_CL
+| summarize Rows = count() by Instance
+| extend Condition = "x"

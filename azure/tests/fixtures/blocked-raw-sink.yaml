@@ -1,0 +1,72 @@
+# Test double like capture-sinks.yaml, except that the raw sink cannot deliver: it posts to a
+# closed local port, so raw rows stay undelivered inside Vector, as they do while Azure is
+# unreachable. azure/tests/run.sh uses it to prove that rows which were mapped under a weaker
+# raw-log mode are not shipped as they were after the mode has been tightened.
+# The sink ids and the buffer and acknowledgement settings are those of the real sinks
+# (azure/tests/run.sh compares them).
+transforms:
+  capture_events:
+    type: remap
+    inputs:
+      - events_out
+    source: |
+      . = {"capture": "Custom-IbGwEvents_CL", "row": .}
+  capture_metrics:
+    type: remap
+    inputs:
+      - metrics_out
+    source: |
+      . = {"capture": "Custom-IbGwMetrics_CL", "row": .}
+  capture_raw:
+    type: remap
+    inputs:
+      - raw_out
+    source: |
+      . = {"capture": "Custom-IBGatewayLogs_CL", "row": .}
+
+sinks:
+  azure_events:
+    type: console
+    inputs:
+      - capture_events
+    target: stdout
+    encoding:
+      codec: json
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
+  azure_metrics:
+    type: console
+    inputs:
+      - capture_metrics
+    target: stdout
+    encoding:
+      codec: json
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
+  azure_raw:
+    type: http
+    inputs:
+      - capture_raw
+    uri: http://127.0.0.1:9/
+    encoding:
+      codec: json
+    healthcheck:
+      enabled: false
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: drop_newest
+    request:
+      timeout_secs: 2
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 2

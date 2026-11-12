@@ -9,16 +9,24 @@
 # Usage:   azure/tests/run.sh [group...]
 # Groups:  vector      vector validate + the VRL unit tests (vector test), every raw-log mode
 #          entrypoint  azure/vector/entrypoint.sh: refusals, rendering, no secret in its output
-#          pipeline    the real container on fixtures: rotation, checkpoints, redaction, opt-in
-#          drift       rows Vector emits == DCR stream declarations == table columns (Bicep)
-#          kql         static analysis of every alert, query-pack and workbook query
-#          bicep       az bicep build + lint, parameter files, properties of the compiled templates
-#          compose     docker compose config of the override; hardening of the services
-#          secrets     fetch-secrets.sh of the VM's cloud-init, with a fake curl
+#          pipeline    the real container on lines of a real gateway run: rotation, checkpoints,
+#                      redaction, opt-in, a tightened raw-log mode, old and over-long lines
+#          drift       rows Vector emits == DCR stream declarations == table columns (Bicep);
+#                      the fixtures have the gateway's real shape; the test doubles keep the
+#                      real sinks' durability settings
+#          kql         static analysis of every alert, query-pack and workbook query and of
+#                      the scenario timelines (azure/kql/scenarios)
+#          kql-run     EXECUTES the scenarios in Microsoft's Kusto emulator; skipped unless
+#                      KUSTO_EMULATOR_EULA=accept is set (see KUSTO_IMAGE)
+#          bicep       az bicep build + lint, parameter files, properties of the compiled
+#                      templates (which role for which principal on which scope, network rules)
+#          compose     docker compose config of the override; hardening and limits of the services
+#          secrets     the VM's host scripts (azure/vm) with fake curl, docker and git
 #          lint        shellcheck, shfmt, YAML/JSON parsing, actionlint, line endings
 #          (default: every group, in this order)
 # Needs:   docker; az with the Bicep CLI (groups drift, kql, bicep); a .NET SDK 10 or newer
 #          is used for the kql group when installed, otherwise its container image.
+# Env:     AZPACK_KEEP=1 keeps the containers, volumes and files of a run for inspection.
 # Exit:    0 when every selected test passed. Each test prints PASS/FAIL with its reason.
 # Containers and volumes created here are named azpack-*; nothing else is touched.
 set -uo pipefail
@@ -135,6 +143,11 @@ host_secrets="$(host_path "${secrets_dir}")"
 
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
+  # AZPACK_KEEP=1 leaves everything in place for a look at a failing test.
+  if [[ -n "${AZPACK_KEEP:-}" ]]; then
+    echo "kept for inspection: containers and volumes azpack-*-${run_id}, files in ${work_dir}"
+    return
+  fi
   # Only what THIS run created: every name ends with the run id, so a parallel run and
   # anything else on the machine are left alone.
   docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^azpack-.*-${run_id}\$" | while read -r name; do
@@ -142,6 +155,9 @@ cleanup() {
   done
   docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^azpack-.*-${run_id}\$" | while read -r name; do
     docker volume rm "${name}" >/dev/null 2>&1 || true
+  done
+  docker network ls --format '{{.Name}}' 2>/dev/null | grep -E "^azpack-.*-${run_id}\$" | while read -r name; do
+    docker network rm "${name}" >/dev/null 2>&1 || true
   done
   rm -rf "${work_dir}"
 }
@@ -227,6 +243,9 @@ group_vector() {
   check "vector test: raw logs with user-name redaction (IBGW_REDACT_USERNAME_FILE)" \
     entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username -- \
     test "${unit_config[@]}" /etc/vector/tests/raw-redacted.test.yaml
+  check "vector test: redaction rules (underscore, glued, escaped, any case; no false positive)" \
+    entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username -- \
+    test "${unit_config[@]}" /etc/vector/tests/raw-redaction-rules.test.yaml
   check "vector test: raw logs after SHIP_RAW_LOGS=yes" \
     entrypoint "${valid_env[@]}" -e SHIP_RAW_LOGS=yes -- \
     test "${unit_config[@]}" /etc/vector/tests/raw-acknowledged.test.yaml
@@ -320,6 +339,12 @@ VARIABLES
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=U1234567 -- validate --no-environment
   expect_refusal "refuses a HOST_LABEL that contains an account id" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e HOST_LABEL=desk_du1234567 -- validate --no-environment
+  # The redaction also catches an id glued to a lower-case word; such a label would read
+  # desk[ACCT:…567] in the events table and deskDU1234567 in the metrics table.
+  expect_refusal "refuses an IBGW_INSTANCE with an account id glued to a word" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=deskDU1234567 -- validate --no-environment
+  check "accepts a label that only resembles an account id (wolf100234, the redaction leaves it alone)" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=wolf100234 -- validate --no-environment
   expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 
@@ -396,19 +421,27 @@ events_stream=Custom-IbGwEvents_CL
 metrics_stream=Custom-IbGwMetrics_CL
 raw_stream=Custom-IBGatewayLogs_CL
 
-# seed_log_volume: a named volume with the fixture files, owned by uid 1000 as the gateway
-# image leaves it, and a helper container that plays the gateway (the only writer).
+# seed_log_volume: a named volume owned by uid 1000 as the gateway image leaves it, and a
+# helper container that plays the gateway (the only writer). The fixture files are lines of a
+# real gateway run and carry that run's timestamps; rows older than 36 hours are not shipped,
+# so the helper works on a private copy (/tmp/fx) in which the date of every `ts` is today's
+# (UTC). One line that is not JSON is added to each JSON Lines file.
 seed_log_volume() {
   docker volume create "${log_volume}" >/dev/null \
     && docker run --rm --name "azpack-seed-${run_id}" --network none --user 0:0 \
-      -v "${log_volume}:/var/log/ibgateway" -v "${host_repo}/azure/tests/fixtures:/fx:ro" \
-      --entrypoint /bin/sh "${VECTOR_IMAGE}" -c '
-        cp -r /fx/logvol/. /var/log/ibgateway/ &&
-        mkdir -p /var/log/ibgateway/jts &&
-        chown -R 1000:1000 /var/log/ibgateway' \
+      -v "${log_volume}:/var/log/ibgateway" --entrypoint /bin/sh "${VECTOR_IMAGE}" \
+      -c 'chown 1000:1000 /var/log/ibgateway' \
     && docker run -d --name "${helper}" --network none --user 1000:1000 \
-      -v "${log_volume}:/var/log/ibgateway" -v "${host_repo}/azure/tests/fixtures:/fx:ro" \
-      --entrypoint /bin/sh "${VECTOR_IMAGE}" -c 'sleep 1200' >/dev/null
+      -v "${log_volume}:/var/log/ibgateway" -v "${host_repo}/azure/tests/fixtures:/fx-source:ro" \
+      --entrypoint /bin/sh "${VECTOR_IMAGE}" -c 'sleep 1200' >/dev/null \
+    && as_gateway '
+      cp -r /fx-source /tmp/fx &&
+      find /tmp/fx/logvol /tmp/fx/append -type f ! -name "*.log" -exec \
+        sed -i "s/\"ts\":\"2026-11-12T/\"ts\":\"$(date -u +%Y-%m-%d)T/" {} + &&
+      cp -r /tmp/fx/logvol/. /var/log/ibgateway/ &&
+      mkdir -p /var/log/ibgateway/jts &&
+      cat /tmp/fx/append/not-json.txt >>/var/log/ibgateway/events/events.jsonl &&
+      cat /tmp/fx/append/not-json.txt >>/var/log/ibgateway/metrics/metrics.jsonl'
 }
 
 # as_gateway <shell snippet>: write to the log volume the way the gateway does.
@@ -416,7 +449,8 @@ as_gateway() { docker exec "${helper}" /bin/sh -c "$1"; }
 
 # start_shipper <container> <data volume> <docker-args...>: the compose service as it runs in
 # production (same entrypoint, mounts and hardening, no network), except that the sink template
-# is replaced by fixtures/capture-sinks.yaml so the rows are printed instead of sent to Azure.
+# is replaced by a test double from fixtures/ so the rows are printed instead of sent to
+# Azure: capture-sinks.yaml, or the file named by ${sink_double}.
 start_shipper() {
   local name="$1" data="$2"
   shift 2
@@ -424,7 +458,7 @@ start_shipper() {
     --cap-drop ALL --security-opt no-new-privileges:true \
     -v "${log_volume}:/var/log/ibgateway:ro" \
     -v "${host_repo}/azure/vector:/etc/vector:ro" \
-    -v "${host_repo}/azure/tests/fixtures/capture-sinks.yaml:/etc/vector/sinks-managed-identity.yaml:ro" \
+    -v "${host_repo}/azure/tests/fixtures/${sink_double:-capture-sinks.yaml}:/etc/vector/sinks-managed-identity.yaml:ro" \
     -v "${data}:/var/tmp" \
     -v "${host_secrets}:/run/secrets:ro" \
     "${valid_env[@]}" -e VECTOR_LOG_FORMAT=json "$@" \
@@ -465,43 +499,80 @@ group_pipeline() {
     return
   fi
 
-  # Shipper A: raw logs opted in, user name redacted.
-  start_shipper "${a}" "azpack-data-a-${run_id}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username
-  expect_rows "ships the well-formed lines of the current and the rotated events file, drops the malformed one" \
-    "${a}" "${events_stream}" 6
-  expect_rows "ships the well-formed metrics samples, drops the malformed one" "${a}" "${metrics_stream}" 2
+  # Shipper A: raw logs opted in, user name redacted. 5 + 6 real event lines, 3 real samples.
+  # VECTOR_LOG=info is Vector's own default; if the entrypoint honoured it, Vector would print
+  # the start of every discarded over-long line in its own log (see the long-line test below).
+  start_shipper "${a}" "azpack-data-a-${run_id}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username -e VECTOR_LOG=info
+  expect_rows "ships the gateway's real event lines of the current and the rotated file, drops the malformed one" \
+    "${a}" "${events_stream}" 11
+  expect_rows "ships the gateway's real metrics samples, drops the malformed one" "${a}" "${metrics_stream}" 3
 
-  as_gateway 'cat /fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log &&
-    cp /fx/append/launcher.log /var/log/ibgateway/jts/launcher.log'
+  as_gateway 'cat /tmp/fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log &&
+    cp /tmp/fx/append/launcher.log /var/log/ibgateway/jts/launcher.log'
   expect_rows "ships raw lines written after its first start, not the history" "${a}" "${raw_stream}" 6
 
-  # A partial last line: the head of event 7 without a newline, then proof that Vector kept
+  # An over-long raw line (300 KB, more than the source's max_line_bytes) that carries the user
+  # name and an account id at both ends: it is not shipped, the line after it is, and nothing
+  # of it may appear in the shipper's own log (checked on the whole output further down).
+  as_gateway "{ printf '%s' 'LONG_LINE_BEGIN ${CANARY_USERNAME} ${CANARY_ACCOUNT} ' &&
+    head -c 300000 /dev/zero | tr '\\000' 'x' &&
+    printf '%s\\n' ' ${CANARY_USERNAME} ${CANARY_ACCOUNT} LONG_LINE_END' &&
+    printf '%s\\n' '2026-11-12 01:06:00 INFO line after the long one'; } >>/var/log/ibgateway/jts/launcher.log"
+  expect_rows "skips a raw line longer than the limit and ships the line after it" "${a}" "${raw_stream}" 7
+  # The log lines of Vector's file source are switched off (they would print the discarded
+  # line), so the counters the shipper prints every minute must say what those lines used to
+  # say: how many files are watched, and that a line was discarded.
+  if wait_for 90 container_says "${a}" '"error_code":"reading_line_from_file"' \
+    && container_says "${a}" '"name":"open_files"'; then
+    pass "the shipper's counters report the files it watches and the discarded over-long line"
+  else
+    fail "the shipper's counters report the files it watches and the discarded over-long line" "no such counter on stdout"
+    docker logs "${a}" 2>&1 | grep -vF '"capture":' | grep -F '"name":' | cut -c1-200 | sort -u | tail -n 12 | sed 's/^/      /'
+  fi
+
+  # A partial last line: the head of event 12 without a newline, then proof that Vector kept
   # reading (a new metrics sample arrives) while that line was still incomplete.
-  as_gateway 'printf %s "$(cat /fx/append/event-7.head)" >>/var/log/ibgateway/events/events.jsonl &&
-    cat /fx/append/metrics-3.jsonl >>/var/log/ibgateway/metrics/metrics.jsonl'
-  expect_rows "keeps shipping while the last events line is incomplete" "${a}" "${metrics_stream}" 3
-  expect_rows "does not ship an incomplete last line" "${a}" "${events_stream}" 6
-  as_gateway 'cat /fx/append/event-7.tail >>/var/log/ibgateway/events/events.jsonl'
-  expect_rows "ships the line once it is complete" "${a}" "${events_stream}" 7
+  as_gateway 'printf %s "$(cat /tmp/fx/append/event-12.head)" >>/var/log/ibgateway/events/events.jsonl &&
+    cat /tmp/fx/append/metrics-4.jsonl >>/var/log/ibgateway/metrics/metrics.jsonl'
+  expect_rows "keeps shipping while the last events line is incomplete" "${a}" "${metrics_stream}" 4
+  expect_rows "does not ship an incomplete last line" "${a}" "${events_stream}" 11
+  as_gateway 'cat /tmp/fx/append/event-12.tail >>/var/log/ibgateway/events/events.jsonl'
+  expect_rows "ships the line once it is complete" "${a}" "${events_stream}" 12
 
-  # Rotation by rename, as the gateway does it: events.jsonl -> events.jsonl.1, new events.jsonl.
+  # Rotation by rename, as the gateway does it: events.jsonl -> events.jsonl.1, new events.jsonl
+  # (the last event of the old boot and the first two of a new one).
   as_gateway 'cd /var/log/ibgateway/events && mv -f events.jsonl events.jsonl.1 &&
-    cp /fx/append/events-after-rotation.jsonl events.jsonl.tmp && mv events.jsonl.tmp events.jsonl'
-  expect_rows "follows a rotation: new file shipped, renamed file not shipped again" "${a}" "${events_stream}" 9
+    cp /tmp/fx/append/events-after-rotation.jsonl events.jsonl.tmp && mv events.jsonl.tmp events.jsonl'
+  expect_rows "follows a rotation: new file shipped, renamed file not shipped again" "${a}" "${events_stream}" 15
 
-  # Restart: checkpoints and disk buffers live on the data volume.
+  # History is not back-filled: a line whose ts is older than 36 hours (these two carry a fixed
+  # date weeks in the past) is dropped, and the shipper says so in its own log. The exact row
+  # counts after the restart below prove that neither line was shipped.
+  as_gateway 'cat /tmp/fx/append/event-old.jsonl >>/var/log/ibgateway/events/events.jsonl &&
+    cat /tmp/fx/append/metrics-old.jsonl >>/var/log/ibgateway/metrics/metrics.jsonl'
+  if wait_for 60 container_says "${a}" "dropped an event older than 36 hours" \
+    && wait_for 60 container_says "${a}" "dropped a metrics sample older than 36 hours"; then
+    pass "an event and a sample older than 36 hours are dropped and the shipper's log says so"
+  else
+    fail "an event and a sample older than 36 hours are dropped and the shipper's log says so" "no such warning in the shipper's log"
+    docker logs "${a}" 2>&1 | grep -vF '"capture":' | tail -n 5 | cut -c1-300 | sed 's/^/      /'
+  fi
+
+  # Restart: the checkpoints live on the data volume; a line that was not delivered is read again.
   docker stop -t 70 "${a}" >/dev/null 2>&1
   docker start "${a}" >/dev/null 2>&1
-  as_gateway 'cat /fx/append/event-10.jsonl >>/var/log/ibgateway/events/events.jsonl'
-  expect_rows "resumes from its checkpoints after a restart (no duplicate, no loss)" "${a}" "${events_stream}" 10
-  expect_rows "does not ship metrics again after a restart" "${a}" "${metrics_stream}" 3
-  expect_rows "does not ship raw lines again after a restart" "${a}" "${raw_stream}" 6
+  as_gateway 'cat /tmp/fx/append/event-after-restart.jsonl >>/var/log/ibgateway/events/events.jsonl'
+  expect_rows "resumes from its checkpoints after a restart (no duplicate, no loss)" "${a}" "${events_stream}" 16
+  expect_rows "does not ship metrics again after a restart" "${a}" "${metrics_stream}" 4
+  expect_rows "does not ship raw lines again after a restart" "${a}" "${raw_stream}" 7
 
   captured "${a}" >"${capture_file}"
   rows="$(cat "${capture_file}")"
   output="$(docker logs "${a}" 2>&1)"
   counts="$(jq_cli -rs '[.[] | select(.capture == "Custom-IbGwEvents_CL") | .row | [.BootId, .Seq]] | [length, (unique | length)] | join(" ")' <"${capture_file}")"
-  expect "every event row is shipped exactly once (BootId, Seq)" '"${counts}" == "10 10"'
+  expect "every event row is shipped exactly once (BootId, Seq)" '"${counts}" == "16 16"'
+  counts="$(jq_cli -rs '[.[] | select(.capture == "Custom-IbGwEvents_CL") | .row | select(.Event == "container_start") | .Props.gateway_version] | unique | join(",")' <"${capture_file}")"
+  expect "the data object of container_start arrives as Props (gateway_version)" '"${counts}" == "10.50.1g"'
   # shellcheck disable=SC2034  # read by expect through eval
   lowered="${output,,}"
   expect "the user name is neither in a row nor in the shipper's own log" '"${lowered}" != *"${CANARY_USERNAME,,}"*'
@@ -509,6 +580,8 @@ group_pipeline() {
   expect "no full account id is in a row or in the shipper's own log" '"${output}" != *"${CANARY_ACCOUNT}"*'
   expect "account ids keep their last three characters" '"${rows}" == *"[ACCT:…567]"*'
   expect "the raw history from before the first start is not shipped" '"${rows}" != *"OLD_LINE_MARKER"*'
+  expect "nothing of the over-long raw line is in a row or in the shipper's own log" \
+    '"${output}" != *"LONG_LINE_"* && "${output}" != *"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"* && "${output}" == *"line after the long one"*'
   counts="$(jq_cli -rs '[.[] | select(.capture == "Custom-IBGatewayLogs_CL") | .row] | [(map(select(.Level == "error" and .Code == 1100)) | length), (map(.FilePath) | unique | join(","))] | join(" ")' <"${capture_file}")"
   expect "raw rows carry the derived level, the code and their file path" \
     '"${counts}" == "1 /var/log/ibgateway/ibc/ibc.log,/var/log/ibgateway/jts/launcher.log"'
@@ -516,18 +589,57 @@ group_pipeline() {
   # Shipper B: default settings, its own data volume. Raw lines must not come out. The event
   # appended together with the raw lines proves that B was reading when they were written.
   start_shipper "${b}" "azpack-data-b-${run_id}"
-  expect_rows "a shipper with default settings ships the events on the volume" "${b}" "${events_stream}" 8
-  as_gateway 'cat /fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log &&
-    cat /fx/append/event-11.jsonl >>/var/log/ibgateway/events/events.jsonl'
-  expect_rows "the default shipper keeps shipping events" "${b}" "${events_stream}" 9
+  expect_rows "a shipper with default settings ships the events on the volume" "${b}" "${events_stream}" 11
+  as_gateway 'cat /tmp/fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log &&
+    cat /tmp/fx/append/event-sentinel.jsonl >>/var/log/ibgateway/events/events.jsonl'
+  expect_rows "the default shipper keeps shipping events" "${b}" "${events_stream}" 12
   expect_rows "raw logs are not shipped unless the operator opted in" "${b}" "${raw_stream}" 0
   output="$(docker logs "${b}" 2>&1)"
   # shellcheck disable=SC2034  # read by expect through eval
   lowered="${output,,}"
   expect "the default shipper prints no user name" '"${lowered}" != *"${CANARY_USERNAME,,}"*'
 
-  docker rm -f "${a}" "${b}" >/dev/null 2>&1
+  if [[ -z "${AZPACK_KEEP:-}" ]]; then docker rm -f "${a}" "${b}" >/dev/null 2>&1; fi
+
+  # Tightening the raw-log mode. Shipper C maps raw lines under SHIP_RAW_LOGS=yes (the user
+  # name stays in them) while its raw sink cannot deliver, then is killed. Whatever starts
+  # next on the same data volume with a stricter mode must never ship those rows as they were.
+  local c="azpack-ship-c-${run_id}" data_c="azpack-data-c-${run_id}"
+  sink_double=blocked-raw-sink.yaml start_shipper "${c}" "${data_c}" -e SHIP_RAW_LOGS=yes
+  wait_for 60 container_says "${c}" "Vector has started" || true
+  as_gateway 'cat /tmp/fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log'
+  if wait_for 60 raw_sink_is_failing "${c}"; then
+    pass "a shipper whose raw sink cannot deliver holds raw rows mapped under SHIP_RAW_LOGS=yes"
+  else
+    fail "a shipper whose raw sink cannot deliver holds raw rows mapped under SHIP_RAW_LOGS=yes" "the sink never reported a failed delivery"
+    docker logs "${c}" 2>&1 | grep -F azure_raw | tail -n 5 | cut -c1-300 | sed 's/^/      /'
+  fi
+  docker rm -f "${c}" >/dev/null 2>&1
+
+  start_shipper "${c}" "${data_c}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username
+  wait_for 60 container_says "${c}" "Vector has started" || true
+  as_gateway 'cat /tmp/fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log'
+  wait_for 60 has_rows "${c}" "${raw_stream}" 3 || true
+  rows="$(captured "${c}" | grep -F "\"capture\":\"${raw_stream}\"")"
+  # shellcheck disable=SC2034  # read by expect through eval
+  lowered="${rows,,}"
+  expect "after the mode was tightened to redaction, no raw row carries the user name (old rows included)" \
+    '"${rows}" == *"[USER]"* && "${lowered}" != *"${CANARY_USERNAME,,}"*'
+  docker rm -f "${c}" >/dev/null 2>&1
+
+  start_shipper "${c}" "${data_c}"
+  wait_for 60 container_says "${c}" "Vector has started" || true
+  as_gateway 'cat /tmp/fx/append/ibc.log >>/var/log/ibgateway/ibc/ibc.log &&
+    cat /tmp/fx/append/event-sentinel.jsonl >>/var/log/ibgateway/events/events.jsonl'
+  expect_rows "after raw shipping was switched off the shipper still ships events" "${c}" "${events_stream}" 1
+  expect_rows "after raw shipping was switched off, no raw row is shipped (old rows included)" "${c}" "${raw_stream}" 0
+  if [[ -z "${AZPACK_KEEP:-}" ]]; then docker rm -f "${c}" >/dev/null 2>&1; fi
 }
+
+# container_says <container> <text>: true when the container has printed the text.
+container_says() { docker logs "$1" 2>&1 | grep -qF -- "$2"; }
+# raw_sink_is_failing <container>: true when the raw sink has reported a delivery it must retry.
+raw_sink_is_failing() { docker logs "$1" 2>&1 | grep -F '"component_id":"azure_raw"' | grep -qiE 'retry|error'; }
 
 compiled_main="${work_dir}/main.json"
 
@@ -568,7 +680,7 @@ capture_routes() {
 
 group_drift() {
   echo "== drift: rows Vector emits == DCR stream declarations == table columns"
-  local declarations problems mutation expected routes
+  local declarations problems mutation expected routes file
   if [[ ! -s "${capture_file}" ]]; then group_pipeline; fi
   if [[ ! -s "${capture_file}" ]]; then
     fail "capture rows from the pipeline" "nothing captured"
@@ -606,11 +718,62 @@ table_differs|the columns of table IBGatewayLogs_CL differ from the stream decla
 flow_missing|Custom-IbGwMetrics_CL: expected exactly one data flow
 MUTATIONS
 
+  # The fixtures themselves must have the shape the gateway writes (they are lines of a real
+  # run); a fixture with a key the gateway never emits would make the comparison above a
+  # statement about input that does not exist.
+  local fx="${repo}/azure/tests/fixtures"
+  problems="$({
+    cat "${fx}/logvol/events/events.jsonl" "${fx}/logvol/events/events.jsonl.1" \
+      "${fx}/append/events-after-rotation.jsonl" "${fx}/append/event-after-restart.jsonl" \
+      "${fx}/append/event-sentinel.jsonl" "${fx}/append/event-old.jsonl"
+    cat "${fx}/append/event-12.head" "${fx}/append/event-12.tail" | tr -d '\n'
+    echo
+  } | jq_file fixture-contract.jq -rs --arg kind events 2>&1)"
+  if [[ $? -eq 0 && -z "${problems}" ]]; then
+    pass "every events fixture line has the shape of the gateway's real events (log contract v2)"
+  else
+    fail "every events fixture line has the shape of the gateway's real events (log contract v2)" "see below"
+    show "${problems}"
+  fi
+  problems="$(cat "${fx}/logvol/metrics/metrics.jsonl" "${fx}/append/metrics-4.jsonl" "${fx}/append/metrics-old.jsonl" \
+    | jq_file fixture-contract.jq -rs --arg kind metrics 2>&1)"
+  if [[ $? -eq 0 && -z "${problems}" ]]; then
+    pass "every metrics fixture line has the shape of the gateway's real samples"
+  else
+    fail "every metrics fixture line has the shape of the gateway's real samples" "see below"
+    show "${problems}"
+  fi
+  problems="$(printf '%s\n' '{"ts":"2026-11-12T01:00:00.000Z","src":"ibc","level":"info","event":"login_completed","msg":"x","boot_id":"443d261aecbd4789","seq":1,"code":1100,"phase":"logged-in"}' \
+    | jq_file fixture-contract.jq -rs --arg kind events 2>&1)"
+  expect "the fixture check refuses keys the gateway does not emit (code, phase on an event)" \
+    '"${problems}" == *"key code is not in the event contract"* && "${problems}" == *"key phase is not in the event contract"*'
+
   routes="$(sink_routes "${repo}/azure/vector/sinks-managed-identity.yaml")"
   expect "the capture test double routes each transform to the stream its real sink uses" \
     '"${routes}" == "$(capture_routes)" && -n "${routes}"'
   expect "every stream a sink writes to is declared by the data collection rule" \
     '"$(printf "%s\n" "${routes}" | cut -d" " -f2 | sort)" == "$(printf "%s\n" "${declarations}" | jq_cli -r ".dcr.streamDeclarations | keys[]" | sort)"'
+
+  # Durability is a property of the sink settings: memory buffers with end-to-end
+  # acknowledgements (a file position is saved only after delivery), raw lines dropped instead
+  # of blocking. The restart and mode-change tests of the pipeline group run on the test
+  # doubles, so the doubles must carry exactly the settings of the real sinks.
+  local durability wanted
+  wanted="azure_events memory 500 block true${newline}azure_metrics memory 500 block true${newline}azure_raw memory 500 drop_newest true"
+  for file in azure/vector/sinks-managed-identity.yaml azure/vector/sinks-certificate.yaml \
+    azure/tests/fixtures/capture-sinks.yaml azure/tests/fixtures/blocked-raw-sink.yaml; do
+    durability="$(sink_durability <"${repo}/${file}" 2>&1)"
+    expect "${file}: memory buffers, end-to-end acknowledgements, raw lines never block" '"${durability}" == "${wanted}"'
+  done
+  durability="$(sed 's/type: memory/type: disk/' "${repo}/azure/tests/fixtures/capture-sinks.yaml" | sink_durability 2>&1)"
+  expect "the durability check notices a test double with other buffer settings" '"${durability}" != "${wanted}" && "${durability}" == *"azure_raw disk"*'
+}
+
+# sink_durability: the buffer and acknowledgement settings of every sink of the Vector
+# configuration on stdin, one line per sink: "<id> <buffer type> <max events> <when full> <acks>".
+sink_durability() {
+  docker run --rm -i "${YQ_IMAGE}" \
+    '.sinks | to_entries | .[] | [.key, .value.buffer.type, .value.buffer.max_events, .value.buffer.when_full, .value.acknowledgements.enabled] | join(" ")'
 }
 
 declarations_file="${work_dir}/declarations.json"
@@ -648,8 +811,9 @@ group_kql() {
   fi
   out="$(kql_check azure/kql 2>&1)"
   code=$?
-  if [[ ${code} -eq 0 && "${out}" != *"FAIL  "* && "${out}" == *"PASS  alert-dead-man.kql"* && "${out}" == *"PASS  workbook: "* ]]; then
-    pass "alert rules, query pack and workbook: $(printf '%s\n' "${out}" | grep -c '^PASS  ') queries are valid for the deployed schema"
+  if [[ ${code} -eq 0 && "${out}" != *"FAIL  "* && "${out}" == *"PASS  alert-dead-man.kql"* && "${out}" == *"PASS  workbook: "* &&
+    "${out}" == *"PASS  scenario: human-needed.twofa-flip.kql"* ]]; then
+    pass "alert rules, query pack, workbook and scenario timelines: $(printf '%s\n' "${out}" | grep -c '^PASS  ') queries are valid for the deployed schema"
   else
     fail "alert rules, query pack and workbook are valid KQL" "exit ${code}"
     show "${out}"
@@ -668,10 +832,12 @@ group_kql() {
     fi
   done <<'DEFECTS'
 alert-missing-condition.kql|an alert query must return the column Condition
+alert-no-dimensions.kql|an alert query must declare its dimensions
 syntax-error.kql|Missing expression
 unknown-column.kql|NoSuchColumn
 unknown-table.kql|IbGwNothing_CL
 wrong-type.kql|is not defined for the operand types string and timespan
+scenario: shadow-unknown-column.kql|IbGwEvents_CL.Phase is not a column of the deployed table
 DEFECTS
 
   # alerts.bicep replaces these two exact lines with the maintenance window.
@@ -679,6 +845,66 @@ DEFECTS
     expect "${kql} carries the two maintenance-window lines the Bicep module replaces" \
       '"$(grep -cFx "let maintenance_start = time(00:00:00);" "${repo}/azure/kql/${kql}")" == 1 && "$(grep -cFx "let maintenance_end = time(00:00:00);" "${repo}/azure/kql/${kql}")" == 1'
   done
+}
+
+# Microsoft's Kusto emulator, pinned by digest. Running it means accepting its licence terms
+# (https://aka.ms/adx.emulator.license), which only the operator can do: group kql-run is
+# skipped unless KUSTO_EMULATOR_EULA=accept is set.
+KUSTO_IMAGE="mcr.microsoft.com/azuredataexplorer/kustainer-linux@sha256:5c21867936e23d61bb1ba492eb163972d50fc10132cd49a922e601b55ca705cd"
+
+# kusto_post <engine container> <network> <mgmt|query>: POST the JSON request on stdin to the
+# emulator's REST API from a helper container on the same internal network; prints the reply.
+kusto_post() {
+  docker run --rm -i --network "$2" --entrypoint /bin/sh "${VECTOR_IMAGE}" -c '
+    cat >/tmp/request.json &&
+    wget -q -O - --header "Content-Type: application/json" --post-file /tmp/request.json "http://$0:8080/v1/rest/$1"' "$1" "$3"
+}
+
+# group_kql_run: EXECUTES each scenario of azure/kql/scenarios (the timeline followed by its
+# alert query) in the emulator and compares the rows with the scenario's "// Expect:" lines.
+# This is the only test that evaluates the alert logic; it is opt-in (see KUSTO_IMAGE).
+# NOTE: this group was written without ever being run, because the licence had not been
+# accepted for this repository. Expect to adjust it on first use (the emulator's start-up
+# time, its REST paths and reply shape are taken from Microsoft's documentation, not observed).
+group_kql_run() {
+  echo "== kql-run: the scenario timelines executed in Microsoft's Kusto emulator"
+  if [[ "${KUSTO_EMULATOR_EULA:-}" != accept ]]; then
+    echo "SKIP  the alert logic was not executed: the emulator needs its licence accepted (set KUSTO_EMULATOR_EULA=accept)"
+    return
+  fi
+  local network="azpack-kusto-net-${run_id}" engine="azpack-kusto-${run_id}" scenario query expected got reply
+  if ! docker network create --internal "${network}" >/dev/null \
+    || ! docker run -d --name "${engine}" --network "${network}" -e ACCEPT_EULA=Y -m 4g "${KUSTO_IMAGE}" >/dev/null; then
+    fail "start the Kusto emulator" "docker failed"
+    return
+  fi
+  emulator_ready() { printf '%s' '{"csl": ".show cluster"}' | kusto_post "${engine}" "${network}" mgmt | grep -q '"Tables"'; }
+  if ! wait_for 180 emulator_ready; then
+    fail "start the Kusto emulator" "it did not answer within 180 s"
+    docker rm -f "${engine}" >/dev/null 2>&1
+    docker network rm "${network}" >/dev/null 2>&1
+    return
+  fi
+  for scenario in "${repo}"/azure/kql/scenarios/*.kql; do
+    query="${repo}/azure/kql/$(sed -n 's|^// Query: ||p' "${scenario}" | head -n 1)"
+    expected="$(sed -n 's|^// Expect: ||p' "${scenario}" | grep -vF '(no rows)' | sort)"
+    reply="$({
+      cat "${scenario}"
+      echo
+      cat "${query}"
+    } | jq_cli -Rs '{db: "NetDefaultDB", csl: .}' | kusto_post "${engine}" "${network}" query 2>&1)"
+    # The values of the dimension columns of every returned row, in the order Instance, Host, Condition.
+    got="$(printf '%s' "${reply}" | jq_cli -r '.Tables[0] as $t | ($t.Columns | map(.ColumnName)) as $names
+      | $t.Rows[] | . as $row | [("Instance", "Host", "Condition") | select(. as $n | $names | index($n)) | $row[. as $n | $names | index($n)]] | join("|")' 2>&1 | sort)"
+    if [[ "${got}" == "${expected}" ]]; then
+      pass "scenario $(basename "${scenario}"): the query returns exactly [${expected//${newline}/, }]"
+    else
+      fail "scenario $(basename "${scenario}")" "expected [${expected//${newline}/, }], the query returned [${got//${newline}/, }]"
+      show "${reply:0:600}"
+    fi
+  done
+  docker rm -f "${engine}" >/dev/null 2>&1
+  docker network rm "${network}" >/dev/null 2>&1
 }
 
 # bicep_clean <build|lint|build-params> <file relative to the repository>: the command must
@@ -720,6 +946,9 @@ group_bicep() {
     if [[ "${referenced}" != *"kql/${kql}"* ]] && ! grep -qF "${kql}" "${repo}/azure/README.md" 2>/dev/null; then out+="${kql} "; fi
   done
   expect "every query in azure/kql is used by an alert rule or documented in the README" '-z "${out}"'
+  out="$(grep -oE "kql/[a-z0-9-]+\.kql" "${repo}/azure/bicep/modules/query-pack.bicep" | sed 's#^kql/##' | sort | tr '\n' ' ')"
+  referenced="$(find "${repo}/azure/kql" -maxdepth 1 -name '*.kql' -exec basename {} \; | sort | tr '\n' ' ')"
+  expect "the query pack saves every query file of azure/kql, and nothing else" '-n "${out}" && "${out}" == "${referenced}"'
 
   if compile_main; then
     out="$(jq_file template-checks.jq -r --arg which main <"${compiled_main}" 2>&1)"
@@ -740,17 +969,32 @@ group_bicep() {
       fail "vm.bicep keeps its security and shape promises" "see below"
       show "${out}"
     fi
-    # The check must be able to fail: a template with a fourth role assignment is refused.
-    out="$(jq_cli '(.resources | if type == "array" then . else [.[]] end) as $r | .resources = ($r + [{"type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "extra", "properties": {}}])' <"${compiled_vm}" | jq_file template-checks.jq -r --arg which vm 2>&1)"
-    expect "the template check notices an extra role assignment" '"${out}" == *"expected exactly 3 role assignments"*'
+    # The checks must be able to fail. A role for somebody else is refused...
+    out="$(jq_cli --arg principal "[parameters('somebodyElse')]" \
+      '{"type": "Microsoft.Authorization/roleAssignments", "apiVersion": "2022-04-01", "name": "extra", "properties": {"principalId": $principal}} as $extra
+        | .resources |= (if type == "array" then . + [$extra] else . + {"extra": $extra} end)' \
+      <"${compiled_vm}" | jq_file template-checks.jq -r --arg which vm 2>&1)"
+    expect "the template check notices a role assignment for another principal" \
+      '"${out}" == *"the role assignments are not the promised ones"*"parameter somebodyElse"*'
+    # ...and so is a network rule that lets something in.
+    out="$(jq_cli '(.. | objects | select(.name? == "deny-all-inbound") | .properties.access) = "Allow"' <"${compiled_vm}" | jq_file template-checks.jq -r --arg which vm 2>&1)"
+    expect "the template check notices an inbound rule that allows" '"${out}" == *"must deny every inbound connection"*'
   else
     fail "compile azure/bicep/vm.bicep" "az bicep build failed"
   fi
 
-  # cloud-init placeholders and the values vm.bicep replaces them with stay in step.
-  out="$(grep -oE '__[A-Z][A-Z_]*[A-Z]__' "${repo}/azure/cloud-init/gateway.yaml" | sort -u | tr '\n' ' ')"
-  referenced="$(awk '/^var cloudInitValues = \{/{inside = 1; next} inside && /^\}/{inside = 0} inside {sub(/:.*/, "", $1); print "__" $1 "__"}' "${repo}/azure/bicep/vm.bicep" | sort -u | tr '\n' ' ')"
-  expect "every cloud-init placeholder is replaced by vm.bicep and nothing else is" '-n "${out}" && "${out}" == "${referenced}"'
+  # customData cannot change on an existing VM: the cloud-init file carries no template
+  # placeholder, and a change of its content must be deliberate (existing VMs keep the old
+  # bootstrap; record the new checksum in azure/cloud-init/gateway.yaml.sha256 with it).
+  expect "the cloud-init file contains no template placeholder" \
+    '"$(grep -cE "__[A-Z][A-Z_]*[A-Z]__" "${repo}/azure/cloud-init/gateway.yaml")" == 0'
+  out="$(sha256sum <"${repo}/azure/cloud-init/gateway.yaml" | cut -d' ' -f1)"
+  expect "the cloud-init file is the one whose checksum is recorded (customData of existing VMs cannot change)" \
+    '"${out}" == "$(tr -d "[:space:]" <"${repo}/azure/cloud-init/gateway.yaml.sha256")"'
+  # The userData document: vm.bicep writes exactly the keys apply-config.sh requires.
+  out="$(awk '/^var vmConfig = \{/{inside = 1; next} inside && /^\}/{inside = 0} inside {sub(/:.*/, "", $1); print $1}' "${repo}/azure/bicep/vm.bicep" | sort | tr '\n' ' ')"
+  referenced="$(sed -n "s/^required_keys='\(.*\)'$/\1/p" "${repo}/azure/vm/apply-config.sh" | tr ' ' '\n' | sort | tr '\n' ' ')"
+  expect "vm.bicep writes exactly the userData keys apply-config.sh requires" '-n "${out}" && "${out}" == "${referenced}"'
   expect "vm.bicep defaults to the Vector image the compose override pins and the tests run" \
     '"$(grep -cF "param vectorImage string = '"'"'${VECTOR_IMAGE}'"'"'" "${repo}/azure/bicep/vm.bicep")" == 1'
 
@@ -800,48 +1044,74 @@ group_compose() {
     ] | map(tostring) | join(" ")')"
     expect "${service}: digest pin, uid 1000, read-only root, no capability, no port, no docker.sock, one writable volume" \
       '"${facts}" == "true true true true true true true true true true true true"'
+    # The shipper shares the host with the gateway: a parsing storm (a log file of megabyte
+    # lines) must not take the CPU, the memory or the process table away from it.
+    # shellcheck disable=SC2034  # read by expect through eval
+    limits="$(printf '%s' "${out}" | jq_cli -r --arg s "${service}" '.services[$s] | [
+      ((.cpus // 0) > 0 and (.cpus // 0) <= 1),
+      ((.mem_limit // "0" | tonumber) > 0 and (.mem_limit // "0" | tonumber) <= 1073741824),
+      ((.pids_limit // 0) > 0 and (.pids_limit // 0) <= 1024)
+    ] | map(tostring) | join(" ")')"
+    expect "${service}: capped at one CPU, 1 GiB of memory and 1024 processes or less" \
+      '"${limits}" == "true true true"'
   done
 }
 
-# cloud_init_script <name>: the content of /usr/local/sbin/<name> from the cloud-init file.
+# cloud_init_script <name>: the content of /usr/local/sbin/<name> from the cloud-init file
+# (only the first-boot bootstrap lives there; every other host script is a file in azure/vm).
 cloud_init_script() {
   docker run --rm -i "${YQ_IMAGE}" ".write_files[] | select(.path == \"/usr/local/sbin/$1\") | .content" \
     <"${repo}/azure/cloud-init/gateway.yaml"
 }
 
-group_secrets() {
-  echo "== secrets: fetch-secrets.sh from the cloud-init file, with a fake curl"
-  local scripts="${work_dir}/scripts" out code
-  mkdir -p "${scripts}"
-  cloud_init_script fetch-secrets.sh >"${scripts}/fetch-secrets.sh"
-  if [[ ! -s "${scripts}/fetch-secrets.sh" ]]; then
-    fail "extract fetch-secrets.sh from the cloud-init file" "nothing extracted"
-    return
-  fi
-  chmod 0755 "${scripts}" && chmod 0644 "${scripts}/fetch-secrets.sh"
-  out="$(docker run --rm --name "azpack-secrets-${run_id}" --tmpfs /run \
-    -v "$(host_path "${scripts}"):/scripts:ro" -v "${host_repo}/azure/tests:/tests:ro" \
-    "${UBUNTU_IMAGE}" bash /tests/fetch-secrets.test.sh /scripts/fetch-secrets.sh /tests/fixtures/fake-curl.sh 2>&1)"
+# in_ubuntu <name> <test script in azure/tests> <arguments...>: run a test script as root in
+# the VM's distribution with azure/ mounted read-only, print its PASS/FAIL lines and count
+# its failures. The scripts under test are the real files of azure/vm; only curl, docker and
+# git are replaced inside the container.
+in_ubuntu() {
+  local name="$1" script="$2" out code
+  shift 2
+  out="$(docker run --rm --name "azpack-${name}-${run_id}" --tmpfs /run \
+    -v "${host_repo}/azure:/azure:ro" "${UBUNTU_IMAGE}" bash "/azure/tests/${script}" "$@" 2>&1)"
   code=$?
   printf '%s\n' "${out}" | grep -E '^(PASS|FAIL)  ' || true
   failures=$((failures + $(printf '%s\n' "${out}" | grep -c '^FAIL  ' || true)))
-  if [[ ${code} -ne 0 && "${out}" != *"FAIL  "* ]]; then
-    fail "fetch-secrets tests ran" "exit ${code}"
+  if [[ ${code} -ne 0 && "${out}" != *"FAIL  "* ]] || [[ "${out}" != *"PASS  "* ]]; then
+    fail "${script} ran" "exit ${code}"
     show "${out}"
   fi
 }
 
+group_secrets() {
+  echo "== secrets: the VM's host scripts (azure/vm) with fake curl, docker and git"
+  in_ubuntu secrets fetch-secrets.test.sh /azure/vm/fetch-secrets.sh /azure/tests/fixtures/fake-curl.sh
+  in_ubuntu apply apply-config.test.sh /azure/vm /azure/tests/fixtures
+}
+
+# unit_setting <unit file> <key>: the values of a key in a systemd unit, space-separated.
+unit_setting() { sed -n "s/^$2=//p" "$1" | tr '\n' ' '; }
+
 group_lint() {
-  echo "== lint: shell scripts, cloud-init, workflow, JSON and YAML files"
-  local scripts="${work_dir}/lint" name out
+  echo "== lint: shell scripts, systemd units, cloud-init, workflow, JSON and YAML files"
+  local scripts="${work_dir}/lint" name out stack="${repo}/azure/vm/ibgw-stack.service"
   mkdir -p "${scripts}"
-  for name in fetch-secrets.sh ibgw-compose.sh ibgw-bootstrap.sh; do
-    cloud_init_script "${name}" >"${scripts}/${name}"
-  done
+  cloud_init_script ibgw-bootstrap.sh >"${scripts}/ibgw-bootstrap.sh"
+  docker run --rm -i "${YQ_IMAGE}" '.write_files[] | select(.path == "/etc/systemd/system/ibgw-bootstrap.service") | .content' \
+    <"${repo}/azure/cloud-init/gateway.yaml" >"${scripts}/ibgw-bootstrap.service"
   cp "${repo}/.shellcheckrc" "${scripts}/.shellcheckrc"
   chmod -R a+rX "${scripts}"
-  expect "the cloud-init file starts with #cloud-config and carries the three scripts" \
-    '"$(head -n 1 "${repo}/azure/cloud-init/gateway.yaml")" == "#cloud-config" && -s "${scripts}/fetch-secrets.sh" && -s "${scripts}/ibgw-compose.sh" && -s "${scripts}/ibgw-bootstrap.sh"'
+  expect "the cloud-init file starts with #cloud-config and carries the bootstrap script and its unit" \
+    '"$(head -n 1 "${repo}/azure/cloud-init/gateway.yaml")" == "#cloud-config" && -s "${scripts}/ibgw-bootstrap.sh" && -s "${scripts}/ibgw-bootstrap.service"'
+  # A restart of Docker must not restart the gateway: the stack unit may only ORDER itself
+  # after docker.service (Wants + After). Requires/BindsTo/PartOf would propagate a restart.
+  expect "the stack unit is ordered after Docker but not bound to it (a Docker restart leaves the gateway alone)" \
+    '"$(unit_setting "${stack}" Wants)" == *"docker.service"* && "$(unit_setting "${stack}" After)" == *"docker.service"* && -z "$(unit_setting "${stack}" Requires)$(unit_setting "${stack}" BindsTo)$(unit_setting "${stack}" PartOf)"'
+  expect "the stack unit fetches the secrets before it starts the stack, and retries with a growing delay" \
+    '"$(unit_setting "${stack}" ExecStartPre)" == "/usr/local/sbin/fetch-secrets.sh " && "$(unit_setting "${stack}" ExecStart)" == *"ibgw-compose.sh up"* && "$(unit_setting "${stack}" Restart)" == "on-failure " && -n "$(unit_setting "${stack}" RestartMaxDelaySec)"'
+  expect "the first-boot bootstrap is a unit that retries with a growing delay until it succeeded once" \
+    '"$(unit_setting "${scripts}/ibgw-bootstrap.service" Restart)" == "on-failure " && -n "$(unit_setting "${scripts}/ibgw-bootstrap.service" RestartMaxDelaySec)" && "$(unit_setting "${scripts}/ibgw-bootstrap.service" ConditionPathExists)" == "!/var/lib/ibgateway/bootstrap.done "'
+  out="$(jq_cli -r '."live-restore"' <"${repo}/azure/vm/daemon.json" 2>&1)"
+  expect "the Docker daemon keeps containers alive across its own restart (live-restore)" '"${out}" == "true"'
   # cloud-init's own validator, from the distribution the VM runs (needs the package archive).
   check "cloud-init schema: azure/cloud-init/gateway.yaml is valid for Ubuntu's cloud-init" \
     docker run --rm --name "azpack-cloudinit-${run_id}" -v "${host_repo}/azure/cloud-init:/ci:ro" \
@@ -849,18 +1119,22 @@ group_lint() {
       export DEBIAN_FRONTEND=noninteractive
       { apt-get update && apt-get install --yes --no-install-recommends cloud-init; } >/dev/null 2>&1 || exit 90
       cloud-init schema --config-file /ci/gateway.yaml'
-  check "shellcheck: scripts embedded in the cloud-init file" \
-    docker run --rm -v "$(host_path "${scripts}"):/mnt:ro" -w /mnt "${SHELLCHECK_IMAGE}" \
-    fetch-secrets.sh ibgw-compose.sh ibgw-bootstrap.sh
-  check "shellcheck: azure/tests/*.sh and fixtures" \
+  check "shellcheck: the bootstrap script embedded in the cloud-init file" \
+    docker run --rm -v "$(host_path "${scripts}"):/mnt:ro" -w /mnt "${SHELLCHECK_IMAGE}" ibgw-bootstrap.sh
+  check "shellcheck: azure/vm/*.sh, azure/tests/*.sh and the test doubles" \
     docker run --rm -v "${host_repo}:/mnt:ro" -w /mnt "${SHELLCHECK_IMAGE}" -x \
-    azure/tests/run.sh azure/tests/fetch-secrets.test.sh azure/tests/fixtures/fake-curl.sh
+    azure/vm/install.sh azure/vm/apply-config.sh azure/vm/fetch-secrets.sh azure/vm/ibgw-compose.sh \
+    azure/tests/run.sh azure/tests/fetch-secrets.test.sh azure/tests/apply-config.test.sh \
+    azure/tests/fixtures/fake-curl.sh azure/tests/fixtures/fake-docker.sh azure/tests/fixtures/fake-git.sh
   check "shellcheck: azure/vector/entrypoint.sh as POSIX sh" \
     docker run --rm -v "${host_repo}:/mnt:ro" -w /mnt "${SHELLCHECK_IMAGE}" --shell=sh \
     azure/vector/entrypoint.sh
   check "shfmt: azure shell scripts are formatted like the rest of the repository" \
     docker run --rm -v "${host_repo}:/work:ro" -w /work "${SHFMT_IMAGE}" -i 2 -ci -bn -d \
-    azure/tests/run.sh azure/tests/fetch-secrets.test.sh azure/tests/fixtures/fake-curl.sh azure/vector/entrypoint.sh
+    azure/vm/install.sh azure/vm/apply-config.sh azure/vm/fetch-secrets.sh azure/vm/ibgw-compose.sh \
+    azure/tests/run.sh azure/tests/fetch-secrets.test.sh azure/tests/apply-config.test.sh \
+    azure/tests/fixtures/fake-curl.sh azure/tests/fixtures/fake-docker.sh azure/tests/fixtures/fake-git.sh \
+    azure/vector/entrypoint.sh
   for name in azure/cloud-init/gateway.yaml azure/vector/vector.yaml azure/vector/sinks-managed-identity.yaml \
     azure/vector/sinks-certificate.yaml compose/docker-compose.azure.yml .github/workflows/azure-pack.yml; do
     out="$(docker run --rm -i "${YQ_IMAGE}" 'tag' <"${repo}/${name}" 2>&1)"
@@ -881,7 +1155,7 @@ group_lint() {
 
 groups=("$@")
 if [[ ${#groups[@]} -eq 0 ]]; then
-  groups=(vector entrypoint pipeline drift kql bicep compose secrets lint)
+  groups=(vector entrypoint pipeline drift kql kql-run bicep compose secrets lint)
 fi
 for group in "${groups[@]}"; do
   case "${group}" in
@@ -890,6 +1164,7 @@ for group in "${groups[@]}"; do
     pipeline) group_pipeline ;;
     drift) group_drift ;;
     kql) group_kql ;;
+    kql-run) group_kql_run ;;
     bicep) group_bicep ;;
     compose) group_compose ;;
     secrets) group_secrets ;;

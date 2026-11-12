@@ -1,5 +1,6 @@
-{"ts":"2026-11-12T01:00:10.000Z","src":"ibc","level":"info","event":"login_dialog","msg":"login_dialog","boot_id":"aaaaaaaaaaaaaaaa","seq":3,"phase":"login"}
-{"ts":"2026-11-12T01:00:20.500Z","src":"ibc","level":"warn","event":"twofa_initiated","msg":"second factor requested for DU1234567","boot_id":"aaaaaaaaaaaaaaaa","seq":4,"phase":"2fa-pending","account_tail":"567"}
-this line is not JSON and must be dropped, not shipped
-{"ts":"2026-11-12T01:01:02.000Z","src":"ibc","level":"info","event":"login_completed","msg":"login_completed","boot_id":"aaaaaaaaaaaaaaaa","seq":5,"phase":"logged-in"}
-{"ts":"2026-11-12T01:05:00.000Z","src":"doctor","level":"error","event":"doctor_failed","msg":"connectivity lost","boot_id":"aaaaaaaaaaaaaaaa","seq":6,"phase":"logged-in","code":1100}
+{"ts":"2026-11-12T01:52:02.201Z","src":"xvfb","level":"info","event":"xvfb_started","msg":"Xvfb listening on :1","boot_id":"443d261aecbd4789","seq":6}
+{"ts":"2026-11-12T01:52:02.211Z","src":"vnc","level":"info","event":"vnc_disabled","msg":"VNC_SERVER_PASSWORD not set; VNC disabled","boot_id":"443d261aecbd4789","seq":7}
+{"ts":"2026-11-12T01:52:02.221Z","src":"socat","level":"info","event":"socat_started","msg":"relay 0.0.0.0:4004 -> 127.0.0.1:4002 (paper); mode gated","boot_id":"443d261aecbd4789","seq":8}
+{"ts":"2026-11-12T01:52:02.235Z","src":"ibc","level":"info","event":"ibc_starting","msg":"IBC 3.24.2 starting IB Gateway 10.50.1g (stable, paper); command server port 7462","boot_id":"443d261aecbd4789","seq":9}
+{"ts":"2026-11-12T01:52:02.618Z","src":"ibc","level":"info","event":"ibc_version","msg":"ibc_version","boot_id":"443d261aecbd4789","seq":10}
+{"ts":"2026-11-12T01:52:05.055Z","src":"ibc","level":"info","event":"login_dialog","msg":"login_dialog","boot_id":"443d261aecbd4789","seq":11}

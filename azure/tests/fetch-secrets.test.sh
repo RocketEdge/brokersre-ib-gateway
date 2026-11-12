@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2034  # expect() takes its condition single-quoted and evaluates it later; the variables it names look unused
-# Tests of fetch-secrets.sh (embedded in azure/cloud-init/gateway.yaml), run by
-# azure/tests/run.sh as root inside an Ubuntu container: the real script, real jq, install
-# and mv; only curl is replaced by fixtures/fake-curl.sh (the HTTP boundary).
+# Tests of azure/vm/fetch-secrets.sh, run by azure/tests/run.sh as root inside an Ubuntu
+# container: the real script, real jq, install and mv; only curl is replaced by
+# fixtures/fake-curl.sh (the HTTP boundary).
 #
-# Usage:  fetch-secrets.test.sh <path of the extracted fetch-secrets.sh> <path of fake-curl.sh>
+# Usage:  fetch-secrets.test.sh <path of fetch-secrets.sh> <path of fake-curl.sh>
 # Exit:   0 when every test passed. Each test prints PASS/FAIL with its reason.
 # Every user name, password and token in here is a canary, not a real credential.
 set -uo pipefail
@@ -80,6 +80,26 @@ expect "no managed identity stops with exit 1" '${status} -eq 1 && "${output}" =
 
 run_script empty-username
 expect "an empty secret stops with exit 5 and writes nothing" '${status} -eq 5 && ! -e "${IBGW_SECRETS_DIR}"'
+
+# On the VM the vault name is not in the environment: it comes from the configuration that
+# apply-config.sh renders from the VM's userData.
+unset IBGW_KEY_VAULT
+export IBGW_CONFIG=/tmp/ibgw-config.json
+printf '{"keyVaultName":"kv-from-config"}\n' >"${IBGW_CONFIG}"
+run_script ok
+arguments="$(cat "${FAKE_CURL_LOG}")"
+expect "without IBGW_KEY_VAULT the vault name comes from config.json" \
+  '${status} -eq 0 && "${arguments}" == *"https://kv-from-config.vault.azure.net/secrets/ib-password?api-version=7.4"*'
+
+rm -rf "${IBGW_SECRETS_DIR}" "${IBGW_CONFIG}"
+run_script ok
+expect "without any vault name it stops with exit 6 before asking for a token" \
+  '${status} -eq 6 && ! -s "${FAKE_CURL_LOG}" && ! -e "${IBGW_SECRETS_DIR}"'
+
+printf '{"keyVaultName":"not a vault; name"}\n' >"${IBGW_CONFIG}"
+run_script ok
+expect "a configured value that is not a vault name is refused with exit 6" \
+  '${status} -eq 6 && ! -s "${FAKE_CURL_LOG}" && ! -e "${IBGW_SECRETS_DIR}"'
 
 if [[ ${failures} -gt 0 ]]; then
   echo "${failures} test(s) failed"
