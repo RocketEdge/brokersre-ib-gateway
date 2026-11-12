@@ -114,8 +114,9 @@ digest in one constant (`$script:GwProbeImage` in `windows/src/Checks.ps1`). Tha
 accepted exception to invariant 1 ("no other file carries a version"): `versions.json`
 describes the inputs of the gateway image, and the probe image is not one of them. It needs a
 manual bump, and a test fails when a second copy of the reference appears.
-The rejected-login guarantee has the gap described in decision 6 (c) until the image carries
-its own latch. The start task now runs for up to 15 more minutes after each start to watch
+The rejected-login guarantee has the gap described in decision 6 (c) with an image that has
+no latch of its own; the image gets one with ADR 0016, and the kit then is a second line, not
+the only one. The start task now runs for up to 15 more minutes after each start to watch
 the login.
 
 ## Revisit trigger

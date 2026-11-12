@@ -272,7 +272,10 @@ next run of `start.ps1` or `setup.ps1` nothing of the kit is running. During tha
 depends on the image:
 
 - An image that latches a rejected login (it reports `login_rejected_latched`) refuses by
-  itself to log in again until the secret files change, whatever starts the container.
+  itself to log in again until the secret files change, whatever starts the container. The
+  gateway image has this latch from the version that knows the setting `LOGIN_LATCH`
+  ([ADR 0016](../docs/adr/0016-rejected-login-latch.md)); `setup.ps1 -ResetSecrets` rewrites
+  the secret files, which releases it.
 - An image without that latch makes one login attempt every time its container starts. If the
   gateway process exits after the rejection, Docker's restart policy starts the container
   again, and that is one more attempt with the same credentials, until a kit script runs.
@@ -402,7 +405,7 @@ intentions, not facts. `doctor.ps1` tells you the outcome on your computer.
 | `DockerDesktopAutoUpdate` | Docker does not document the key names of `settings-store.json`; the check reads `AutoDownloadUpdates` and reports `SKIP` when it is absent | Docker Desktop > Settings > Updates |
 | `cap_drop: ALL` with the gateway image during a real login | No gateway was started during development | Step 4; if the container fails to start, report it |
 | Everything in [If IBKR rejects the login](#if-ibkr-rejects-the-login) against a real gateway | No gateway was started and no login was attempted during development; the behaviour is tested against the event names and states of the image's log contract with a mocked `docker` | Nothing to do on purpose: do not provoke a rejected login. If it happens, `kit.log` and `kit-state.json` show what the kit did |
-| The states `needs-human` and the event `login_rejected_latched` | Not part of the log contract of the image version this kit was developed against (`docs/log-contract.md`); the kit understands them so it is ready for an image that reports them | `docker logs <container>` shows whether your image reports them |
+| The state `needs-human` and the event `login_rejected_latched` | Both are in the image's log contract (`docs/log-contract.md`) from the version that carries the rejected-login latch; an older image reports neither. The kit's handling was tested against the names with a mocked `docker`, never against a gateway that reported them | `docker logs <container>` shows whether your image reports them |
 | Ending a hung `docker compose up` together with its child processes | Proven with `cmd.exe` and a child process under both PowerShell editions, not with a real hung `docker compose` | If `kit.log` reports a failed start and the gateway starts anyway, report it |
 | `-ResetSecrets` replacing the container | Only the reason was measured (Docker Compose 2 leaves a running container untouched when only a secret file's content changed; `--force-recreate` replaces it), with a small test container | After `-ResetSecrets`, `docker ps` shows the gateway container "Up" for seconds, not days |
 | The C# snippet | Not compiled by this repository | Build it against IBKR's TWS API client |

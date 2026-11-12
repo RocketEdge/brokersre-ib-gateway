@@ -18,6 +18,7 @@ by or endorsed by Interactive Brokers.
 
 - [Images and tags](#images-and-tags)
 - [Quick start](#quick-start)
+- [Running on Windows](#running-on-windows)
 - [Going live](#going-live)
 - [The weekly login](#the-weekly-login)
 - [Several gateways on one host](#several-gateways-on-one-host)
@@ -127,6 +128,19 @@ You should see `logged-in`, and `(healthy)` in the status column. The API is the
 | event `existing_session` | The username is logged in somewhere else | Close the other session, or use a dedicated username |
 | event `dirs_not_writable` | A tmpfs or volume is not writable by uid 1000 | Keep the `uid=1000,gid=1000` mount options of the example |
 | a client gets "connection refused" on 4001/4002 | The Gateway is not logged in yet, or is restarting: the relay opens only while it is logged in | Retry; check the phase |
+
+## Running on Windows
+
+`windows/` holds a host kit for Windows 10 22H2 and Windows 11 (Docker Desktop with the WSL 2
+backend, or Docker Engine inside a WSL 2 distribution). `setup.ps1` checks the computer, stores
+the credentials as two protected files, starts the gateway and tells you when to approve the
+login on your phone. `doctor.ps1` reports what can interrupt the gateway (sleep, Windows Update,
+WSL idle shutdown, clock drift, folder permissions). `harden.ps1` applies the fixes and can undo
+them. The kit never automates the second factor, never restarts a running gateway on its own,
+and stops the gateway when IBKR rejected the login. It was tested with mocked Docker and with
+read-only runs on one Windows 11 computer; no gateway was started with it yet, and
+[windows/README.md](windows/README.md) lists what you should validate on your computer. See
+also [ADR 0011](docs/adr/0011-windows-host-kit.md).
 
 ## Going live
 
@@ -529,7 +543,8 @@ every variable it dropped or renamed on stderr, without printing a value.
 [docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
 [examples/README.md](examples/README.md), [azure/README.md](azure/README.md),
 [sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md),
-[docs/evidence.md](docs/evidence.md), [SECURITY.md](SECURITY.md).
+[docs/evidence.md](docs/evidence.md), [SECURITY.md](SECURITY.md),
+[windows/README.md](windows/README.md).
 
 ## License
 
