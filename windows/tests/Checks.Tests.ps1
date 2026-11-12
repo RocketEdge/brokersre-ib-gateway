@@ -969,6 +969,40 @@ Describe 'Host checks' {
         }
     }
 
+    Describe 'Test-GwFolderAccess' {
+        It 'passes for a folder only the operator, SYSTEM and Administrators can write' {
+            $folder = Join-Path $TestDrive ('access-pass-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $folder | Out-Null
+            Protect-GwSecretFolder -Path $folder -IncludeSystem -Confirm:$false
+            $result = Test-GwFolderAccess -Path $folder -Name 'GatewayFolderAccess' -Fix 'fix text'
+            $result.Name | Should -Be 'GatewayFolderAccess'
+            $result.Status | Should -Be 'PASS'
+        }
+
+        It 'warns, naming the account, when another principal may write there' {
+            $folder = Join-Path $TestDrive ('access-warn-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $folder | Out-Null
+            Add-TestAccessRule -Path $folder -Sid 'S-1-5-11' -Rights 'Modify'
+            $result = Test-GwFolderAccess -Path $folder -Name 'KitFolderAccess' -Fix 'fix text' -Risk 'They could run code as you.'
+            $result.Status | Should -Be 'WARN'
+            $result.Detail | Should -Match 'Authenticated Users'
+            $result.Detail | Should -Match 'They could run code as you\.$'
+            $result.Fix | Should -Be 'fix text'
+        }
+
+        It 'does not count read-only access as a problem' {
+            $folder = Join-Path $TestDrive ('access-read-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $folder | Out-Null
+            Protect-GwSecretFolder -Path $folder -IncludeSystem -Confirm:$false
+            Add-TestAccessRule -Path $folder -Sid 'S-1-5-32-545' -Rights 'ReadAndExecute'
+            (Test-GwFolderAccess -Path $folder -Name 'KitFolderAccess' -Fix 'x').Status | Should -Be 'PASS'
+        }
+
+        It 'skips when the folder does not exist' {
+            (Test-GwFolderAccess -Path (Join-Path $TestDrive 'access-none') -Name 'GatewayFolderAccess' -Fix 'x').Status | Should -Be 'SKIP'
+        }
+    }
+
     Describe 'Invoke-GwCheckSafely' {
         It 'returns the check result unchanged' {
             $result = Invoke-GwCheckSafely -Name 'Demo' -Check { New-GwCheckResult -Name 'Demo' -Status 'PASS' -Detail 'fine' }
@@ -1007,7 +1041,7 @@ Describe 'Host checks' {
                     'WindowsBuild', 'ContainerRuntime', 'SleepOnAc', 'UpdateActiveHours', 'UpdatePendingReboot', 'UpdateAutoRestart', 'StartAtBoot',
                     'WslVersion', 'WslNetworkingMode', 'WslIdleShutdown', 'WslMemory', 'DockerDesktopVersion', 'DockerDesktopAutoUpdate',
                     'DockerDesktopLicence', 'FirewallExposure', 'HostClock', 'ContainerClock', 'DiskSpace', 'SecretEncodingUsername',
-                    'SecretEncodingPassword', 'SecretFolderAccess', 'ComposePortBinding', 'ComposeStopGrace', 'ComposeReadOnly'
+                    'SecretEncodingPassword', 'SecretFolderAccess', 'ComposePortBinding', 'ComposeStopGrace', 'ComposeReadOnly', 'GatewayFolderAccess', 'KitFolderAccess'
                 )) {
                 $names | Should -Contain $expected
             }

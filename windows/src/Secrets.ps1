@@ -126,12 +126,16 @@ function Protect-GwSecretFolder {
     protected this way is still readable inside a container through a read-only bind mount,
     because Docker Desktop accesses Windows files as the signed-in user. Docker Engine inside a
     WSL distribution reaches the file through the same user's session (not verified here).
-    With -IncludeSystem the list also names SYSTEM and the Administrators group. That is the
-    fallback for a Docker installation whose file sharing runs under another account: still no
-    inheritance and no ordinary users, but not owner-only. setup.ps1 uses it only after the
-    owner-only list was shown not to work, and says so.
+    With -IncludeSystem the list also names SYSTEM and the Administrators group. setup.ps1
+    uses that form for the gateway folder itself (compose.yaml, kit-state.json and the change
+    journal live there, and a folder created directly under C:\ would otherwise inherit write
+    access for every local user), and for the secrets folder only as the fallback for a Docker
+    installation whose file sharing runs under another account, after the owner-only list was
+    shown not to work; it says so. Still no inheritance and no ordinary users.
+    Existing files and subfolders that inherit pick the new list up; a subfolder with its own
+    protected list (the secrets folder) keeps it.
     .PARAMETER Path
-    Existing folder, normally <gateway folder>\secrets.
+    Existing folder: the gateway folder or <gateway folder>\secrets.
     .PARAMETER IncludeSystem
     Also allow SYSTEM (S-1-5-18) and BUILTIN\Administrators (S-1-5-32-544).
     .OUTPUTS
@@ -183,13 +187,23 @@ function Get-GwAclOtherIdentity {
     identity that cannot be translated is reported by its raw value.
     .PARAMETER Path
     Existing file or folder.
+    .PARAMETER IgnoreSystem
+    Do not list SYSTEM (S-1-5-18) and BUILTIN\Administrators (S-1-5-32-544) either.
     .OUTPUTS
     System.String[] of account names; nothing when only the current user has access.
     #>
     [CmdletBinding()]
     [OutputType([string[]])]
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $currentSid = (Get-GwCurrentUser).Sid
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$IgnoreSystem
+    )
+    $ignored = New-Object System.Collections.Generic.List[string]
+    $ignored.Add((Get-GwCurrentUser).Sid)
+    if ($IgnoreSystem) {
+        $ignored.Add('S-1-5-18')
+        $ignored.Add('S-1-5-32-544')
+    }
     $acl = Get-Acl -LiteralPath (Resolve-GwFullPath -Path $Path)
     $names = New-Object System.Collections.Generic.List[string]
     foreach ($rule in $acl.Access) {
@@ -199,11 +213,86 @@ function Get-GwAclOtherIdentity {
         catch [System.Security.Principal.IdentityNotMappedException] {
             Write-Verbose ('Identity not translated: {0}' -f $rule.IdentityReference.Value)
         }
-        if ($sidText -eq $currentSid) { continue }
+        if ($ignored.Contains($sidText)) { continue }
         $name = [string]$rule.IdentityReference.Value
         if (-not $names.Contains($name)) { $names.Add($name) }
     }
     return [string[]]$names.ToArray()
+}
+
+function Get-GwAclWriterIdentity {
+    <#
+    .SYNOPSIS
+    Lists the accounts, other than the operator, SYSTEM and Administrators, that may change a folder or its content.
+    .DESCRIPTION
+    Read-only. An allow entry counts when it grants any right that lets its holder alter the
+    folder or what is in it: write or append data (create files and folders), write
+    attributes, delete, change permissions or take ownership, including through Modify, Full
+    control and the generic write and generic all bits Windows uses on inherit-only entries
+    (the drive root grants Authenticated Users exactly such an entry, which is why a new
+    folder directly under C:\ is writable by every local user). Read and execute rights do not
+    count. Entries for the current user, SYSTEM, Administrators, TrustedInstaller and the
+    CREATOR OWNER placeholder (which only applies to objects its holder created) are ignored.
+    Compares by SID, so localised account names do not matter.
+    .PARAMETER Path
+    Existing folder (or file).
+    .OUTPUTS
+    System.String[] of account names; nothing when no other account may write.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $trusted = @(
+        (Get-GwCurrentUser).Sid
+        'S-1-5-18'
+        'S-1-5-32-544'
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+        'S-1-3-0'
+    )
+    # WriteData 2, AppendData 4, WriteExtendedAttributes 16, DeleteSubdirectoriesAndFiles 64,
+    # WriteAttributes 256, Delete 65536, ChangePermissions 262144, TakeOwnership 524288,
+    # GENERIC_ALL 0x10000000, GENERIC_WRITE 0x40000000.
+    $writeMask = 2 -bor 4 -bor 16 -bor 64 -bor 256 -bor 65536 -bor 262144 -bor 524288 -bor 0x10000000 -bor 0x40000000
+    $acl = Get-Acl -LiteralPath (Resolve-GwFullPath -Path $Path)
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($rule in $acl.Access) {
+        if ([string]$rule.AccessControlType -ne 'Allow') { continue }
+        if (([int]$rule.FileSystemRights -band $writeMask) -eq 0) { continue }
+        $sidText = [string]$rule.IdentityReference.Value
+        try { $sidText = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+        catch [System.Security.Principal.IdentityNotMappedException] {
+            Write-Verbose ('Identity not translated: {0}' -f $rule.IdentityReference.Value)
+        }
+        if ($trusted -contains $sidText) { continue }
+        $name = [string]$rule.IdentityReference.Value
+        if (-not $names.Contains($name)) { $names.Add($name) }
+    }
+    return [string[]]$names.ToArray()
+}
+
+function Test-GwFolderRestricted {
+    <#
+    .SYNOPSIS
+    Tells whether a folder is closed to everyone but the operator (and SYSTEM and Administrators).
+    .DESCRIPTION
+    Read-only. True only when inheritance is switched off on the folder and no allow entry
+    names any other account. setup asks this after restricting the gateway folder and the
+    secrets folder and writes nothing when the answer is no: a declined confirmation or an
+    access list Windows refused to change must not end with credentials in a folder other
+    accounts can read.
+    .PARAMETER Path
+    Folder to inspect.
+    .OUTPUTS
+    System.Boolean; false also when the folder does not exist.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $target = Resolve-GwFullPath -Path $Path
+    if (-not [System.IO.Directory]::Exists($target)) { return $false }
+    $acl = Get-Acl -LiteralPath $target
+    if (-not $acl.AreAccessRulesProtected) { return $false }
+    return (@(Get-GwAclOtherIdentity -Path $target -IgnoreSystem).Count -eq 0)
 }
 
 function Get-GwSecretFileFinding {

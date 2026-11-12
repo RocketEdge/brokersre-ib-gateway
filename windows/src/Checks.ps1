@@ -1199,6 +1199,50 @@ function Test-GwComposeReadOnly {
     return (New-GwCheckResult -Name $name -Status 'PASS' -Detail 'The container root file system is read-only.')
 }
 
+function Test-GwFolderAccess {
+    <#
+    .SYNOPSIS
+    Doctor check: can only the operator, SYSTEM and Administrators change a folder the kit relies on?
+    .DESCRIPTION
+    Used for two folders. The gateway folder holds compose.yaml, the record of a rejected
+    login and the change journal that 'harden.ps1 -Undo' replays (elevated). The kit's own
+    folder holds start.ps1, which the scheduled start task runs as the operator. An account
+    that can write to either can therefore change what runs under the operator's name. A
+    folder created directly under C:\ inherits write access for every local user, so this is
+    the default situation for a kit extracted there. Read-only: looks at the access list of
+    the folder itself (Get-GwAclWriterIdentity), not at every file below it.
+    .PARAMETER Path
+    Folder to inspect.
+    .PARAMETER Name
+    Check name to report: 'GatewayFolderAccess' or 'KitFolderAccess'.
+    .PARAMETER Fix
+    What the operator should do when other accounts may write.
+    .PARAMETER Risk
+    One sentence saying what such an account could do; appended to the detail.
+    .OUTPUTS
+    Check result object: PASS, WARN (the other accounts are named) or SKIP (folder missing).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Fix,
+        [string]$Risk = ''
+    )
+    $folder = Resolve-GwFullPath -Path $Path
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+        return (New-GwCheckResult -Name $Name -Status 'SKIP' -Detail ('{0} does not exist yet.' -f $folder) -Fix 'Run setup.ps1.')
+    }
+    $writers = @(Get-GwAclWriterIdentity -Path $folder)
+    if ($writers.Count -eq 0) {
+        return (New-GwCheckResult -Name $Name -Status 'PASS' -Detail ('Only your account, SYSTEM and Administrators can change {0}.' -f $folder))
+    }
+    $detail = 'Other accounts can change {0}: {1}.' -f $folder, ($writers -join ', ')
+    if (-not [string]::IsNullOrEmpty($Risk)) { $detail = '{0} {1}' -f $detail, $Risk }
+    return (New-GwCheckResult -Name $Name -Status 'WARN' -Detail $detail -Fix $Fix)
+}
+
 function Get-GwPrerequisiteResult {
     <#
     .SYNOPSIS
@@ -1292,6 +1336,22 @@ function Get-GwDoctorResult {
     Invoke-GwCheckSafely -Name 'SecretEncodingUsername' -Check { Test-GwSecretEncoding -Path (Join-Path $secrets 'ib-username') -Name 'SecretEncodingUsername' }
     Invoke-GwCheckSafely -Name 'SecretEncodingPassword' -Check { Test-GwSecretEncoding -Path (Join-Path $secrets 'ib-password') -Name 'SecretEncodingPassword' }
     Invoke-GwCheckSafely -Name 'SecretFolderAccess' -Check { Test-GwSecretAcl -Path $secrets }
+    Invoke-GwCheckSafely -Name 'GatewayFolderAccess' -Check {
+        Test-GwFolderAccess -Path $folder -Name 'GatewayFolderAccess' `
+            -Risk 'They could edit compose.yaml, clear the record of a rejected login or alter the change journal that harden.ps1 -Undo replays.' `
+            -Fix 'Run setup.ps1 again; it restricts the folder to your account, SYSTEM and Administrators and keeps your secrets.'
+    }
+    Invoke-GwCheckSafely -Name 'KitFolderAccess' -Check {
+        # The icacls line was run on a scratch folder (2026-11-12): it drops the inherited entries
+        # and leaves the three named ones; an entry granted explicitly to someone else stays and
+        # doctor keeps naming it.
+        $kitFix = ('Keep the kit in a folder only you can change, for example under your user profile, or switch inheritance off for this one: ' +
+            'icacls "{0}" /inheritance:r /grant:r "*{1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" ' +
+            '(then run doctor.ps1 again and remove any account it still names with icacls /remove). ' +
+            'If you move the kit, run harden.ps1 -StartAtBoot again: the start task refers to its path.') -f $script:GwModuleRoot, (Get-GwCurrentUser).Sid
+        Test-GwFolderAccess -Path $script:GwModuleRoot -Name 'KitFolderAccess' -Fix $kitFix `
+            -Risk 'The scheduled start task runs start.ps1 from this folder under your account, so they could run code as you.'
+    }
     $compose = Get-GwComposeConfig -Runtime $Runtime -Path $folder
     Invoke-GwCheckSafely -Name 'ComposePortBinding' -Check { Test-GwComposePortBinding -Config $compose.Config -Reason $compose.Reason }
     Invoke-GwCheckSafely -Name 'ComposeStopGrace' -Check { Test-GwComposeStopGrace -Config $compose.Config -Reason $compose.Reason }

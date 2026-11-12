@@ -25,6 +25,7 @@
         'Find-GwIniKey'
         'Format-GwHourWindow'
         'Get-GwAclOtherIdentity'
+        'Get-GwAclWriterIdentity'
         'Get-GwActivePowerScheme'
         'Get-GwBstr'
         'Get-GwComposeConfig'
@@ -43,6 +44,7 @@
         'Get-GwGatewayPhase'
         'Get-GwIniValue'
         'Get-GwJournal'
+        'Get-GwJournalEntryProblem'
         'Get-GwJournalPath'
         'Get-GwKitState'
         'Get-GwKitStatePath'
@@ -109,6 +111,8 @@
         'Test-GwDockerDesktopUpdate'
         'Test-GwDockerDesktopVersion'
         'Test-GwFirewallExposure'
+        'Test-GwFolderAccess'
+        'Test-GwFolderRestricted'
         'Test-GwHostClock'
         'Test-GwIsAdministrator'
         'Test-GwKitTask'
@@ -139,6 +143,7 @@
         'Write-GwFileAtomic'
         'Write-GwGatewayFolder'
         'Write-GwLog'
+        'Write-GwRevertedIniFile'
         'Write-GwSecretFile'
     )
     CmdletsToExport      = @()

@@ -80,6 +80,45 @@ function Get-TestTreeSnapshot {
     return $sorted
 }
 
+function Add-TestAccessRule {
+    <#
+    .SYNOPSIS
+    Adds one allow entry to the access list of a test folder.
+    .DESCRIPTION
+    Writes only the access section through the same framework call the kit uses. Set-Acl is
+    avoided: on a folder whose inheritance is off it also tries to write the owner and audit
+    sections and fails for a user who is not elevated.
+    .PARAMETER Path
+    Folder under TestDrive.
+    .PARAMETER Sid
+    Well-known SID to grant to, for example S-1-5-11 (Authenticated Users) or S-1-5-32-545 (Users).
+    .PARAMETER Rights
+    Rights to grant, for example Modify or ReadAndExecute.
+    .PARAMETER Propagation
+    None (the entry applies to the folder and what is in it) or InheritOnly (only to what is in it).
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Sid,
+        [Parameter(Mandatory = $true)][System.Security.AccessControl.FileSystemRights]$Rights,
+        [System.Security.AccessControl.PropagationFlags]$Propagation = [System.Security.AccessControl.PropagationFlags]::None
+    )
+    $info = New-Object System.IO.DirectoryInfo($Path)
+    $sections = [System.Security.AccessControl.AccessControlSections]::Access
+    if ($PSVersionTable.PSEdition -eq 'Core') { $security = [System.IO.FileSystemAclExtensions]::GetAccessControl($info, $sections) }
+    else { $security = $info.GetAccessControl($sections) }
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        (New-Object System.Security.Principal.SecurityIdentifier($Sid)), $Rights, $inheritance, $Propagation,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $security.AddAccessRule($rule)
+    if ($PSVersionTable.PSEdition -eq 'Core') { [System.IO.FileSystemAclExtensions]::SetAccessControl($info, $security) }
+    else { $info.SetAccessControl($security) }
+}
+
 function Get-TestNativeResult {
     <#
     .SYNOPSIS

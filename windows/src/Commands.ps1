@@ -106,14 +106,21 @@ function Write-GwGatewayFolder {
     Steps 2 to 5 of setup: the folder, the two secret files, the access list, compose.yaml and kit-state.json.
     .DESCRIPTION
     Everything setup writes to disk, in one place, so the caller can turn an access or I/O
-    error into one plain message. The secrets folder is restricted to the current account as
-    soon as it exists, before a secret is written into it, and leftover temporary secret
-    files of an interrupted run are removed. Both values are validated before either file is
-    written. kit-state.json keeps a recorded rejected login until the credentials are
-    entered again. Each write is behind ShouldProcess; under -WhatIf nothing is
-    created, nothing is asked and no probe container runs. Existing secret files are kept
-    unless -ResetSecrets is given. The values are read with a hidden prompt (or taken from the
-    SecureString parameters), written byte-exact by Write-GwSecretFile and never printed.
+    error into one plain message. The gateway folder is restricted to the current account,
+    SYSTEM and Administrators (inheritance off) before anything is written into it: it holds
+    compose.yaml, the record of a rejected login and the change journal an elevated undo
+    replays, and a folder created under C:\ would otherwise be writable by every local user.
+    The secrets folder is restricted to the current account alone. If either folder is not
+    restricted afterwards (a declined confirmation, or Windows refused), nothing is written
+    and the outcome is FolderNotRestricted. Leftover temporary secret files of an interrupted
+    run are removed. Both values are validated before either file is written.
+    kit-state.json keeps a recorded rejected login until both secret files were written again.
+    Each step asks ShouldProcess once; the functions it calls are then run with
+    -Confirm:$false, so 'setup.ps1 -Confirm' asks one question per step and a "no" cannot
+    leave a half-done step behind. Under -WhatIf nothing is created, nothing is asked and no
+    probe container runs. Existing secret files are kept unless -ResetSecrets is given. The
+    values are read with a hidden prompt (or taken from the SecureString parameters), written
+    byte-exact by Write-GwSecretFile and never printed.
     .PARAMETER Folder
     Gateway folder (absolute path).
     .PARAMETER Detected
@@ -138,9 +145,10 @@ function Write-GwGatewayFolder {
     .PARAMETER PasswordSecure
     Password as a SecureString instead of the prompt.
     .OUTPUTS
-    PSCustomObject: Outcome (empty when everything was written, 'InvalidCredential' when a
-    value was refused; then neither secret file was changed) and SecretsWritten (bool). Access
-    and I/O errors are thrown.
+    PSCustomObject: Outcome (empty when everything was written; 'InvalidCredential' when a
+    value was refused, then neither secret file was changed; 'FolderNotRestricted' when a
+    folder could not be closed to other accounts, then nothing was written) and SecretsWritten
+    (true only when both secret files were written in this run). Access and I/O errors are thrown.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([pscustomobject])]
@@ -164,16 +172,27 @@ function Write-GwGatewayFolder {
     $finish = { param([string]$Outcome) [pscustomobject]@{ Outcome = $Outcome; SecretsWritten = $secretsWritten } }
 
     Write-GwConsole -Message ''
-    Write-GwConsole -Message 'Step 2 of 8: folder (the secrets folder is restricted to your Windows account before anything is written into it)'
-    foreach ($directory in @($Folder, $secrets)) {
-        if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
-            if ($PSCmdlet.ShouldProcess($directory, 'Create folder')) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
-        }
+    Write-GwConsole -Message 'Step 2 of 8: folders (closed to other Windows accounts before anything is written into them)'
+    # One question per folder; the calls inside run without asking again.
+    if ($PSCmdlet.ShouldProcess($Folder, 'Create the gateway folder if needed and restrict it to your account, SYSTEM and Administrators')) {
+        if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { New-Item -ItemType Directory -Path $Folder -Force | Out-Null }
+        Protect-GwSecretFolder -Path $Folder -IncludeSystem -Confirm:$false
+    }
+    if ((Test-Path -LiteralPath $Folder -PathType Container) -and
+        $PSCmdlet.ShouldProcess($secrets, 'Create the secrets folder if needed and restrict it to your account')) {
+        if (-not (Test-Path -LiteralPath $secrets -PathType Container)) { New-Item -ItemType Directory -Path $secrets -Force | Out-Null }
+        Protect-GwSecretFolder -Path $secrets -Confirm:$false
+        Remove-GwSecretTempFile -Path $secrets -Confirm:$false
     }
     $haveSecretsFolder = Test-Path -LiteralPath $secrets -PathType Container
-    if ($haveSecretsFolder) {
-        Protect-GwSecretFolder -Path $secrets
-        Remove-GwSecretTempFile -Path $secrets
+    if (-not $WhatIfPreference) {
+        foreach ($directory in @($Folder, $secrets)) {
+            if (Test-GwFolderRestricted -Path $directory) { continue }
+            $notRestricted = ('{0} is not restricted to your account (the step was declined, or Windows did not apply the access list). ' +
+                'Nothing was written: credentials and the files that decide what runs under your name do not go into a folder other accounts can change.') -f $directory
+            Write-GwConsole -Status 'FAIL' -Message $notRestricted
+            return (& $finish 'FolderNotRestricted')
+        }
     }
 
     Write-GwConsole -Message ''
@@ -201,8 +220,10 @@ function Write-GwGatewayFolder {
             }
             return (& $finish 'InvalidCredential')
         }
-        Write-GwSecretFile -Path $userFile -SecureValue $userValue
-        Write-GwSecretFile -Path $passwordFile -SecureValue $passwordValue
+        # The question was asked above; the two writes do not ask again. An exception from
+        # either leaves $secretsWritten false, so a recorded rejected login is not cleared.
+        Write-GwSecretFile -Path $userFile -SecureValue $userValue -Confirm:$false
+        Write-GwSecretFile -Path $passwordFile -SecureValue $passwordValue -Confirm:$false
         $secretsWritten = $true
         Write-GwConsole -Message 'Secret files written (UTF-8, no byte-order mark, no newline).' -Status 'PASS'
     }
@@ -214,7 +235,7 @@ function Write-GwGatewayFolder {
         switch ($mount.Result) {
             'Readable' { Write-GwConsole -Message 'Only your account can read the folder, and a container can still read the files.' -Status 'PASS' }
             'NotReadable' {
-                Protect-GwSecretFolder -Path $secrets -IncludeSystem
+                Protect-GwSecretFolder -Path $secrets -IncludeSystem -Confirm:$false
                 $second = Test-GwSecretMount -Runtime $Detected -SecretsPath $secrets
                 $status = 'WARN'
                 if ($second.Result -eq 'NotReadable') { $status = 'FAIL' }
@@ -315,13 +336,14 @@ function Invoke-GwSetup {
     .DESCRIPTION
     Steps, each printed in plain language:
     1. Prerequisite checks (PASS/WARN/FAIL with the fix). Any FAIL stops here; nothing is created.
-    2. Creates the gateway folder and its secrets folder.
+    2. Creates the gateway folder and its secrets folder and closes both to other Windows
+       accounts (gateway folder: the current account, SYSTEM and Administrators; secrets
+       folder: the current account only). Nothing is written into a folder that is not closed.
     3. Asks for the IBKR username and password with a hidden prompt (or takes the SecureString
        parameters) and writes each as UTF-8 without byte-order mark and without newline.
        Existing secrets are kept unless -ResetSecrets is given.
-    4. Restricts the secrets folder to the current account and verifies with a dummy file that
-       a container can still read it; if not, widens the access list to SYSTEM and
-       Administrators (inheritance stays off) and says so.
+    4. Verifies with a dummy file that a container can still read the secrets folder; if not,
+       widens its access list to SYSTEM and Administrators (inheritance stays off) and says so.
     5. Renders compose.yaml from the template. An existing, different compose.yaml is never
        replaced unless -Force is given (a backup is kept), so a re-run cannot silently switch
        paper to live or recreate a running gateway.
@@ -571,8 +593,10 @@ function Invoke-GwHarden {
     Nothing happens unless a switch asks for it. Every change goes through ShouldProcess
     (-WhatIf shows it, power changes ask for confirmation) and is journaled with its previous
     value in <Path>\harden-journal.json. -Undo reverts everything journaled, newest first, and
-    cannot be combined with other options. One failing option is reported and the others still
-    run; the exit code is then 1.
+    cannot be combined with other options; its exit code is 1 when any journaled change is
+    still in place afterwards (it needs elevation, its revert failed, or the entry was refused
+    because the kit could not have written it). One failing option is reported and the others
+    still run; the exit code is then 1.
     For -StartAtBoot DockerDesktop only the start-after-sign-in task is configured. Windows
     auto-logon, which an unattended Docker Desktop host also needs, is explained but never
     configured: it stores the Windows password on the computer and lets anyone with physical
@@ -597,7 +621,8 @@ function Invoke-GwHarden {
     .PARAMETER WslMemoryGB
     With -WslConfig: also set [wsl2] memory to this many GB.
     .PARAMETER WslConfigPath
-    Path of .wslconfig; defaults to %UserProfile%\.wslconfig.
+    Path of .wslconfig; defaults to %UserProfile%\.wslconfig. -Undo touches only this file:
+    after hardening with another path, pass the same path to -Undo.
     .PARAMETER FirewallLoopbackOnly
     Block inbound TCP 4001, 4002 and 9810 from the network.
     .PARAMETER Undo
@@ -629,8 +654,17 @@ function Invoke-GwHarden {
     $hasLogonType = $PSBoundParameters.ContainsKey('TaskLogonType')
     $hasMemory = $PSBoundParameters.ContainsKey('WslMemoryGB')
     $steps = New-Object System.Collections.Generic.List[object]
+    # Filled by the undo step (a script block runs in a child scope, so it reports through this
+    # object instead of assigning a variable).
+    $undoOutcome = @{ StillInPlace = 0 }
     if ($Undo) {
-        $steps.Add(@{ Name = 'Undo'; Run = { Undo-GwHardening -Path $folder | Out-Null } })
+        $steps.Add(@{
+                Name = 'Undo'
+                Run  = {
+                    $results = @(Undo-GwHardening -Path $folder -WslConfigPath $WslConfigPath)
+                    $undoOutcome.StillInPlace = @($results | Where-Object { $_.Result -ne 'Reverted' }).Count
+                }
+            })
     }
     else {
         if ($DisableSleep) { $steps.Add(@{ Name = 'DisableSleep'; Run = { Disable-GwSleep -Path $folder } }) }
@@ -715,6 +749,13 @@ function Invoke-GwHarden {
     }
     if ($WhatIfPreference) {
         Write-GwConsole -Message 'Preview only (-WhatIf): nothing was changed and nothing was recorded.'
+    }
+    elseif ($undoOutcome.StillInPlace -gt 0) {
+        # A change that is still in place is a failed undo, whatever the reason.
+        $exitCode = 1
+        $stillThere = ('{0} change(s) are still in place (see above). For "Needs an elevated PowerShell", run harden.ps1 -Undo again as administrator; ' +
+            'the journal keeps them until they are reverted.') -f $undoOutcome.StillInPlace
+        Write-GwConsole -Status 'FAIL' -Message $stillThere
     }
     elseif (-not $Undo -and $exitCode -eq 0) {
         Write-GwConsole -Message ('Every change is recorded in {0}; revert with: harden.ps1 -Undo' -f (Get-GwJournalPath -Path $folder))

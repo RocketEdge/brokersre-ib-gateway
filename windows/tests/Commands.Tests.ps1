@@ -429,6 +429,20 @@ Describe 'Commands' {
             ($script:console -join "`n") | Should -Match 'at 2026-11-12T01:00:00Z'
         }
 
+        It 'does not write a secret into a folder it could not restrict' {
+            Mock -ModuleName BrokerSre.Gateway Protect-GwSecretFolder { }
+            $result = Invoke-GwSetup -Path $script:folder -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            Test-Path -LiteralPath (Join-Path $script:folder 'secrets\ib-password') | Should -BeFalse
+            ($script:console -join "`n") | Should -Match 'not restricted'
+        }
+
+        It 'restricts the gateway folder itself to the operator, SYSTEM and Administrators before writing into it' {
+            Invoke-GwSetup -Path $script:folder -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            (Get-Acl -LiteralPath $script:folder).AreAccessRulesProtected | Should -BeTrue
+            @(Get-GwAclWriterIdentity -Path $script:folder).Count | Should -Be 0
+            @(Get-GwAclOtherIdentity -Path (Join-Path $script:folder 'secrets')).Count | Should -Be 0
+        }
         It 'leaves the gateway running and returns 2 when the wait times out' {
             $script:loginOutcome = 'Timeout'
             $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
@@ -547,11 +561,10 @@ Describe 'Commands' {
             $script:hardenCalls | Should -Be @('ActiveHours 6-23')
         }
 
-        It 'registers the sign-in task for Docker Desktop and explains auto-logon without configuring it' {
+        It 'dispatches the sign-in task for Docker Desktop and explains auto-logon (Harden.Tests proves nothing is configured)' {
             Invoke-GwHarden -Path $script:folder -StartAtBoot DockerDesktop -Confirm:$false | Out-Null
             $script:hardenCalls | Should -Be @('StartTask DockerDesktop afterSignIn=False logon=Password')
             ($script:console -join "`n") | Should -Match 'Autologon'
-            Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwRegistry -Times 0 -Exactly
         }
 
         It 'registers the boot task for Docker Engine in WSL with the chosen logon type' {

@@ -9,6 +9,11 @@
 # a "run whether logged on or not" task) is asked for by schtasks itself on the console.
 
 $script:GwFirewallRuleName = 'BrokerSRE-Gateway-Block-Api-Ports'
+# The one registry key the kit writes: the Windows Update policy key with the active-hours values.
+$script:GwUpdatePolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+$script:GwUpdatePolicyValueNames = @('SetActiveHours', 'ActiveHoursStart', 'ActiveHoursEnd')
+# The .wslconfig keys the kit sets, as 'section/key'.
+$script:GwWslConfigKeys = @('wsl2/networkingMode', 'wsl2/memory', 'general/instanceIdleTimeout')
 
 function Get-GwJournalPath {
     <#
@@ -288,7 +293,7 @@ function Set-GwUpdateActiveWindow {
     $length = (($End - $Start) + 24) % 24
     if ($length -eq 0) { throw (New-Object System.ArgumentException('Start and End must differ.')) }
     if ($length -gt 18) { throw (New-Object System.ArgumentException(('The window is {0} hours long; Windows accepts at most 18 hours.' -f $length))) }
-    $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    $key = $script:GwUpdatePolicyKey
     $window = Format-GwHourWindow -Start $Start -End $End
     if (-not $PSCmdlet.ShouldProcess($key, ('Set Windows Update active hours to {0}' -f $window))) { return }
     Assert-GwElevated -Operation 'Setting Windows Update active hours'
@@ -657,6 +662,12 @@ function Set-GwWslConfigValue {
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$Value
     )
+    # Undo accepts only these keys back from the journal, so nothing else may be journaled.
+    if ($script:GwWslConfigKeys -cnotcontains ('{0}/{1}' -f $Section, $Key)) {
+        throw (New-Object System.ArgumentException(
+                ('The kit sets only these .wslconfig keys: {0}. [{1}] {2} is not one of them.' -f ($script:GwWslConfigKeys -join ', '), $Section, $Key)))
+    }
+    if ($Value -match '[\r\n]') { throw (New-Object System.ArgumentException('A .wslconfig value is one line.')) }
     $file = Resolve-GwFullPath -Path $WslConfigPath
     $text = Read-GwTextFile -Path $file
     $fileExisted = ($null -ne $text)
@@ -721,6 +732,139 @@ function Add-GwFirewallBlockRule {
     Write-GwConsole -Message $description -Status 'PASS'
 }
 
+function Get-GwJournalEntryProblem {
+    <#
+    .SYNOPSIS
+    Says why a journal entry is not one this kit could have written, or returns nothing wrong.
+    .DESCRIPTION
+    'harden.ps1 -Undo' often runs elevated and replays a file. If another account could ever
+    write that file (a gateway folder created by an older kit version, or restored from a
+    backup), an edited entry would make the elevated undo write a registry value, rewrite a
+    file, delete a task or remove a firewall rule of the editor's choosing. Undo therefore
+    acts only on entries that match what the harden functions journal:
+    PowerAcValue: the scheme is a GUID, the setting is STANDBYIDLE or HIBERNATEIDLE, the
+    previous value is a number of seconds that fits a DWORD.
+    RegistryValue: the Windows Update policy key and one of its three active-hours values,
+    with a non-negative 32-bit number as the previous value.
+    ScheduledTask: one of the kit's five task names.
+    IniValue: the .wslconfig this run is about, one of the keys the kit sets, a one-line
+    previous value, and a backup path that is that file plus the kit's backup suffix.
+    FirewallRule: the kit's rule name.
+    Pure function: reads nothing but its arguments.
+    .PARAMETER Entry
+    Journal entry from Get-GwJournal.
+    .PARAMETER WslConfigPath
+    The .wslconfig this undo run may touch.
+    .OUTPUTS
+    System.String: empty when the entry is acceptable, otherwise the reason in plain words.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Entry,
+        [Parameter(Mandatory = $true)][string]$WslConfigPath
+    )
+    $data = $Entry.Data
+    if ($null -eq $data) { return 'it carries no data' }
+    $read = { param([string]$Name) [string](Get-GwPropertyValue -InputObject $data -Name $Name -Default '') }
+    switch -CaseSensitive ([string]$Entry.Kind) {
+        'PowerAcValue' {
+            if ((& $read 'Scheme') -notmatch '\A[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\z') { return 'its power scheme is not a GUID' }
+            if (@('STANDBYIDLE', 'HIBERNATEIDLE') -cnotcontains (& $read 'Setting')) { return 'its power setting is not one the kit changes' }
+            $seconds = & $read 'PreviousSeconds'
+            if ($seconds -notmatch '\A\d{1,10}\z' -or [long]$seconds -gt [uint32]::MaxValue) { return 'its previous value is not a number of seconds' }
+        }
+        'RegistryValue' {
+            if ((& $read 'Path') -ine $script:GwUpdatePolicyKey) { return ('its registry key is not {0}' -f $script:GwUpdatePolicyKey) }
+            if ($script:GwUpdatePolicyValueNames -cnotcontains (& $read 'Name')) { return 'its registry value is not one of the active-hours values' }
+            $previous = & $read 'PreviousValue'
+            if ($previous -notmatch '\A\d{1,10}\z' -or [long]$previous -gt [int]::MaxValue) { return 'its previous value is not a non-negative 32-bit number' }
+        }
+        'ScheduledTask' {
+            $allowed = @(
+                (Get-GwTaskName -Kind 'Boot' -TradingMode 'paper'), (Get-GwTaskName -Kind 'Boot' -TradingMode 'live'),
+                (Get-GwTaskName -Kind 'SignIn' -TradingMode 'paper'), (Get-GwTaskName -Kind 'SignIn' -TradingMode 'live'),
+                (Get-GwTaskName -Kind 'ClockFix')
+            )
+            if ($allowed -cnotcontains (& $read 'TaskName')) { return 'its task is not one of the kit''s scheduled tasks' }
+        }
+        'IniValue' {
+            $expected = Resolve-GwFullPath -Path $WslConfigPath
+            $file = & $read 'File'
+            if ($file -eq '' -or (Resolve-GwFullPath -Path $file) -ine $expected) {
+                return ('it names the file "{0}", not the .wslconfig of this run ({1}); if you hardened with -WslConfigPath, pass the same path to -Undo' -f $file, $expected)
+            }
+            if ($script:GwWslConfigKeys -cnotcontains ('{0}/{1}' -f (& $read 'Section'), (& $read 'Key'))) { return 'its key is not one the kit sets in .wslconfig' }
+            $previous = & $read 'PreviousValue'
+            if ($previous -match '[\r\n]' -or $previous.Length -gt 256) { return 'its previous value is not a single short line' }
+            $backup = & $read 'BackupPath'
+            if ($backup -ne '') {
+                $prefix = $expected + '.brokersre-backup-'
+                if (-not $backup.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $backup.Substring($prefix.Length) -cnotmatch '\A\d{8}T\d{6}Z\z') {
+                    return 'its backup path is not a backup this kit made'
+                }
+            }
+        }
+        'FirewallRule' {
+            if ((& $read 'RuleName') -cne $script:GwFirewallRuleName) { return 'its firewall rule is not the kit''s rule' }
+        }
+        default { return ('its kind "{0}" is unknown' -f [string]$Entry.Kind) }
+    }
+    return ''
+}
+
+function Write-GwRevertedIniFile {
+    <#
+    .SYNOPSIS
+    Writes .wslconfig after one key was reverted, byte for byte as it was before when possible.
+    .DESCRIPTION
+    The kit edits .wslconfig as text with LF line endings and no byte-order mark, so a file
+    Notepad saved (CRLF, perhaps a mark) would come back from harden-then-undo changed in every
+    line. When the reverted text equals the backup made before the change, line endings and
+    mark aside, the backup's own bytes are put back (atomically) and the backup is deleted.
+    When it differs, the operator has edited the file since: those edits win, the text is
+    written as it is and the backup stays for them to compare. A file the kit created that is
+    empty again is deleted.
+    .PARAMETER File
+    The .wslconfig.
+    .PARAMETER Text
+    Its content after the key was reverted.
+    .PARAMETER BackupPath
+    Backup made before the change, or empty.
+    .PARAMETER CreatedFile
+    True when the kit created the file (it did not exist before the change).
+    .OUTPUTS
+    None. Side effects: the file, and possibly the backup.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [string]$BackupPath = '',
+        [bool]$CreatedFile = $false
+    )
+    if ($CreatedFile -and [string]::IsNullOrEmpty($Text)) {
+        [System.IO.File]::Delete($File)
+        return
+    }
+    if ($BackupPath -ne '' -and [System.IO.File]::Exists($BackupPath)) {
+        $canonical = { param([string]$Value) (@(Split-GwIniLine -Text $Value) -join "`n") }
+        if ((& $canonical (Read-GwTextFile -Path $BackupPath)) -ceq (& $canonical $Text)) {
+            $temporary = '{0}.{1}.tmp' -f $File, [guid]::NewGuid().ToString('N')
+            try {
+                [System.IO.File]::Copy($BackupPath, $temporary)
+                Move-GwFileOverwrite -Source $temporary -Destination $File
+            }
+            finally {
+                if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) }
+            }
+            [System.IO.File]::Delete($BackupPath)
+            return
+        }
+    }
+    Write-GwFileAtomic -Path $File -Text $Text
+}
+
 function Undo-GwHardening {
     <#
     .SYNOPSIS
@@ -731,26 +875,46 @@ function Undo-GwHardening {
     back or removes the value that did not exist; ScheduledTask deletes the task unless an
     earlier entry shows it existed before; IniValue restores or removes the key (and the
     section or file the kit created, if it is empty again) while keeping the operator's other
-    edits; FirewallRule removes the rule. Entries that need elevation are reported as
-    NeedsElevation and stay in the journal for an elevated run. Each reverted entry is marked
-    in the journal immediately, so an interrupted undo can be resumed. An entry whose revert
-    throws is reported as Failed and stays in the journal; the remaining entries are still
-    processed. ConfirmImpact is High.
+    edits, and gives the file back byte for byte when nothing else changed
+    (Write-GwRevertedIniFile); FirewallRule removes the rule.
+    Before anything else each entry is checked against what the kit itself journals
+    (Get-GwJournalEntryProblem). An entry that does not match is reported as Refused, changes
+    nothing and stays in the journal: the journal is a file, and undo must not do what an
+    edited file tells it. Entries that need elevation are reported as NeedsElevation and stay
+    in the journal for an elevated run. Each reverted entry is marked in the journal
+    immediately, so an interrupted undo can be resumed. An entry whose revert throws is
+    reported as Failed and stays in the journal; the remaining entries are still processed.
+    ConfirmImpact is High.
     .PARAMETER Path
     Gateway folder (holds the journal).
+    .PARAMETER WslConfigPath
+    The .wslconfig that IniValue entries may touch; defaults to %UserProfile%\.wslconfig. An
+    entry naming another file is refused.
     .OUTPUTS
-    PSCustomObject per processed entry: Action, Description, Result (Reverted, NeedsElevation or Failed).
+    PSCustomObject per processed entry: Action, Description, Result (Reverted, NeedsElevation,
+    Refused or Failed). Anything but Reverted means the change is still in place.
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     [OutputType([pscustomobject])]
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$WslConfigPath = (Get-GwDefaultWslConfigPath)
+    )
     $journal = Get-GwJournal -Path $Path
     $pending = @($journal.Entries | Where-Object { -not $_.Reverted })
     [array]::Reverse($pending)
     $elevated = Test-GwIsAdministrator
     foreach ($entry in $pending) {
         $data = $entry.Data
-        $needsElevation = ($entry.Kind -eq 'FirewallRule') -or ($entry.Kind -eq 'RegistryValue' -and [string]$data.Path -like 'HKLM:*')
+        $problem = Get-GwJournalEntryProblem -Entry $entry -WslConfigPath $WslConfigPath
+        if ($problem -ne '') {
+            $refusal = ('Refused a journal entry this kit did not write ({0}): {1}. Nothing was changed for it; ' +
+                'it stays in {2} until you remove it by hand.') -f $entry.Description, $problem, (Get-GwJournalPath -Path $Path)
+            Write-GwConsole -Message $refusal -Status 'FAIL'
+            [pscustomobject]@{ Action = $entry.Action; Description = $entry.Description; Result = 'Refused' }
+            continue
+        }
+        $needsElevation = ($entry.Kind -eq 'FirewallRule') -or ($entry.Kind -eq 'RegistryValue')
         if ($needsElevation -and -not $elevated) {
             Write-GwConsole -Message ('Needs an elevated PowerShell to revert: {0}' -f $entry.Description) -Status 'WARN'
             [pscustomobject]@{ Action = $entry.Action; Description = $entry.Description; Result = 'NeedsElevation' }
@@ -783,7 +947,7 @@ function Undo-GwHardening {
                     }
                 }
                 'IniValue' {
-                    $file = [string]$data.File
+                    $file = Resolve-GwFullPath -Path ([string]$data.File)
                     $text = Read-GwTextFile -Path $file
                     if ($null -ne $text) {
                         if ($data.Existed -eq $true) {
@@ -794,8 +958,8 @@ function Undo-GwHardening {
                             $text = Remove-GwIniValue -Text $text -Section ([string]$data.Section) -Key ([string]$data.Key) -RemoveEmptySection:$createdSection
                         }
                         $createdFile = ((Get-GwPropertyValue -InputObject $data -Name 'FileExisted' -Default $true) -ne $true)
-                        if ($createdFile -and [string]::IsNullOrEmpty($text)) { [System.IO.File]::Delete($file) }
-                        else { Write-GwFileAtomic -Path $file -Text ([string]$text) }
+                        Write-GwRevertedIniFile -File $file -Text ([string]$text) -CreatedFile $createdFile `
+                            -BackupPath ([string](Get-GwPropertyValue -InputObject $data -Name 'BackupPath' -Default ''))
                     }
                 }
                 'FirewallRule' {

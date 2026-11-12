@@ -450,6 +450,15 @@ Describe 'Hardening' {
     }
 
     Context 'Set-GwWslConfigValue' {
+        It 'refuses a key the kit does not manage, and a value with a line break: undo would refuse such an entry later' {
+            { Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'kernel' -Value 'C:\x' -Confirm:$false } |
+                Should -Throw '*sets only these .wslconfig keys*'
+            { Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value "4GB`nkernel=C:\x" -Confirm:$false } |
+                Should -Throw '*one line*'
+            Test-Path -LiteralPath $script:wslConfig | Should -BeFalse
+            @((Get-GwJournal -Path $script:folder).Entries).Count | Should -Be 0
+        }
+
         It 'creates the file with the key and journals that the key was absent' {
             Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'general' -Key 'instanceIdleTimeout' -Value '-1' -Confirm:$false
             [System.IO.File]::ReadAllText($script:wslConfig) | Should -Be "[general]`ninstanceIdleTimeout=-1`n"
@@ -523,7 +532,7 @@ Describe 'Hardening' {
             $entries[0].Reverted | Should -BeTrue
             $entries[0].Note | Should -Match 'not applied'
             $script:registrySetThrows = $false
-            @(Undo-GwHardening -Path $script:folder -Confirm:$false).Count | Should -Be 0
+            @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false).Count | Should -Be 0
             $script:registry["$script:policyKey|ActiveHoursStart"] | Should -Be 8
         }
 
@@ -550,6 +559,156 @@ Describe 'Hardening' {
         }
     }
 
+    Context 'Undo trusts only entries the kit could have written' {
+        BeforeEach {
+            function Add-TamperedEntry {
+                param([string]$Kind, [hashtable]$Data)
+                Add-GwJournalEntry -Path $script:folder -Action 'Tampered' -Kind $Kind -Description 'tampered entry' -Data $Data | Out-Null
+            }
+            function Add-TamperedIni {
+                param([string]$File, [string]$Key = 'memory', [string]$PreviousValue = '', [bool]$Existed = $true, [string]$BackupPath = '')
+                Add-TamperedEntry -Kind 'IniValue' -Data @{
+                    File = $File; Section = 'wsl2'; Key = $Key; Existed = $Existed; PreviousValue = $PreviousValue
+                    SectionExisted = $true; FileExisted = $true; BackupPath = $BackupPath
+                }
+            }
+        }
+
+        It 'refuses a registry entry outside the Windows Update policy key and writes nothing' {
+            Add-TamperedEntry -Kind 'RegistryValue' -Data @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'; Name = 'Evil'; Existed = $true; PreviousValue = 1; ValueKind = 'DWord' }
+            Add-TamperedEntry -Kind 'RegistryValue' -Data @{ Path = $script:policyKey; Name = 'NoAutoUpdate'; Existed = $true; PreviousValue = 1; ValueKind = 'DWord' }
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
+            @($summary | Where-Object { $_.Result -eq 'Refused' }).Count | Should -Be 2
+            $script:registry.Count | Should -Be 0
+            @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted }).Count | Should -Be 2
+        }
+
+        It 'refuses a file entry that is not the .wslconfig this run is about' {
+            $victim = Join-Path $script:folder 'victim.ini'
+            [System.IO.File]::WriteAllText($victim, "[wsl2]`nmemory=1GB`n")
+            Add-TamperedIni -File $victim -PreviousValue 'evil'
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
+            $summary[0].Result | Should -Be 'Refused'
+            [System.IO.File]::ReadAllText($victim) | Should -Be "[wsl2]`nmemory=1GB`n"
+        }
+
+        It 'refuses an unknown key, a multi-line value, a foreign task, a foreign firewall rule and a malformed power entry' {
+            Add-TamperedIni -File $script:wslConfig -Key 'kernel' -PreviousValue 'C:\evil'
+            Add-TamperedIni -File $script:wslConfig -PreviousValue "4GB`nkernel=C:\evil"
+            Add-TamperedEntry -Kind 'ScheduledTask' -Data @{ TaskName = '\Microsoft\Windows\Defrag\ScheduledDefrag'; ExistedBefore = $false }
+            Add-TamperedEntry -Kind 'FirewallRule' -Data @{ RuleName = 'CoreNet-DHCP-In' }
+            Add-TamperedEntry -Kind 'PowerAcValue' -Data @{ Scheme = 'x & calc'; Setting = 'STANDBYIDLE'; PreviousSeconds = 1 }
+            Add-TamperedEntry -Kind 'PowerAcValue' -Data @{ Scheme = $script:scheme; Setting = 'SUB_VIDEO'; PreviousSeconds = 1 }
+            $script:tasks['\Microsoft\Windows\Defrag\ScheduledDefrag'] = '<Task/>'
+            $script:firewall = @('CoreNet-DHCP-In')
+            $script:powerCalls.Clear()
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
+            @($summary | Where-Object { $_.Result -eq 'Refused' }).Count | Should -Be 6
+            $script:tasks.ContainsKey('\Microsoft\Windows\Defrag\ScheduledDefrag') | Should -BeTrue
+            $script:firewall | Should -Be @('CoreNet-DHCP-In')
+            @($script:powerCalls | Where-Object { $_ -like '/set*' }).Count | Should -Be 0
+            Test-Path -LiteralPath $script:wslConfig | Should -BeFalse
+        }
+
+        It 'accepts every kind of entry the harden functions write themselves' {
+            [System.IO.File]::WriteAllText($script:wslConfig, "[wsl2]`nnetworkingMode=mirrored`n")
+            Disable-GwSleep -Path $script:folder -Confirm:$false
+            Set-GwUpdateActiveWindow -Path $script:folder -Start 6 -End 23 -Confirm:$false
+            Register-GwStartTask -Path $script:folder -Mode 'DockerDesktop' -KitRoot 'C:\kit\windows' -Confirm:$false
+            Register-GwResumeClockTask -Path $script:folder -Confirm:$false
+            Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'networkingMode' -Value 'nat' -Confirm:$false
+            Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'general' -Key 'instanceIdleTimeout' -Value '-1' -Confirm:$false
+            Add-GwFirewallBlockRule -Path $script:folder -Confirm:$false
+            $entries = @((Get-GwJournal -Path $script:folder).Entries)
+            $entries.Count | Should -BeGreaterThan 8
+            foreach ($entry in $entries) {
+                Get-GwJournalEntryProblem -Entry $entry -WslConfigPath $script:wslConfig | Should -Be '' -Because $entry.Description
+            }
+        }
+
+        It 'says in plain words what is wrong with an entry, and mentions -WslConfigPath for a different file' {
+            Add-TamperedIni -File 'C:\other\.wslconfig' -Existed $false
+            Add-TamperedIni -File $script:wslConfig -Existed $false -BackupPath 'C:\Windows\win.ini'
+            Add-TamperedEntry -Kind 'RegistryValue' -Data @{ Path = $script:policyKey; Name = 'ActiveHoursStart'; Existed = $true; PreviousValue = -5; ValueKind = 'DWord' }
+            $entries = @((Get-GwJournal -Path $script:folder).Entries)
+            Get-GwJournalEntryProblem -Entry $entries[0] -WslConfigPath $script:wslConfig | Should -Match 'pass the same path to -Undo'
+            Get-GwJournalEntryProblem -Entry $entries[1] -WslConfigPath $script:wslConfig | Should -Match 'backup'
+            Get-GwJournalEntryProblem -Entry $entries[2] -WslConfigPath $script:wslConfig | Should -Match 'non-negative'
+        }
+
+        It 'still reverts the genuine entries next to a refused one' {
+            Disable-GwSleep -Path $script:folder -Confirm:$false
+            Add-TamperedEntry -Kind 'FirewallRule' -Data @{ RuleName = 'CoreNet-DHCP-In' }
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
+            @($summary | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 2
+            $script:power.STANDBYIDLE | Should -Be 1800
+        }
+    }
+
+    Context 'A .wslconfig saved by Notepad comes back byte for byte' {
+        It 'restores CRLF line endings and the byte-order mark after harden and undo, and removes its backup' {
+            $original = [byte[]](0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes("# mine`r`n[wsl2]`r`nnetworkingMode=mirrored`r`n")
+            [System.IO.File]::WriteAllBytes($script:wslConfig, $original)
+            Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'networkingMode' -Value 'nat' -Confirm:$false
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
+            ([System.IO.File]::ReadAllBytes($script:wslConfig) -join ',') | Should -Be ($original -join ',')
+            @(Get-ChildItem -LiteralPath $script:folder -Filter '*.brokersre-backup-*').Count | Should -Be 0
+        }
+
+        It 'keeps the operator''s later edits instead of restoring the backup' {
+            [System.IO.File]::WriteAllBytes($script:wslConfig, [System.Text.Encoding]::ASCII.GetBytes("[wsl2]`r`nnetworkingMode=mirrored`r`n"))
+            Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'networkingMode' -Value 'nat' -Confirm:$false
+            [System.IO.File]::AppendAllText($script:wslConfig, "processors=4`n")
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
+            $text = [System.IO.File]::ReadAllText($script:wslConfig)
+            Get-GwIniValue -Text $text -Section 'wsl2' -Key 'processors' | Should -Be '4'
+            Get-GwIniValue -Text $text -Section 'wsl2' -Key 'networkingMode' | Should -Be 'mirrored'
+        }
+    }
+
+    Context 'Invoke-GwHarden end to end on the fake host' {
+        It 'applies, then undoes, and the fake host is as before; exit codes are 0' {
+            [System.IO.File]::WriteAllText($script:wslConfig, "[wsl2]`nnetworkingMode=mirrored`n")
+            $applied = Invoke-GwHarden -Path $script:folder -DisableSleep -SetActiveHours 6, 23 -StartAtBoot DockerDesktop -ResumeClockFix -WslConfig -FirewallLoopbackOnly `
+                -WslConfigPath $script:wslConfig -Confirm:$false
+            $applied.ExitCode | Should -Be 0
+            $script:power.STANDBYIDLE | Should -Be 0
+            $script:tasks.Count | Should -Be 2
+            $script:firewall.Count | Should -Be 1
+            $script:registry.Count | Should -Be 3
+            $undone = Invoke-GwHarden -Path $script:folder -Undo -WslConfigPath $script:wslConfig -Confirm:$false
+            $undone.ExitCode | Should -Be 0
+            $script:power.STANDBYIDLE | Should -Be 1800
+            $script:tasks.Count | Should -Be 0
+            $script:firewall.Count | Should -Be 0
+            $script:registry.Count | Should -Be 0
+            [System.IO.File]::ReadAllText($script:wslConfig) | Should -Be "[wsl2]`nnetworkingMode=mirrored`n"
+        }
+
+        It 'configures the sign-in task only: no registry value is written, so auto-logon is never set up' {
+            Invoke-GwHarden -Path $script:folder -StartAtBoot DockerDesktop -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
+            $script:registry.Count | Should -Be 0
+            Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwRegistry -Times 0 -Exactly -ParameterFilter { $Operation -eq 'Set' -or $Operation -eq 'Remove' }
+            @($script:taskCalls | Where-Object { $_ -like '/Create|*' }).Count | Should -Be 1
+            $script:tasks.Keys | Should -Be @('\BrokerSRE\Gateway paper - start after sign-in')
+        }
+
+        It 'returns 1 from -Undo when entries need elevation, and leaves them in place' {
+            Invoke-GwHarden -Path $script:folder -SetActiveHours 6, 23 -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
+            $script:isAdmin = $false
+            $result = Invoke-GwHarden -Path $script:folder -Undo -WslConfigPath $script:wslConfig -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            $script:registry.Count | Should -Be 3
+        }
+
+        It 'changes nothing with -Undo -WhatIf' {
+            Invoke-GwHarden -Path $script:folder -DisableSleep -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
+            Invoke-GwHarden -Path $script:folder -Undo -WslConfigPath $script:wslConfig -WhatIf | Out-Null
+            $script:power.STANDBYIDLE | Should -Be 0
+            @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted }).Count | Should -Be 2
+        }
+    }
+
     Context 'Undo-GwHardening: round trip' {
         It 'restores the fake host exactly after every kind of change' {
             [System.IO.File]::WriteAllText($script:wslConfig, "# mine`n[wsl2]`nnetworkingMode=mirrored`n")
@@ -567,7 +726,7 @@ Describe 'Hardening' {
             $script:tasks.Count | Should -Be 2
             $script:firewall.Count | Should -Be 1
 
-            $summary = @(Undo-GwHardening -Path $script:folder -Confirm:$false)
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
 
             $script:power.STANDBYIDLE | Should -Be 1800
             $script:power.HIBERNATEIDLE | Should -Be 10800
@@ -586,7 +745,7 @@ Describe 'Hardening' {
             Add-GwFirewallBlockRule -Path $script:folder -Confirm:$false
             Disable-GwSleep -Path $script:folder -Confirm:$false
             $script:firewallRemoveThrows = $true
-            $summary = @(Undo-GwHardening -Path $script:folder -Confirm:$false)
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
             @($summary | Where-Object { $_.Result -eq 'Failed' }).Count | Should -Be 1
             @($summary | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 3
             $script:power.STANDBYIDLE | Should -Be 1800
@@ -595,7 +754,7 @@ Describe 'Hardening' {
             $pending.Count | Should -Be 1
             $pending[0].Kind | Should -Be 'FirewallRule'
             $script:firewallRemoveThrows = $false
-            @(Undo-GwHardening -Path $script:folder -Confirm:$false | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 1
+            @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 1
             $script:firewall.Count | Should -Be 0
         }
 
@@ -603,14 +762,14 @@ Describe 'Hardening' {
             Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value '4GB' -Confirm:$false
             Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value '8GB' -Confirm:$false
             [System.IO.File]::ReadAllText($script:wslConfig) | Should -Be "[wsl2]`nmemory=8GB`n"
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             Test-Path -LiteralPath $script:wslConfig | Should -BeFalse
         }
 
         It 'keeps a file that existed before, even when undo leaves it empty' {
             [System.IO.File]::WriteAllText($script:wslConfig, '')
             Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value '4GB' -Confirm:$false
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             Test-Path -LiteralPath $script:wslConfig | Should -BeTrue
             [System.IO.File]::ReadAllText($script:wslConfig) | Should -Be ''
         }
@@ -618,7 +777,7 @@ Describe 'Hardening' {
         It 'keeps edits the operator made to .wslconfig after hardening' {
             Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'networkingMode' -Value 'nat' -Confirm:$false
             [System.IO.File]::AppendAllText($script:wslConfig, "processors=4`n")
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             $text = [System.IO.File]::ReadAllText($script:wslConfig)
             Get-GwIniValue -Text $text -Section 'wsl2' -Key 'processors' | Should -Be '4'
             Get-GwIniValue -Text $text -Section 'wsl2' -Key 'networkingMode' | Should -BeNullOrEmpty
@@ -626,23 +785,23 @@ Describe 'Hardening' {
 
         It 'does not revert the same entry twice' {
             Disable-GwSleep -Path $script:folder -Confirm:$false
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             $script:power.STANDBYIDLE = 600
-            @(Undo-GwHardening -Path $script:folder -Confirm:$false).Count | Should -Be 0
+            @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false).Count | Should -Be 0
             $script:power.STANDBYIDLE | Should -Be 600
         }
 
         It 'leaves a task in place when an earlier journal entry created it, then removes it with that entry' {
             Register-GwStartTask -Path $script:folder -Mode 'DockerDesktop' -KitRoot 'C:\kit\windows' -Confirm:$false
             Register-GwStartTask -Path $script:folder -Mode 'DockerDesktop' -KitRoot 'C:\kit\windows' -Confirm:$false
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             $script:tasks.Count | Should -Be 0
             @($script:taskCalls | Where-Object { $_ -like '/Delete|*' }).Count | Should -Be 1
         }
 
         It 'changes nothing under -WhatIf' {
             Disable-GwSleep -Path $script:folder -Confirm:$false
-            Undo-GwHardening -Path $script:folder -WhatIf | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -WhatIf | Out-Null
             $script:power.STANDBYIDLE | Should -Be 0
             @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted }).Count | Should -Be 2
         }
@@ -650,7 +809,7 @@ Describe 'Hardening' {
         It 'stops at entries that need elevation, reports them and keeps them for a later run' {
             Set-GwUpdateActiveWindow -Path $script:folder -Start 6 -End 23 -Confirm:$false
             $script:isAdmin = $false
-            $summary = @(Undo-GwHardening -Path $script:folder -Confirm:$false)
+            $summary = @(Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false)
             @($summary | Where-Object { $_.Result -eq 'NeedsElevation' }).Count | Should -Be 3
             $script:registry.Count | Should -Be 3
             @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted }).Count | Should -Be 3
@@ -660,7 +819,7 @@ Describe 'Hardening' {
             Disable-GwSleep -Path $script:folder -Confirm:$false
             $script:activeScheme = 'a1841308-3541-4fab-bc81-f71556f20b4a'
             $script:powerCalls.Clear()
-            Undo-GwHardening -Path $script:folder -Confirm:$false | Out-Null
+            Undo-GwHardening -Path $script:folder -WslConfigPath $script:wslConfig -Confirm:$false | Out-Null
             @($script:powerCalls | Where-Object { $_ -like '/setactive*' }).Count | Should -Be 0
             $script:power.STANDBYIDLE | Should -Be 1800
         }

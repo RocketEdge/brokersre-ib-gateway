@@ -213,6 +213,71 @@ Describe 'Get-GwAclOtherIdentity' {
         Protect-GwSecretFolder -Path $directory -Confirm:$false
         @(Get-GwAclOtherIdentity -Path $directory).Count | Should -Be 0
     }
+
+    It 'lists SYSTEM and Administrators unless told to ignore them' {
+        $directory = Join-Path $TestDrive 'acl-system'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        Protect-GwSecretFolder -Path $directory -IncludeSystem -Confirm:$false
+        @(Get-GwAclOtherIdentity -Path $directory).Count | Should -Be 2
+        @(Get-GwAclOtherIdentity -Path $directory -IgnoreSystem).Count | Should -Be 0
+    }
+}
+
+Describe 'Get-GwAclWriterIdentity' {
+    BeforeEach {
+        $script:writerFolder = Join-Path $TestDrive ('writers-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:writerFolder | Out-Null
+        Protect-GwSecretFolder -Path $script:writerFolder -IncludeSystem -Confirm:$false
+    }
+
+    It 'returns nothing for the operator, SYSTEM and Administrators' {
+        @(Get-GwAclWriterIdentity -Path $script:writerFolder).Count | Should -Be 0
+    }
+
+    It 'names an account that may modify the folder' {
+        Add-TestAccessRule -Path $script:writerFolder -Sid 'S-1-5-11' -Rights 'Modify'
+        $writers = @(Get-GwAclWriterIdentity -Path $script:writerFolder)
+        $writers.Count | Should -Be 1
+        $writers[0] | Should -Match 'Authenticated Users'
+    }
+
+    It 'counts an entry that only applies to the files inside, as the drive root grants it' {
+        Add-TestAccessRule -Path $script:writerFolder -Sid 'S-1-5-32-545' -Rights 'Write' -Propagation 'InheritOnly'
+        @(Get-GwAclWriterIdentity -Path $script:writerFolder).Count | Should -Be 1
+    }
+
+    It 'ignores accounts that may only read and execute' {
+        Add-TestAccessRule -Path $script:writerFolder -Sid 'S-1-5-32-545' -Rights 'ReadAndExecute'
+        @(Get-GwAclWriterIdentity -Path $script:writerFolder).Count | Should -Be 0
+    }
+}
+
+Describe 'Test-GwFolderRestricted' {
+    BeforeEach {
+        $script:restrictedFolder = Join-Path $TestDrive ('restricted-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:restrictedFolder | Out-Null
+    }
+
+    It 'is false for a folder that still inherits its access list' {
+        Test-GwFolderRestricted -Path $script:restrictedFolder | Should -BeFalse
+    }
+
+    It 'is true once the folder is closed to the operator alone, or to the operator, SYSTEM and Administrators' {
+        Protect-GwSecretFolder -Path $script:restrictedFolder -Confirm:$false
+        Test-GwFolderRestricted -Path $script:restrictedFolder | Should -BeTrue
+        Protect-GwSecretFolder -Path $script:restrictedFolder -IncludeSystem -Confirm:$false
+        Test-GwFolderRestricted -Path $script:restrictedFolder | Should -BeTrue
+    }
+
+    It 'is false when inheritance is off but another account is still listed, even read-only' {
+        Protect-GwSecretFolder -Path $script:restrictedFolder -Confirm:$false
+        Add-TestAccessRule -Path $script:restrictedFolder -Sid 'S-1-5-32-545' -Rights 'ReadAndExecute'
+        Test-GwFolderRestricted -Path $script:restrictedFolder | Should -BeFalse
+    }
+
+    It 'is false for a folder that does not exist' {
+        Test-GwFolderRestricted -Path (Join-Path $TestDrive 'restricted-none') | Should -BeFalse
+    }
 }
 
 Describe 'Get-GwSecretFileFinding' {
