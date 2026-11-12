@@ -6,9 +6,11 @@
 #   docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml \
 #     --profile azure-cert up -d     # Windows / on-premises: Entra app with a certificate
 #
-# Start exactly ONE of the two profiles: both services share the vector-data volume (file
-# checkpoints and disk buffers) and the second instance refuses to start on its lock.
-# Variables come from compose/.env; azure/README.md lists them. The gateway never depends on
+# Start exactly ONE of the two profiles: both services share the vector-data volume (the file
+# checkpoints) and the second instance refuses to start on its lock.
+# Variables come from compose/.env; azure/README.md lists them. Set IBGW_INSTANCE (or
+# HOST_LABEL) to a name of your own: the shipper refuses to start with the label "default" and
+# no host label, because two unlabelled gateways could not be told apart. The gateway never depends on
 # this service: if the shipper is down, the gateway keeps running and the dead-man alert fires.
 #
 # Security: no published port, no docker.sock, uid 1000, read-only root filesystem, no Linux
@@ -32,15 +34,20 @@ x-vector-service: &vector-service
   entrypoint: ["/bin/sh", "/etc/vector/entrypoint.sh"]
   # Vector flushes its buffers for up to 60 s on SIGTERM; give it time before SIGKILL.
   stop_grace_period: 75s
+  # The shipper shares the host with the gateway and must never starve it: half a core,
+  # 512 MB and 256 processes are several times what it uses when idle, and a burst (a first
+  # start with megabytes of old log lines) is merely slower under the cap.
+  cpus: 0.5
   mem_limit: 512m
   pids_limit: 256
   volumes:
     - ibgw-logs:/var/log/ibgateway:ro
     - ../azure/vector:/etc/vector:ro
-    # The only writable path: file checkpoints and disk buffers. It is mounted at /var/tmp
-    # because a new named volume inherits owner and mode of the image directory it covers, and
-    # /var/tmp is the image's world-writable sticky directory: uid 1000 can create its data
-    # directory there without a root init container.
+    # The only writable path: the file checkpoints (which line of which file was delivered).
+    # Rows in flight live in memory; an undelivered line is read again after a restart. It is
+    # mounted at /var/tmp because a new named volume inherits owner and mode of the image
+    # directory it covers, and /var/tmp is the image's world-writable sticky directory: uid
+    # 1000 can create its data directory there without a root init container.
     - vector-data:/var/tmp
   logging:
     driver: json-file
@@ -52,7 +59,9 @@ x-vector-environment: &vector-environment
   # Deployment outputs logsIngestionEndpoint and dcrImmutableId of azure/bicep/main.bicep.
   DCR_LOGS_ENDPOINT: ${DCR_LOGS_ENDPOINT:-}
   DCR_IMMUTABLE_ID: ${DCR_IMMUTABLE_ID:-}
-  # Labels stamped on every row. IBGW_INSTANCE is the gateway's own instance label.
+  # Labels stamped on every row (letters, digits, dot, underscore, hyphen; at most 64).
+  # IBGW_INSTANCE is the gateway's own instance label; give every gateway a different one,
+  # the alert rules tell gateways apart by Instance and Host.
   IBGW_INSTANCE: ${IBGW_INSTANCE:-default}
   HOST_LABEL: ${HOST_LABEL:-}
   # Raw IBC/launcher logs are NOT shipped unless you opt in: set
