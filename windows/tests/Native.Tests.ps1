@@ -49,6 +49,66 @@ Describe 'Invoke-GwNative' {
         @($result.Output).Count | Should -Be 0
         $null -eq $result.Output | Should -BeFalse
     }
+
+    It 'kills a command that exceeds its timeout and reports TimedOut instead of hanging' {
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $result = Invoke-GwNative -FilePath 'waitfor.exe' -ArgumentList @('/T', '60', 'WinkitSignalNobodySends') -TimeoutSeconds 2
+        $watch.Elapsed.TotalSeconds | Should -BeLessThan 20
+        $result.TimedOut | Should -BeTrue
+        $result.ExitCode | Should -Be -2
+        ($result.Output -join ' ') | Should -Match 'timed out after 2 s'
+    }
+
+    It 'does not report TimedOut for a command that finishes in time' {
+        (Invoke-GwNative -FilePath 'cmd.exe' -ArgumentList @('/c', 'echo ok') -TimeoutSeconds 30).TimedOut | Should -BeFalse
+    }
+
+    It 'never leaves a command waiting for keyboard input: standard input is closed' {
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $result = Invoke-GwNative -FilePath 'cmd.exe' -ArgumentList @('/c', 'set /p answer=type something') -TimeoutSeconds 30
+        $watch.Elapsed.TotalSeconds | Should -BeLessThan 20
+        $result.TimedOut | Should -BeFalse
+    }
+
+    It 'decodes UTF-8 output when asked to' {
+        $shell = (Get-Process -Id $PID).Path
+        $script = '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::Out.WriteLine([string][char]0xE9 + [char]0x20AC)'
+        $result = Invoke-GwNative -FilePath $shell -ArgumentList @('-NoProfile', '-Command', $script) -Utf8Output
+        $result.ExitCode | Should -Be 0
+        $result.Output[0] | Should -Be ([string][char]0xE9 + [char]0x20AC)
+    }
+
+    It 'delivers arguments with spaces, quotes and trailing backslashes exactly, under this edition' {
+        $shell = (Get-Process -Id $PID).Path
+        $helper = Join-Path (Join-Path $PSScriptRoot 'helpers') 'Show-Argument.ps1'
+        $sent = @('plain', 'two words', 'say "hi"', 'C:\dir with space\', 'back\slash', 'a\"b', 'x=$y`z', 'tab' + [char]9 + 'bed')
+        $result = Invoke-GwNative -FilePath $shell -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helper) + $sent)
+        $result.ExitCode | Should -Be 0
+        $expected = @($sent | ForEach-Object { (([string]$_).ToCharArray() | ForEach-Object { ([int]$_).ToString('X4') }) -join ' ' })
+        $result.Output | Should -Be $expected
+    }
+
+    It 'returns the exit code and no output in interactive mode' {
+        $result = Invoke-GwNative -FilePath 'cmd.exe' -ArgumentList @('/c', 'exit 5') -Interactive
+        $result.ExitCode | Should -Be 5
+        @($result.Output).Count | Should -Be 0
+    }
+}
+
+Describe 'ConvertTo-GwNativeArgument' {
+    It 'quotes <text> as <expected>' -ForEach @(
+        @{ text = 'plain'; expected = 'plain' }
+        @{ text = 'two words'; expected = '"two words"' }
+        @{ text = ''; expected = '""' }
+        @{ text = 'say "hi"'; expected = '"say \"hi\""' }
+        @{ text = 'C:\dir with space\'; expected = '"C:\dir with space\\"' }
+        @{ text = 'back\slash'; expected = 'back\slash' }
+        @{ text = 'a\"b'; expected = '"a\\\"b"' }
+        @{ text = 'C:\plain\path\'; expected = 'C:\plain\path\' }
+        @{ text = '{{.OSType}}|{{.ServerVersion}}'; expected = '{{.OSType}}|{{.ServerVersion}}' }
+    ) {
+        ConvertTo-GwNativeArgument -Argument $text | Should -Be $expected
+    }
 }
 
 Describe 'Invoke-GwRegistry (read operations)' {

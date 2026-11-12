@@ -203,9 +203,12 @@ function Invoke-GwContainerCli {
     .PARAMETER WorkingDirectory
     Windows folder to run in (WslEngine only; docker.exe calls use absolute paths instead).
     .PARAMETER Interactive
-    Show the command's own output instead of capturing it.
+    Show the command's own output instead of capturing it (no deadline).
+    .PARAMETER TimeoutSeconds
+    Deadline for a captured call; default 120. A call that exceeds it is stopped and returns
+    exit code -2 with TimedOut set, which every caller treats like any other failure.
     .OUTPUTS
-    PSCustomObject from the wrapper: ExitCode, Output, ReceivedUtc, NotFound.
+    PSCustomObject from the wrapper: ExitCode, Output, ReceivedUtc, NotFound, TimedOut.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -213,7 +216,8 @@ function Invoke-GwContainerCli {
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string[]]$ArgumentList,
         [string]$WorkingDirectory = '',
-        [switch]$Interactive
+        [switch]$Interactive,
+        [ValidateRange(0, 86400)][int]$TimeoutSeconds = 120
     )
     switch ([string]$Runtime.Mode) {
         'WslEngine' {
@@ -227,10 +231,10 @@ function Invoke-GwContainerCli {
             $wslArguments.Add('--')
             $wslArguments.Add('docker')
             foreach ($argument in $ArgumentList) { $wslArguments.Add($argument) }
-            return (Invoke-GwWsl -ArgumentList $wslArguments.ToArray() -Interactive:$Interactive)
+            return (Invoke-GwWsl -ArgumentList $wslArguments.ToArray() -Interactive:$Interactive -TimeoutSeconds $TimeoutSeconds)
         }
         { $_ -eq 'DockerDesktop' -or $_ -eq 'WindowsCli' } {
-            return (Invoke-GwDocker -ArgumentList $ArgumentList -Interactive:$Interactive)
+            return (Invoke-GwDocker -ArgumentList $ArgumentList -Interactive:$Interactive -TimeoutSeconds $TimeoutSeconds)
         }
         default {
             throw (New-Object System.InvalidOperationException('No container runtime was detected; run doctor.ps1 to see why.'))
@@ -398,7 +402,7 @@ function Wait-GwContainerEngine {
     )
     $deadline = (Get-GwUtcNow).AddSeconds($TimeoutSeconds)
     while ($true) {
-        $probe = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('info', '--format', '{{.ServerVersion}}')
+        $probe = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('info', '--format', '{{.ServerVersion}}') -TimeoutSeconds 30
         if ($probe.ExitCode -eq 0) { return $true }
         if ((Get-GwUtcNow) -ge $deadline) { return $false }
         Wait-GwDelay -Seconds $PollSeconds
@@ -428,7 +432,7 @@ function Get-GwGatewayPhase {
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string]$ContainerName
     )
-    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('exec', $ContainerName, 'cat', '/var/log/ibgateway/state/phase')
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('exec', $ContainerName, 'cat', '/var/log/ibgateway/state/phase') -TimeoutSeconds 30
     if ($result.ExitCode -ne 0 -or $result.Output.Count -eq 0) { return $null }
     $token = $result.Output[0].Trim()
     if ($token -cmatch '^[a-z0-9][a-z0-9-]{0,31}$') { return $token }
@@ -452,7 +456,7 @@ function Get-GwContainerState {
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string]$ContainerName
     )
-    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('inspect', '--format', '{{.State.Status}}', $ContainerName)
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('inspect', '--format', '{{.State.Status}}', $ContainerName) -TimeoutSeconds 30
     if ($result.ExitCode -ne 0 -or $result.Output.Count -eq 0) { return $null }
     $state = $result.Output[0].Trim()
     if ($state -cmatch '^[a-z]{1,20}$') { return $state }
@@ -485,7 +489,7 @@ function Test-GwLoginFailure {
         [Parameter(Mandatory = $true)][datetime]$SinceUtc
     )
     $since = ConvertTo-GwTimestampText -Value $SinceUtc
-    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('logs', '--since', $since, '--tail', '400', $ContainerName)
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('logs', '--since', $since, '--tail', '400', $ContainerName) -TimeoutSeconds 30
     if ($result.ExitCode -ne 0) { return $false }
     foreach ($line in $result.Output) {
         if ($line -match '"event"\s*:\s*"login_failed(_dialog)?"') { return $true }

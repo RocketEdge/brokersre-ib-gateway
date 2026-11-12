@@ -833,7 +833,7 @@ function Test-GwDockerDesktopUpdate {
         [string]$DockerSettingsPath = (Get-GwDefaultDockerSettingsPath)
     )
     $name = 'DockerDesktopAutoUpdate'
-    $manual = 'Open Docker Desktop > Settings > Software updates and leave "Always download updates" off; update on purpose, outside market hours.'
+    $manual = 'Open Docker Desktop > Settings > Updates ("Software updates" in older versions) and leave "Always download updates" off; update on purpose, outside market hours.'
     if ([string]$Runtime.Mode -ne 'DockerDesktop') {
         return (New-GwCheckResult -Name $name -Status 'SKIP' -Detail 'Docker Desktop is not the runtime in use.')
     }
@@ -990,7 +990,7 @@ function Test-GwVmClock {
         'run', '--rm', '--name', $containerName, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges:true', '--user', '65534:65534', $script:GwClockImage, 'adjtimex'
     )
-    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -TimeoutSeconds 300
     if ($result.ExitCode -ne 0) {
         return (New-GwCheckResult -Name $name -Status 'SKIP' -Detail 'The clock probe container could not run (the first run needs to pull a 2 MB image).' `
                 -Fix 'Check that Docker can pull images, then run doctor.ps1 again.')
