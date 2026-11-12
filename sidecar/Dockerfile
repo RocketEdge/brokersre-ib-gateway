@@ -9,7 +9,10 @@
 #   (a dependency of ib_async's event library) ship manylinux wheels; musl would mean
 #   compiling or trusting a second wheel family for no gain.
 # uv: copied from the official image, pinned by digest; it exists in the build stage only.
-# Dependabot (docker ecosystem) proposes new digests; nothing updates by itself.
+# Nothing here updates by itself. New digests and new Python dependency versions arrive as
+# Dependabot pull requests (ecosystems `docker` and `uv`, directory /sidecar, in
+# .github/dependabot.yml); the weekly sidecar-rescan.yml run scans the PUBLISHED image and
+# asks for a rebuild when a finding has a fix.
 ARG PYTHON_IMAGE=python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490
 
@@ -51,15 +54,14 @@ LABEL org.opencontainers.image.title="brokersre-ib-gateway-sidecar" \
       org.opencontainers.image.created="${CREATED}" \
       com.rocketedge.brokersre.sidecar.status-schema="brokersre.sidecar.status.v1"
 
-# Security upgrade of one package the pinned base still ships unpatched: zlib1g carries two
-# fixable HIGH findings (CVE-2026-76844, CVE-2026-85091, Trivy 0.76.2 on 2026-11-12) and the
-# fix is in Debian's security archive. Only that package is touched (--only-upgrade installs
-# nothing new), so the base digest keeps its meaning. Drop this layer when a newer base digest
-# carries the fix. No version pin, for the reason given in .hadolint.yaml (DL3008): a pin
-# would have to be bumped on every Debian security update.
-# hadolint ignore=DL3008
+# Security updates: the packages the pinned base ships are upgraded to what Debian's archive
+# holds at build time; nothing new is installed. The base digest pins where the image starts
+# from, and this layer is what lets a rebuild (sidecar-rescan.yml, weekly) clear a finding
+# before a new base digest exists. On 2026-11-12 it closed two fixable HIGH findings in
+# zlib1g (CVE-2026-76844, CVE-2026-85091; Trivy 0.76.2). The exact content of a build is
+# named by its published digest, which is what consumers pin.
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends --only-upgrade zlib1g \
+ && apt-get upgrade --yes --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # uid 1000 like the gateway, so the shared log volume is readable. pip is removed: nothing is
