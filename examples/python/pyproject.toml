@@ -1,0 +1,74 @@
+[project]
+name = "ib-gateway-resilient-client"
+version = "0.1.0"
+description = "Read-only example client for IB Gateway: waits for readiness, survives lost connectivity and the daily restart"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+# Exact pins: an example must behave tomorrow as it was tested today (uv.lock holds the rest).
+dependencies = [
+    "ib_async==2.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "black==26.10.1",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]
+
+[tool.uv]
+# An application (one script and its tests), not a library: nothing is built or installed.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The sample is a single module next to pyproject.toml; the fakes live beside the tests.
+pythonpath = [".", "tests"]
+addopts = "-ra --strict-markers --strict-config"
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "S", "SIM", "RUF", "D", "PT", "C4", "PL", "ASYNC"]
+ignore = [
+    "D203", # one blank line before a class docstring: conflicts with D211 (Google style has none)
+    "D213", # multi-line summary on the second line: conflicts with D212
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+# Local modules: the sample itself and the fakes beside the tests.
+known-first-party = ["resilient_client", "fakes", "fake_gateway"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # assert is what a test is made of
+    "PLR2004", # expected values are literals by nature
+    "S311",    # seeded pseudo-random generators make the jitter tests deterministic
+]
+"tests/fakes.py" = [
+    "N802", # FakeIB mirrors ib_async's camelCase method names
+    "N815", # ... and its camelCase attribute names
+]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["resilient_client.py", "tests"]
+mypy_path = ["tests"]
+
+[[tool.mypy.overrides]]
+# eventkit (the event library ib_async is built on) ships no type information; only the
+# tests' FakeIB imports it.
+module = ["eventkit", "eventkit.*"]
+ignore_missing_imports = true
