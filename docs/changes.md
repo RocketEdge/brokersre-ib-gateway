@@ -5,6 +5,30 @@ Next step.
 
 ## Change History
 
+### 2026-11-13 — First authenticated paper sessions: the account had no paper trading access
+
+- **What changed:** documents only. `docs/limitations.md` (L02, L03, L10, L16, L25 updated;
+  L31 new), a row in the README's troubleshooting table, a paragraph in the
+  `unknown_window` runbook and a sentence in the qualification section record what two
+  real sessions showed.
+- **Result:** the qualification ran against IBKR for the first time, on the published
+  stable image (10.50.1g). IBKR accepted the credentials; the login then stopped at a
+  dialog `Paper Account Notice`. Result "not qualified", one attempt, graceful stop in 2
+  seconds. A second session with `SCREENSHOTS=yes` and IBC's window-structure log gave the
+  dialog's text: "This account does not have paper trading access enabled. Please log
+  into Account Management to request access." Nothing outside the mounts was written; the
+  raw IBC log did not contain the username.
+- **What did NOT work / root cause:** (1) *The login did not complete, and the cause is
+  not in this image.* The account has no paper trading access; credentials that work on
+  IBKR's website do not prove that it has. (2) *The first diagnosis was wrong.* The title
+  looked like IBC's paper-account warning with a new name, and IBC's handler looks for
+  other words, so a patch of the IBC fork was the obvious next step. The screenshot showed
+  a different dialog before anything was changed. A title is not a diagnosis; look at the
+  window. (3) The events named no cause: `unknown_window`, and the phase stayed `login`.
+  For a person at night that is too little (L31).
+- **Next step:** a paper trading account that IBKR has enabled, then the qualification
+  again; a decision on classifying this dialog as `needs-human` with its own event.
+
 ### 2026-11-12 — Console made safe and logged, upgrade check, log-shipper recipes, passkey facts, three design notes
 
 - **What changed:** the break-glass console is view-only unless `VNC_VIEW_ONLY=no`, runs

@@ -9,6 +9,12 @@ lists, and the gateway is not logged in. The window may block the login, or it m
 harmless: the lists come from IBC's source and one real start, so a harmless window that is
 missing from them raises this alert too ([limitations](../../limitations.md), L10).
 
+One title is known to block every time: `Paper Account Notice` right after the login
+dialog, in paper mode. IBKR accepted the credentials, but the account has no paper trading
+access. Nothing on the gateway's side helps: request the paper trading account in IBKR's
+Client Portal ([troubleshooting table](../../../README.md#4-if-it-does-not-log-in)), then
+start the gateway again.
+
 ## Check first
 
 - The phase. `logged-in` means the window did not block anything.
