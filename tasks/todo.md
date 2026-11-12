@@ -90,3 +90,8 @@
 
 - [x] `SCREENSHOTS=yes`: Xvfb keeps its framebuffer in a file; `screenshot.sh` saves it to `screens/` after `unknown_window`, after `login_stalled` and on request; bounded by count and interval
 - [ ] Look at a screenshot of a real login window and of a real blocking dialog (L25)
+
+## Roadmap P2: a runbook per alert (2026-11-12, branch `docs/p2-runbooks`)
+
+- [x] `docs/runbooks/`: index and one page per sidecar alert class; `NOTIFY_RUNBOOK_BASE` set in the compose override; tests keep pages, classes and links in step
+- [ ] Correct the pages from the first real incidents; decide whether a clearing by timer (`login_failed`, `unknown_window`, an unrequested restart) should say so in the `resolved` message

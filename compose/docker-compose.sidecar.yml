@@ -41,7 +41,9 @@ services:
       # PROBE_ENABLED: "no"                          # status endpoints and alerts without the API probe
       # HEALTH_CLIENT_ID: "999"                      # API client id reserved for the probe
       # HEARTBEAT_TIME: "08:30"                      # daily "sidecar alive, nothing active" message
-      # NOTIFY_RUNBOOK_BASE: https://wiki.example.com/runbooks/ibgw
+      # A link to the runbook of its alert class in every notification (docs/runbooks). Point
+      # it at a copy in your own wiki to add your contacts: the sidecar appends /<alert class>.
+      NOTIFY_RUNBOOK_BASE: https://github.com/RocketEdge/brokersre-ib-gateway/tree/main/docs/runbooks
       # One or more channels; each is enabled by its *_FILE variable and a secret below.
       NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url
       # NOTIFY_SLACK_URL_FILE: /run/secrets/notify-slack-url

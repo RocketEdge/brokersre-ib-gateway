@@ -321,6 +321,8 @@ docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.s
 ```
 
 Configure its dead-man ping as well: without one, nobody is told when the host itself dies.
+Every alert links a one-page runbook ([docs/runbooks](docs/runbooks/README.md)): what it
+means, what to check first, what to do and what not to do.
 The sidecar is tested against the real gateway image with IBC not launched and against
 stand-in API servers; it has not run against a logged-in Gateway yet
 ([docs/sidecar.md](docs/sidecar.md) lists what that leaves open).
@@ -544,6 +546,7 @@ every variable it dropped or renamed on stderr, without printing a value.
 [docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
 [examples/README.md](examples/README.md), [azure/README.md](azure/README.md),
 [sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md),
+[docs/runbooks/README.md](docs/runbooks/README.md),
 [docs/evidence.md](docs/evidence.md), [SECURITY.md](SECURITY.md),
 [windows/README.md](windows/README.md).
 
