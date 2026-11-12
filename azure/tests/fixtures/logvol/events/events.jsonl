@@ -1,0 +1,5 @@
+{"ts":"2026-11-12T01:00:10.000Z","src":"ibc","level":"info","event":"login_dialog","msg":"login_dialog","boot_id":"aaaaaaaaaaaaaaaa","seq":3,"phase":"login"}
+{"ts":"2026-11-12T01:00:20.500Z","src":"ibc","level":"warn","event":"twofa_initiated","msg":"second factor requested for DU1234567","boot_id":"aaaaaaaaaaaaaaaa","seq":4,"phase":"2fa-pending","account_tail":"567"}
+this line is not JSON and must be dropped, not shipped
+{"ts":"2026-11-12T01:01:02.000Z","src":"ibc","level":"info","event":"login_completed","msg":"login_completed","boot_id":"aaaaaaaaaaaaaaaa","seq":5,"phase":"logged-in"}
+{"ts":"2026-11-12T01:05:00.000Z","src":"doctor","level":"error","event":"doctor_failed","msg":"connectivity lost","boot_id":"aaaaaaaaaaaaaaaa","seq":6,"phase":"logged-in","code":1100}

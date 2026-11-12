@@ -1,0 +1,2 @@
+{"ts":"2026-11-12T02:00:00.000Z","src":"entrypoint","level":"info","event":"relay_opened","msg":"relay_opened","boot_id":"aaaaaaaaaaaaaaaa","seq":8}
+{"ts":"2026-11-12T02:00:01.000Z","src":"entrypoint","level":"info","event":"relay_closed","msg":"relay_closed","boot_id":"aaaaaaaaaaaaaaaa","seq":9}

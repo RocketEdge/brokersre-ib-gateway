@@ -60,7 +60,7 @@ x-vector-environment: &vector-environment
   # SHIP_RAW_LOGS=yes to ship them with account ids redacted but the user name left in place.
   IBGW_REDACT_USERNAME_FILE: ${IBGW_REDACT_USERNAME_FILE:-}
   SHIP_RAW_LOGS: ${SHIP_RAW_LOGS:-no}
-  # Vector's own log lines as JSON on stderr.
+  # Vector's own log lines as JSON on stdout, next to its counters (docker logs).
   VECTOR_LOG_FORMAT: json
 
 services:

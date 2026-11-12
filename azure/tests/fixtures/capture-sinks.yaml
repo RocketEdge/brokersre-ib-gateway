@@ -1,0 +1,42 @@
+# Test double for sinks-managed-identity.yaml: azure/tests/run.sh mounts this file over the
+# template, so the production entrypoint, sources and mappings run unchanged while the rows go
+# to stdout instead of Azure. Each row is wrapped with the name of the stream the real sink of
+# that transform sends it to; the drift test joins on that name. The sinks keep the production
+# durability settings (disk buffer, acknowledgements) so they are exercised on the read-only
+# root filesystem as uid 1000. The DCR placeholders are unused here on purpose.
+transforms:
+  capture_events:
+    type: remap
+    inputs:
+      - events_out
+    source: |
+      . = {"capture": "Custom-IbGwEvents_CL", "row": .}
+  capture_metrics:
+    type: remap
+    inputs:
+      - metrics_out
+    source: |
+      . = {"capture": "Custom-IbGwMetrics_CL", "row": .}
+  capture_raw:
+    type: remap
+    inputs:
+      - raw_out
+    source: |
+      . = {"capture": "Custom-IBGatewayLogs_CL", "row": .}
+
+sinks:
+  capture:
+    type: console
+    inputs:
+      - capture_events
+      - capture_metrics
+      - capture_raw
+    target: stdout
+    encoding:
+      codec: json
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
