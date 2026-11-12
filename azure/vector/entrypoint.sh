@@ -20,7 +20,8 @@
 #           SHIP_RAW_LOGS                   optional; "yes" ships raw logs without a user-name file
 # Outputs   /var/tmp/vector-config/sinks.yaml (rendered from sinks-<AZURE_AUTH>.yaml) and the
 #           empty data directory /var/tmp/vector on first start;
-#           VECTOR_CONFIG, IBGW_RAW_MODE and IBGW_REDACT_USERNAME in Vector's environment only.
+#           VECTOR_CONFIG, VECTOR_LOG, IBGW_RAW_MODE and IBGW_REDACT_USERNAME in Vector's
+#           environment only.
 # Errors    A wrong or missing setting stops the container with exit code 78 (configuration
 #           error) and one JSON line on stderr naming the variable; the value of the user-name
 #           file is never printed. Raw logs are shipped only when this script could prove one of
@@ -93,10 +94,13 @@ fi
 
 # Row labels. Every row carries Instance and Host, and the alert rules tell gateways apart by
 # them: two gateways with the same pair would hide each other's silence from the dead-man rule.
-# A label must also survive redaction unchanged, so one that looks like an IBKR account id
-# (prefix DU, DF, U or F and 5 to 9 digits, as a word of its own) is refused.
+# A label must also survive redaction unchanged (redact.vrl rewrites every string of an event
+# row, the labels included, but not the metrics rows: a rewritten label would differ between
+# the two tables). So a label that the redaction would touch is refused: prefix DU, DF, U or F
+# and 5 to 9 digits, in any case as a word of its own, or in upper case glued to a lower-case
+# letter. Keep the two patterns in step with rules 1 and 2 of redact.vrl.
 label='[A-Za-z0-9._-]{1,64}'
-account_like='(^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])[0-9]{5,9}([^A-Za-z0-9]|$)'
+account_like='((^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])|[a-z](DU|DF|U|F))[0-9]{5,9}([^A-Za-z0-9]|$)'
 IBGW_INSTANCE="${IBGW_INSTANCE:-default}"
 HOST_LABEL="${HOST_LABEL:-}"
 matches "${IBGW_INSTANCE}" "${label}" \
@@ -177,5 +181,16 @@ mv -f "${rendered}.tmp" "${rendered}"
 
 VECTOR_CONFIG="${config_dir}/vector.yaml,${rendered}"
 export VECTOR_CONFIG
+
+# Vector's own log must never show a line of the gateway. Its file source logs the START OF A
+# LINE it discards for being longer than max_line_bytes (field truncated_bytes; up to 256 KiB
+# of raw text with the user name and full account ids), whatever the raw-log mode is. Vector's
+# log filter works per target, so the messages of that one module are switched off; "info" is
+# Vector's default level for everything else. An operator-supplied VECTOR_LOG is overridden on
+# purpose (its default value would switch the messages back on). What those messages said is
+# still visible without content: vector.yaml prints the counters open_files and
+# component_errors_total (error_code reading_line_from_file) every minute.
+VECTOR_LOG='info,vector::internal_events::file::source=off'
+export VECTOR_LOG
 
 exec /usr/local/bin/vector "$@"
