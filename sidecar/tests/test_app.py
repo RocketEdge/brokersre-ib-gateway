@@ -657,3 +657,21 @@ async def test_without_a_dead_man_url_nothing_is_pinged(tmp_path: Path) -> None:
         assert document["deadman"]["enabled"] is False
         assert "deadman" not in [task["name"] for task in document["tasks"]]
         assert h.pings == []
+
+
+async def test_a_restarted_sidecar_announces_the_gateway_restart_it_missed(tmp_path: Path) -> None:
+    # What the shared-namespace mode relies on after its exit with code 75, and what any
+    # sidecar restart needs: the feed is replayed from the files, so a gateway restart that
+    # happened while nobody was watching is still announced.
+    harness = Harness(tmp_path, {}, webhook=True)
+    harness.volume.event("container_start")
+    harness.volume.event("container_start", boot="00000000000000bb")  # no shutdown_requested before
+    harness.volume.phase("login")
+    try:
+        await harness.start()
+        await until(lambda: ("gateway_exited", "firing") in harness.kinds())
+        (announced,) = [m for m in harness.received if m["class"] == "gateway_exited"]
+        assert announced["severity"] == "critical"
+        assert announced["detail"] == "the gateway container restarted without a requested shutdown"
+    finally:
+        await harness.shutdown()
