@@ -3,7 +3,7 @@
 Layers, lowest first. A module may import from its own unit and from strictly lower layers,
 never from the same layer or a higher one::
 
-    0  vocab, clock, backoff, redaction, fsutil, logsetup, config   (leaves)
+    0  vocab, clock, backoff, redaction, fsutil, logsetup, config, worker   (leaves)
     1  tail
     2  model
     3  probe, notify, http, metrics, support, supervisor            (independent of each other)
@@ -35,6 +35,7 @@ RANKS = {
     "fsutil": 0,
     "logsetup": 0,
     "config": 0,
+    "worker": 0,
     "tail": 1,
     "model": 2,
     "probe": 3,
@@ -48,7 +49,7 @@ RANKS = {
     "__main__": 6,
 }
 # Leaves may use one another only in this fixed, acyclic order.
-LEAF_ORDER = ["vocab", "clock", "backoff", "redaction", "fsutil", "logsetup", "config"]
+LEAF_ORDER = ["vocab", "clock", "backoff", "redaction", "fsutil", "logsetup", "config", "worker"]
 
 
 def modules() -> list[Path]:
