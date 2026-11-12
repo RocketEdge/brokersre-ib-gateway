@@ -187,6 +187,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   check must be listed in `helper_images` in `run.sh` (pulled before any check): a first
   `docker run` of an image writes its pull notice to standard error, and a check that
   compares standard error then fails on a fresh machine only.
+- Never end a pipeline with `grep -q` in a script that sets `pipefail`: the quiet grep exits
+  at its first match, the writer gets SIGPIPE (exit 141) and the pipeline is "false" although
+  the text was found. In an `if ...; then fail; else pass` check for a leaked secret that is
+  a false pass. Write `grep ... >/dev/null`. It does not show on the Windows development
+  host; it showed on the first Linux run.
 - A consumer must not alert on how long a phase has lasted: an unanswered second-factor
   prompt flips the phase between `2fa-pending` and `login` every three minutes. Use events
   (`docs/log-contract.md`), as the Azure rule "human needed" does.

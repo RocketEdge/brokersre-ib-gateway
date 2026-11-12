@@ -43,6 +43,12 @@ Next step.
     lands in the compared value. Reproduced locally by removing the cached image; the suite
     now pulls every helper image before any check runs, and the workflow runs every group
     even after one failed, so one run shows all that is wrong.
+  - *The second run failed on a counter that was there.* The suite runs under `pipefail`, and
+    `docker logs | grep -q` fails when the quiet grep exits at its first match and the writer
+    dies of SIGPIPE: the check reported "no such counter" 58 seconds into a 90-second wait,
+    the moment the counter appeared. Shown on Linux (`seq | grep -q` under pipefail exits
+    141); no pipeline in the pack ends in a quiet grep any more, including the Docker key
+    check of the VM's `install.sh`, where the same race would have rejected the right key.
   - Not established: everything that needs Azure (L19). The alert queries were type-checked,
     not executed: the only local engine is Microsoft's Kusto emulator, whose licence must be
     accepted by a person first (`KUSTO_EMULATOR_EULA=accept azure/tests/run.sh kql-run`).
