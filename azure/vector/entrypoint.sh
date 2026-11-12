@@ -11,6 +11,9 @@
 #           DCR_LOGS_ENDPOINT               https://<host> of the data collection rule
 #           DCR_IMMUTABLE_ID                dcr-<32 hex>
 #           AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_CERTIFICATE_PATH   (certificate only)
+#           IBGW_INSTANCE, HOST_LABEL       row labels (letters, digits, . _ -; at most 64);
+#                                           at least one must name this gateway: the default
+#                                           instance label without a host label is refused
 #           IBGW_REDACT_USERNAME_FILE       optional file holding the IBKR user name: one line of
 #                                           printable ASCII; a UTF-8 byte-order mark and line
 #                                           ends are ignored, as the gateway ignores them
@@ -87,6 +90,31 @@ if [ "${auth}" = certificate ]; then
   [ -f "${certificate_path}" ] && [ -r "${certificate_path}" ] \
     || die "the certificate file named by AZURE_CLIENT_CERTIFICATE_PATH is missing or not readable by uid 1000"
 fi
+
+# Row labels. Every row carries Instance and Host, and the alert rules tell gateways apart by
+# them: two gateways with the same pair would hide each other's silence from the dead-man rule.
+# A label must also survive redaction unchanged, so one that looks like an IBKR account id
+# (prefix DU, DF, U or F and 5 to 9 digits, as a word of its own) is refused.
+label='[A-Za-z0-9._-]{1,64}'
+account_like='(^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])[0-9]{5,9}([^A-Za-z0-9]|$)'
+IBGW_INSTANCE="${IBGW_INSTANCE:-default}"
+HOST_LABEL="${HOST_LABEL:-}"
+matches "${IBGW_INSTANCE}" "${label}" \
+  || die "IBGW_INSTANCE must be 1 to 64 letters, digits, dots, underscores or hyphens"
+if [ -n "${HOST_LABEL}" ]; then
+  matches "${HOST_LABEL}" "${label}" \
+    || die "HOST_LABEL must be empty or 1 to 64 letters, digits, dots, underscores or hyphens"
+fi
+if printf '%s' "${IBGW_INSTANCE}" | grep -Eq -- "${account_like}"; then
+  die "IBGW_INSTANCE looks like an IBKR account id; choose a label that is not one (for example paper-1)"
+fi
+if printf '%s' "${HOST_LABEL}" | grep -Eq -- "${account_like}"; then
+  die "HOST_LABEL looks like an IBKR account id; choose a label that is not one"
+fi
+if [ "${IBGW_INSTANCE}" = default ] && [ -z "${HOST_LABEL}" ]; then
+  die "this gateway has no label of its own: set IBGW_INSTANCE to a name that is unique in the workspace (for example paper-1), or set HOST_LABEL; IBGW_INSTANCE=default alone cannot be told apart from another gateway"
+fi
+export IBGW_INSTANCE HOST_LABEL
 
 # Raw-log opt-in. Default: off.
 IBGW_RAW_MODE=off

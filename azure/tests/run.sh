@@ -152,12 +152,12 @@ run_id="$$"
 # reliably inside a quoted command substitution by every bash build (Git Bash).
 carriage_return=$'\r'
 newline=$'\n'
-valid_env=(
+unlabelled_env=(
   -e AZURE_AUTH=managed-identity
   -e DCR_LOGS_ENDPOINT=https://example-abcd.eastus-1.ingest.monitor.azure.com
   -e DCR_IMMUTABLE_ID=dcr-00000000000000000000000000000000
-  -e IBGW_INSTANCE=test-instance -e HOST_LABEL=test-host
 )
+valid_env=("${unlabelled_env[@]}" -e IBGW_INSTANCE=test-instance -e HOST_LABEL=test-host)
 cert_env=(
   -e AZURE_AUTH=certificate
   -e AZURE_TENANT_ID=00000000-0000-0000-0000-000000000000
@@ -301,6 +301,27 @@ VARIABLES
     cat ${rendered}" 2>&1)"
   expect "managed identity: unused certificate variables cannot change the rendered configuration" \
     '"${out}" == "${baseline}" && "${baseline}" == *"- raw_out"* && "${baseline}" != *"raw_file"*'
+
+  # Row labels. Alert rules tell gateways apart by Instance and Host, so two gateways with the
+  # same labels would hide each other's silence; a label must also survive redaction unchanged.
+  expect_refusal "refuses to run unlabelled: default instance label and no host label" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -- validate --no-environment
+  expect_refusal "refuses an explicit IBGW_INSTANCE=default without a host label" "HOST_LABEL" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=default -- validate --no-environment
+  check "accepts the default instance label when a host label tells the gateway apart" \
+    entrypoint "${unlabelled_env[@]}" -e HOST_LABEL=desk-1 -- validate --no-environment
+  check "accepts an instance label without a host label" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -- validate --no-environment
+  expect_refusal "refuses a space in IBGW_INSTANCE" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e 'IBGW_INSTANCE=paper 1' -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE longer than 64 characters" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e "IBGW_INSTANCE=$(printf 'x%.0s' {1..65})" -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE that looks like an account id" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=U1234567 -- validate --no-environment
+  expect_refusal "refuses a HOST_LABEL that contains an account id" "HOST_LABEL" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e HOST_LABEL=desk_du1234567 -- validate --no-environment
+  expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 
   # The user-name file is normalised as the gateway normalises it (a leading UTF-8 byte-order
   # mark and trailing line ends are not part of the name). The proof is positive: the redaction
