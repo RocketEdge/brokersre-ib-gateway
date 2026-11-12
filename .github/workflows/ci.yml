@@ -39,11 +39,12 @@ jobs:
           jq -e '[.channels.stable.version, .channels.latest.version] | all(test("^10\\.[0-9]+\\.[0-9]+[a-z]?$"))' versions.json
       - name: README version table matches versions.json
         run: scripts/readme-versions.sh --check
-      - name: bake definition resolves
+      - name: bake definition resolves, and the two channels claim no common tag
         run: |
+          set -euo pipefail
           eval "$(scripts/bake-env.sh)"
-          docker buildx bake --print stable latest > /dev/null
-      - name: CI script tests (bats, release policy and archive prefetch)
+          docker buildx bake --print stable latest | scripts/check-bake-tags.sh
+      - name: CI script tests in bats (release and rebuild policy, tag promotion, VEX drift, workflow policy)
         run: |
           git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
           tests/.bats-core/bin/bats tests/bats/ci
@@ -87,6 +88,7 @@ jobs:
       - name: Trivy gate (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
           format: sarif
           output: trivy.sarif
@@ -104,6 +106,7 @@ jobs:
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
           vuln-type: library
           format: table
@@ -121,6 +124,7 @@ jobs:
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
           vuln-type: library
           format: json

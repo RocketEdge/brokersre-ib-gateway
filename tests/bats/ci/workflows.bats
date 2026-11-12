@@ -24,9 +24,8 @@ setup() {
   WORK="$(mktemp -d)"
   # The Trivy release every scanner step must ask for (invariant 1: every input is pinned).
   TRIVY_VERSION="v0.76.2"
-  # Workflows whose scanner steps must carry that version. ci.yml joins this list with the
-  # change that pins its three scanner steps.
-  VERSION_PINNED=(publish.yml rebuild.yml)
+  # Workflows whose scanner steps must carry that version.
+  VERSION_PINNED=(ci.yml publish.yml rebuild.yml)
 }
 
 teardown() {
