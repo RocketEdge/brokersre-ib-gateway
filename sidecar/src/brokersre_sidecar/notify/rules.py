@@ -42,6 +42,15 @@ _SUCCESSORS: dict[str, AlertClass] = {
     Phase.STOPPING: AlertClass.GATEWAY_STOPPED,
     Phase.STOPPED: AlertClass.GATEWAY_STOPPED,
 }
+# The same hand-over told by the event that ended the gateway's attempt (PairState.ended_with):
+# the phase file and the event feed are read separately, so the event can be seen first.
+_ENDING_SUCCESSORS: dict[str, AlertClass] = {
+    "shutdown_requested": AlertClass.GATEWAY_STOPPED,
+    "ibc_exited": AlertClass.GATEWAY_EXITED,
+    "needs_human": AlertClass.NEEDS_HUMAN,
+    "login_failed_dialog": AlertClass.NEEDS_HUMAN,
+    "login_rejected_latched": AlertClass.NEEDS_HUMAN,
+}
 
 
 class Condition(Enum):
@@ -324,7 +333,10 @@ class RuleEngine:
 
         A stall that ends because the gateway gave up, exited or was stopped did not
         recover: the verdict is then a hand-over to the alert that describes the gateway
-        now, so the closing message does not say "no action needed".
+        now, so the closing message does not say "no action needed". The gateway's sampler
+        closes the pair itself in that case (the phase left ``login``), so a closed pair is
+        a hand-over too when the gateway announced its end before closing it
+        (``PairState.ended_with``); the phase file may not have been re-read yet.
         """
         if not known:
             return _UNKNOWN
@@ -337,6 +349,8 @@ class RuleEngine:
             return Evaluation(_ACTIVE, "the gateway reports a stalled login")
         if pair.open and gateway.phase in _SUCCESSORS:
             return Evaluation(Condition.INACTIVE, superseded_by=_SUCCESSORS[gateway.phase])
+        if not pair.open and pair.ended_with in _ENDING_SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_ENDING_SUCCESSORS[pair.ended_with])
         return _INACTIVE
 
     def _unknown_window(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:

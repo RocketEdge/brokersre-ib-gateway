@@ -370,3 +370,54 @@ def test_a_phase_token_the_sidecar_does_not_know_counts_as_not_readable() -> Non
     assert snapshot.unreadable_for_s == 40.0
     state.observe_phase(reading("logged-in", T0))
     assert state.snapshot().unreadable_for_s is None
+
+
+@pytest.mark.parametrize(
+    "ending",
+    [
+        "shutdown_requested",
+        "ibc_exited",
+        "needs_human",
+        "login_failed_dialog",
+        "login_rejected_latched",
+    ],
+)
+def test_a_pair_closed_after_the_gateway_began_to_end_records_what_ended_it(ending: str) -> None:
+    # The gateway's sampler closes a stalled login (login_resumed) when the phase leaves
+    # `login`, also when it leaves because the gateway is stopping, exited or gave up. The
+    # event that announced that end comes first in the feed, so the model can tell a stall
+    # that recovered from one that merely ended with the gateway.
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("login_stalled", T0, boot=BOOT_A))
+    feed_event(state, event_line(ending, T0 + timedelta(seconds=10), boot=BOOT_A))
+    feed_event(state, event_line("login_resumed", T0 + timedelta(seconds=11), boot=BOOT_A))
+    pair = state.snapshot().pairs["login_stalled"]
+    assert (pair.open, pair.ended_with) == (False, ending)
+
+
+def test_a_pair_closed_while_the_gateway_goes_on_has_no_ending_event() -> None:
+    state = GatewayState(FakeClock())
+    # An ending event from before the stall began says nothing about how the stall ended
+    # (a rejected login that a person then corrected through the console, for example).
+    feed_event(state, event_line("login_failed_dialog", T0 - timedelta(minutes=10), boot=BOOT_A))
+    feed_event(state, event_line("login_stalled", T0, boot=BOOT_A))
+    feed_event(state, event_line("login_resumed", T0 + timedelta(seconds=30), boot=BOOT_A))
+    pair = state.snapshot().pairs["login_stalled"]
+    assert (pair.open, pair.ended_with) == (False, None)
+
+
+def test_an_ending_event_of_another_boot_does_not_end_this_boots_pair() -> None:
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("shutdown_requested", T0 - timedelta(minutes=1), boot=BOOT_A))
+    feed_event(state, event_line("login_stalled", T0, boot=BOOT_B))
+    feed_event(state, event_line("login_resumed", T0 + timedelta(seconds=30), boot=BOOT_B))
+    assert state.snapshot().pairs["login_stalled"].ended_with is None
+
+
+def test_the_newest_ending_event_is_the_one_recorded() -> None:
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("login_stalled", T0, boot=BOOT_A))
+    feed_event(state, event_line("login_failed_dialog", T0 + timedelta(seconds=5), boot=BOOT_A))
+    feed_event(state, event_line("shutdown_requested", T0 + timedelta(seconds=9), boot=BOOT_A))
+    feed_event(state, event_line("login_resumed", T0 + timedelta(seconds=10), boot=BOOT_A))
+    assert state.snapshot().pairs["login_stalled"].ended_with == "shutdown_requested"

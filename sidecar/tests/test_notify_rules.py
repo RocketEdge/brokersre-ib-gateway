@@ -601,3 +601,33 @@ def test_a_stalled_login_that_resumes_is_plainly_resolved() -> None:
         mono=1000.0,
     )
     assert stopped[AlertClass.LOGIN_STALLED].superseded_by is None
+
+
+@pytest.mark.parametrize(
+    ("ended_with", "successor"),
+    [
+        ("shutdown_requested", AlertClass.GATEWAY_STOPPED),
+        ("ibc_exited", AlertClass.GATEWAY_EXITED),
+        ("needs_human", AlertClass.NEEDS_HUMAN),
+        ("login_failed_dialog", AlertClass.NEEDS_HUMAN),
+        ("login_rejected_latched", AlertClass.NEEDS_HUMAN),
+    ],
+)
+def test_a_stall_the_gateway_closed_while_ending_is_handed_over_whatever_the_phase_file_says(
+    ended_with: str, successor: AlertClass
+) -> None:
+    # Seen on a fast machine (the first run in GitHub Actions): the gateway's sampler closed
+    # the pair with login_resumed while the gateway was stopping, the sidecar read that event
+    # before it read the new phase, and told people "No action needed. The condition has
+    # cleared." about a gateway that had just been stopped.
+    result = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(
+            T0, phase="login", pairs={"login_stalled": PairState(False, T0, BOOT, ended_with)}
+        ),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    verdict = result[AlertClass.LOGIN_STALLED]
+    assert verdict.state is INACTIVE
+    assert verdict.superseded_by is successor

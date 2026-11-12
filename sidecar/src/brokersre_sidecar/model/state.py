@@ -45,6 +45,19 @@ _CLOSERS = {closing: opening for opening, closing in CONDITION_PAIRS.items()}
 _MAX_EVENT_NAMES = 256
 _MAX_BOOTS = 64
 
+ENDING_EVENTS: tuple[str, ...] = (
+    "shutdown_requested",
+    "ibc_exited",
+    "needs_human",
+    "login_failed_dialog",
+    "login_rejected_latched",
+)
+"""Events with which the gateway announces that its attempt to log in is over without a login:
+it is stopping, IBC exited, or only a person can go on. The gateway writes each of them
+BEFORE its sampler closes an open ``login_stalled`` pair (the sampler reacts to the phase
+those events set), so their order in the feed tells a stall that recovered from one that
+merely ended with the gateway."""
+
 
 @dataclass(frozen=True, slots=True)
 class PairState:
@@ -55,11 +68,15 @@ class PairState:
             boot that opened it ended.
         since: Timestamp of the event (or of the first line of the new boot) that set it.
         boot_id: Boot the state belongs to, or None when the line carried none.
+        ended_with: For a closed pair: the newest of ``ENDING_EVENTS`` that the same boot
+            wrote between the opening and the closing event, or None when there was none.
+            Not None means the condition did not recover; the gateway's attempt ended.
     """
 
     open: bool
     since: datetime
     boot_id: str | None
+    ended_with: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +239,35 @@ class GatewayState:
         if event.event in CONDITION_PAIRS:
             self._pairs[event.event] = PairState(True, event.ts, event.boot_id)
         elif event.event in _CLOSERS:
-            self._pairs[_CLOSERS[event.event]] = PairState(False, event.ts, event.boot_id)
+            opening = _CLOSERS[event.event]
+            self._pairs[opening] = PairState(
+                False, event.ts, event.boot_id, self._ended_with(self._pairs.get(opening), event)
+            )
+
+    def _ended_with(self, opened: PairState | None, closing: GatewayEvent) -> str | None:
+        """Name the event that ended the gateway's attempt before ``closing`` closed a pair.
+
+        Args:
+            opened: The pair's state before the closing event (None when never seen).
+            closing: The closing event, in feed order.
+
+        Returns:
+            The newest of ``ENDING_EVENTS`` written by the boot of ``closing`` at or after
+            the pair was opened, or None. An ending event from before the pair opened, or
+            from another boot, says nothing about how this condition ended.
+        """
+        if opened is None or not opened.open:
+            return None
+        newest: GatewayEvent | None = None
+        for name in ENDING_EVENTS:
+            candidate = self._last_events.get(name)
+            if candidate is None or candidate.boot_id != closing.boot_id:
+                continue
+            if candidate.ts < opened.since:
+                continue
+            if newest is None or candidate.ts > newest.ts:
+                newest = candidate
+        return None if newest is None else newest.event
 
     def observe_metrics(self, sample: MetricsSample) -> None:
         """Record one metrics sample (in file order)."""
