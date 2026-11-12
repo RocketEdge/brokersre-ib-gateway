@@ -48,6 +48,61 @@ function ConvertTo-GwNativeArgument {
     return $builder.ToString()
 }
 
+function Invoke-GwProcessTreeKill {
+    <#
+    .SYNOPSIS
+    Ends a process together with every process it started.
+    .DESCRIPTION
+    Killing only the process the kit started is not enough: docker.exe runs docker-compose.exe
+    as a child, and an orphaned 'compose up' would still start the gateway after the kit has
+    reported a timeout. PowerShell 7 uses Process.Kill($true); .NET Framework has no such
+    overload, so Windows PowerShell 5.1 runs 'taskkill /T /F /PID <id>' (output discarded,
+    bounded wait) and then kills the process itself if it is still there. Never throws: a
+    process that has already gone is the goal.
+    .PARAMETER Process
+    The process the kit started.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+    try {
+        if ($Process.HasExited) { return }
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            $Process.Kill($true)
+            return
+        }
+        try {
+            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $startInfo.FileName = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+            $startInfo.Arguments = '/T /F /PID {0}' -f $Process.Id
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $killer = [System.Diagnostics.Process]::Start($startInfo)
+            try {
+                # Drain both streams (one line per ended process) so a large tree cannot fill
+                # the pipe and stall taskkill; the text itself is not needed.
+                $killer.BeginOutputReadLine()
+                $killer.BeginErrorReadLine()
+                if (-not $killer.WaitForExit(15000)) { $killer.Kill() }
+            }
+            finally {
+                $killer.Dispose()
+            }
+        }
+        catch [System.ComponentModel.Win32Exception] {
+            Write-Verbose ('taskkill could not run: {0}' -f $_.Exception.Message)
+        }
+        # Whatever taskkill achieved, the process the kit started must not survive.
+        if (-not $Process.HasExited) { $Process.Kill() }
+    }
+    catch [System.InvalidOperationException] { Write-Verbose 'The process had already exited.' }
+    catch [System.ComponentModel.Win32Exception] { Write-Verbose ('The process tree could not be ended: {0}' -f $_.Exception.Message) }
+    catch [System.AggregateException] { Write-Verbose ('Part of the process tree could not be ended: {0}' -f $_.Exception.Message) }
+}
+
 function Invoke-GwNative {
     <#
     .SYNOPSIS
@@ -56,7 +111,8 @@ function Invoke-GwNative {
     Shared engine of the per-command wrappers. It starts the process itself
     (System.Diagnostics.Process) instead of using PowerShell's call operator, for four reasons:
     a deadline can be enforced (a hung docker or wsl must not hang doctor or the unattended
-    start task: the process is killed and the result says TimedOut); standard input is closed,
+    start task: the process and every process it started are killed and the result says
+    TimedOut); standard input is closed,
     so no command can sit waiting for a keyboard nobody is at; arguments are quoted the same
     way on both PowerShell editions; and stderr text never becomes a PowerShell error record
     (Windows PowerShell 5.1 turns it into a terminating error under 'Stop').
@@ -166,9 +222,7 @@ function Invoke-GwNative {
             if (-not $process.WaitForExit($wait)) { $expired = $true }
         }
         if ($expired) {
-            try { $process.Kill() }
-            catch [System.InvalidOperationException] { Write-Verbose 'The process had already exited.' }
-            catch [System.ComponentModel.Win32Exception] { Write-Verbose ('The process could not be killed: {0}' -f $_.Exception.Message) }
+            Invoke-GwProcessTreeKill -Process $process
             $lines.Add(('{0} timed out after {1} s and was stopped.' -f $FilePath, $TimeoutSeconds))
             $stamps.Add([DateTime]::UtcNow)
             return (& $finish -2 $false $true)

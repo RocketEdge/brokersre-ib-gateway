@@ -50,15 +50,25 @@ Describe 'Invoke-GwNative' {
         $null -eq $result.Output | Should -BeFalse
     }
 
-    It 'kills a command that exceeds its timeout and reports TimedOut instead of hanging' {
+    It 'stops a command that exceeds its timeout together with the child it started, and reports TimedOut' {
+        # cmd.exe is the process the kit starts; waitfor.exe is its child. Killing only cmd.exe
+        # would leave waitfor running, the way a killed docker.exe leaves docker-compose.exe.
+        $signal = 'Winkit' + [guid]::NewGuid().ToString('N').Substring(0, 12)
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
-        $result = Invoke-GwNative -FilePath 'waitfor.exe' -ArgumentList @('/T', '60', 'WinkitSignalNobodySends') -TimeoutSeconds 2
-        $watch.Elapsed.TotalSeconds | Should -BeLessThan 20
+        $result = Invoke-GwNative -FilePath 'cmd.exe' -ArgumentList @('/c', ('waitfor /T 90 {0}' -f $signal)) -TimeoutSeconds 2
+        $watch.Elapsed.TotalSeconds | Should -BeLessThan 30
         $result.TimedOut | Should -BeTrue
         $result.ExitCode | Should -Be -2
         ($result.Output -join ' ') | Should -Match 'timed out after 2 s'
+        $left = @()
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        do {
+            $left = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'waitfor.exe'" | Where-Object { [string]$_.CommandLine -match $signal })
+            if ($left.Count -gt 0) { Start-Sleep -Milliseconds 250 }
+        } while ($left.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline)
+        foreach ($process in $left) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
+        $left.Count | Should -Be 0 -Because 'the child of the timed-out command must not keep running'
     }
-
     It 'does not report TimedOut for a command that finishes in time' {
         (Invoke-GwNative -FilePath 'cmd.exe' -ArgumentList @('/c', 'echo ok') -TimeoutSeconds 30).TimedOut | Should -BeFalse
     }

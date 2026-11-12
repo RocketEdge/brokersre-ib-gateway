@@ -66,6 +66,7 @@
         'Invoke-GwHarden'
         'Invoke-GwNative'
         'Invoke-GwPowerCfg'
+        'Invoke-GwProcessTreeKill'
         'Invoke-GwRegistry'
         'Invoke-GwSchTasks'
         'Invoke-GwSetup'
