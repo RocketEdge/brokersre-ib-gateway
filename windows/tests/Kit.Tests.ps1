@@ -160,9 +160,33 @@ Describe 'Rules of the repository' {
         }
     }
 
-    It 'nothing in the kit automates the second factor' {
+    It 'the only thing the kit ever runs inside the gateway container is reading the phase file' {
+        # No input can reach the gateway (and so no 2FA prompt can be answered) without running
+        # something in the container; the kit's single docker exec is 'cat <phase file>'.
+        $execLines = New-Object System.Collections.Generic.List[string]
         foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $script:kitRoot 'src') -File)) {
-            [System.IO.File]::ReadAllText($file.FullName) | Should -Not -Match '(?i)totp|authenticator secret|otpauth'
+            foreach ($line in [System.IO.File]::ReadAllLines($file.FullName)) {
+                if ($line -match "(?<!-)'exec'" -and $line -notmatch '^\s*#') { $execLines.Add($line.Trim()) }
+            }
+        }
+        $execLines.Count | Should -Be 1
+        $execLines[0] | Should -Match "'exec', \`$ContainerName, 'cat', '/var/log/ibgateway/state/phase'"
+    }
+
+    It 'no code path can send keys or clicks to the gateway, open a network connection, talk to the IBC command server or copy files into the container' {
+        # Input simulation, VNC tools and port, the IBC command server and its commands, one-time
+        # password tooling, 'docker cp' / 'docker attach', and every way PowerShell opens a socket
+        # or an HTTP connection: the kit needs none of them, so none may appear.
+        $words = @(
+            'sendkeys', 'sendinput', 'xdotool', 'vncdo', 'x11vnc', '5900', 'wscript\.shell', 'ibc-cmd', '7462', 'RECONNECTDATA', 'RECONNECTACCOUNT', 'ENABLEAPI',
+            'totp', 'otpauth', 'oathtool', "'cp',", "'attach'", 'TcpClient', 'Net\.Sockets', 'Test-NetConnection', 'Invoke-WebRequest', 'Invoke-RestMethod',
+            'WebClient', 'HttpClient'
+        )
+        $forbidden = '(?i)' + ($words -join '|')
+        $sources = @(Get-ChildItem -LiteralPath (Join-Path $script:kitRoot 'src') -File) + @(Get-ChildItem -LiteralPath $script:kitRoot -Filter '*.ps1' -File)
+        $sources.Count | Should -BeGreaterThan 10
+        foreach ($file in $sources) {
+            [System.IO.File]::ReadAllText($file.FullName) | Should -Not -Match $forbidden -Because $file.Name
         }
     }
 
@@ -173,8 +197,43 @@ Describe 'Rules of the repository' {
         (($readme -replace '\s+', ' ').EndsWith($sentence)) | Should -BeTrue
     }
 
-    It 'the clock probe image is pinned by digest' {
-        $checks = [System.IO.File]::ReadAllText((Join-Path $script:kitRoot 'src\Checks.ps1'))
-        $checks | Should -Match "GwClockImage = 'busybox:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}'"
+    It 'the host-side probe image is pinned by digest, in exactly one place' {
+        # The image repository keeps every version in versions.json (its invariant 1); this one
+        # reference is the documented exception, so a second copy must not appear.
+        $hits = New-Object System.Collections.Generic.List[string]
+        $sources = @(Get-ChildItem -LiteralPath $script:kitRoot -Recurse -File | Where-Object { $_.FullName -notlike '*\tests\*' })
+        foreach ($file in $sources) {
+            foreach ($line in [System.IO.File]::ReadAllLines($file.FullName)) {
+                if ($line -match 'busybox:\d|busybox@sha256') { $hits.Add($line.Trim()) }
+            }
+        }
+        $hits.Count | Should -Be 1
+        $hits[0] | Should -Match "^\`$script:GwProbeImage = 'busybox:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}'$"
+    }
+
+    It 'knows every phase the image can set and looks for events the image really emits' {
+        $repository = Split-Path -Parent $script:kitRoot
+        $rows = @([System.IO.File]::ReadAllLines((Join-Path $repository 'rootfs\etc\brokersre\ibc-patterns.tsv')) |
+                Where-Object { $_.Trim().Length -gt 0 -and $_ -notmatch '^\s*#' } | ForEach-Object { , ($_ -split "`t") })
+        $rows.Count | Should -BeGreaterThan 5
+        $phases = New-Object System.Collections.Generic.List[string]
+        foreach ($row in $rows) { if ($row[2].Length -gt 0) { $phases.Add($row[2]) } }
+        $contract = [System.IO.File]::ReadAllText((Join-Path $repository 'docs\log-contract.md'))
+        $tokenLine = [regex]::Match($contract, '(?m)^\| `state/phase` \|.*$').Value
+        $tokenLine | Should -Not -BeNullOrEmpty
+        foreach ($match in [regex]::Matches($tokenLine.Substring($tokenLine.IndexOf('one token')), '`([a-z0-9-]+)`')) { $phases.Add($match.Groups[1].Value) }
+        foreach ($phase in @($phases | Sort-Object -Unique)) {
+            (Get-GwPhaseMessage -Phase $phase -ApiPort 4002 -ContainerName 'c').Text | Should -Not -Match 'Unknown state' -Because $phase
+        }
+        $events = @($rows | ForEach-Object { $_[0] })
+        $events | Should -Contain 'login_failed'
+        $events | Should -Contain 'login_failed_dialog'
+    }
+
+    It 'the workflow also runs when the image contract the kit reads changes' {
+        $workflow = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $script:kitRoot) '.github\workflows\windows-kit.yml'))
+        foreach ($path in @('rootfs/etc/brokersre/ibc-patterns.tsv', 'docs/log-contract.md')) {
+            ([regex]::Matches($workflow, [regex]::Escape($path))).Count | Should -Be 2 -Because ('{0} under both push and pull_request' -f $path)
+        }
     }
 }

@@ -9,10 +9,16 @@ on:
     branches: [main]
     paths:
       - "windows/**"
+      # The image contract the kit reads: phase tokens and event names.
+      - "rootfs/etc/brokersre/ibc-patterns.tsv"
+      - "docs/log-contract.md"
       - ".github/workflows/windows-kit.yml"
   pull_request:
     paths:
       - "windows/**"
+      # The image contract the kit reads: phase tokens and event names.
+      - "rootfs/etc/brokersre/ibc-patterns.tsv"
+      - "docs/log-contract.md"
       - ".github/workflows/windows-kit.yml"
 
 permissions:

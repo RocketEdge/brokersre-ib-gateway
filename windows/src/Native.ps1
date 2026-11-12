@@ -462,17 +462,111 @@ function Test-GwPortSpecMatch {
     return $false
 }
 
+function Get-GwFirewallRuleRecord {
+    <#
+    .SYNOPSIS
+    Enumerates every Windows Firewall rule as a plain record (read-only).
+    .DESCRIPTION
+    Reads through the Windows Firewall COM API (HNetCfg.FwPolicy2): no elevation, every rule
+    in about 0.3 s on both PowerShell editions. Copies the fields the kit needs into plain
+    objects and releases the COM object, so everything after this function is ordinary data
+    that tests can supply themselves. No decision is made here.
+    .OUTPUTS
+    PSCustomObject per rule: Name, Enabled (bool), Direction (1 in, 2 out), Action (1 allow,
+    0 block), Protocol (6 TCP, 17 UDP), LocalPorts (text), RemoteAddresses (text),
+    ApplicationName (text), Profiles (bit mask: 1 domain, 2 private, 4 public, 0x7FFFFFFF all).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+    $policy = New-Object -ComObject HNetCfg.FwPolicy2
+    try {
+        foreach ($rule in @($policy.Rules)) {
+            [pscustomobject][ordered]@{
+                Name            = [string]$rule.Name
+                Enabled         = [bool]$rule.Enabled
+                Direction       = [int]$rule.Direction
+                Action          = [int]$rule.Action
+                Protocol        = [int]$rule.Protocol
+                LocalPorts      = [string]$rule.LocalPorts
+                RemoteAddresses = [string]$rule.RemoteAddresses
+                ApplicationName = [string]$rule.ApplicationName
+                Profiles        = [int]$rule.Profiles
+            }
+        }
+    }
+    finally {
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($policy)
+    }
+}
+
+function Select-GwFirewallPortRule {
+    <#
+    .SYNOPSIS
+    Picks the enabled inbound TCP allow rules that name one of the given ports.
+    .DESCRIPTION
+    Pure function over the records of Get-GwFirewallRuleRecord, so it is tested with a fake
+    rule set. A rule counts only when it is enabled, inbound, allow, TCP, and one of its local
+    port specifications is the port itself or a range containing it ('*' and keywords do not
+    name a port). The result is normalised: ports and remote addresses as arrays ('*' becomes
+    'Any'), the profile mask as names, an empty application as 'Any'.
+    .PARAMETER Rule
+    Records from Get-GwFirewallRuleRecord.
+    .PARAMETER Port
+    Ports to look for.
+    .OUTPUTS
+    PSCustomObject per matching rule: Name, DisplayName, Profile, LocalPort, RemoteAddress, Program.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [AllowEmptyCollection()][object[]]$Rule = @(),
+        [Parameter(Mandatory = $true)][int[]]$Port
+    )
+    foreach ($item in $Rule) {
+        if (-not $item.Enabled -or $item.Direction -ne 1 -or $item.Action -ne 1 -or $item.Protocol -ne 6) { continue }
+        $localPorts = [string[]]@(([string]$item.LocalPorts).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        $named = $false
+        foreach ($spec in $localPorts) {
+            foreach ($candidate in $Port) {
+                if (Test-GwPortSpecMatch -Spec $spec -Port $candidate) { $named = $true }
+            }
+        }
+        if (-not $named) { continue }
+        $remote = [string[]]@(([string]$item.RemoteAddresses).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        if ($remote.Count -eq 0 -or $remote -contains '*') { $remote = [string[]]@('Any') }
+        $program = 'Any'
+        if (-not [string]::IsNullOrEmpty([string]$item.ApplicationName)) { $program = [string]$item.ApplicationName }
+        $mask = [int]$item.Profiles
+        $profileNames = New-Object System.Collections.Generic.List[string]
+        if ($mask -eq 0x7FFFFFFF) { $profileNames.Add('Any') }
+        else {
+            if (($mask -band 1) -ne 0) { $profileNames.Add('Domain') }
+            if (($mask -band 2) -ne 0) { $profileNames.Add('Private') }
+            if (($mask -band 4) -ne 0) { $profileNames.Add('Public') }
+        }
+        [pscustomobject][ordered]@{
+            Name          = [string]$item.Name
+            DisplayName   = [string]$item.Name
+            Profile       = ($profileNames.ToArray() -join ', ')
+            LocalPort     = $localPorts
+            RemoteAddress = $remote
+            Program       = $program
+        }
+    }
+}
+
 function Invoke-GwFirewall {
     <#
     .SYNOPSIS
     The only place the kit talks to Windows Firewall.
     .DESCRIPTION
     List returns the enabled inbound ALLOW rules whose TCP local ports name one of the given
-    ports. It reads through the Windows Firewall COM API (HNetCfg.FwPolicy2), which needs no
-    elevation and enumerates every rule in about 0.3 s on both PowerShell editions; the
-    NetSecurity cmdlets need one association query per rule for the port filter, which took
-    7 s in PowerShell 7 and about three minutes in Windows PowerShell 5.1 (measured
-    2026-11-12, 272 rules). Exists reports whether a rule with a given name (ID) is present.
+    ports: Get-GwFirewallRuleRecord enumerates through the Windows Firewall COM API and
+    Select-GwFirewallPortRule decides. The NetSecurity cmdlets are not used for listing: they
+    need one association query per rule for the port filter, which took 7 s in PowerShell 7
+    and about three minutes in Windows PowerShell 5.1 (measured 2026-11-12, 272 rules).
+    Exists reports whether a rule with a given name (ID) is present.
     Add creates an inbound BLOCK rule for TCP ports on all profiles; Remove deletes a rule by
     name. Add and Remove use the NetSecurity cmdlets, need elevation and are called only from
     the harden functions, behind ShouldProcess and the change journal. netsh is not used: its
@@ -501,45 +595,7 @@ function Invoke-GwFirewall {
     )
     switch ($Operation) {
         'List' {
-            # INetFwRule constants: Direction 1 = inbound, Action 1 = allow, Protocol 6 = TCP;
-            # Profiles is a bit mask (1 domain, 2 private, 4 public, 0x7FFFFFFF all).
-            $policy = New-Object -ComObject HNetCfg.FwPolicy2
-            try {
-                foreach ($rule in @($policy.Rules)) {
-                    if (-not $rule.Enabled -or $rule.Direction -ne 1 -or $rule.Action -ne 1 -or $rule.Protocol -ne 6) { continue }
-                    $localPorts = [string[]]@(([string]$rule.LocalPorts).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
-                    $named = $false
-                    foreach ($spec in $localPorts) {
-                        foreach ($candidate in $Port) {
-                            if (Test-GwPortSpecMatch -Spec $spec -Port $candidate) { $named = $true }
-                        }
-                    }
-                    if (-not $named) { continue }
-                    $remote = [string[]]@(([string]$rule.RemoteAddresses).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
-                    if ($remote.Count -eq 0 -or $remote -contains '*') { $remote = [string[]]@('Any') }
-                    $program = 'Any'
-                    if (-not [string]::IsNullOrEmpty([string]$rule.ApplicationName)) { $program = [string]$rule.ApplicationName }
-                    $mask = [int]$rule.Profiles
-                    $profileNames = New-Object System.Collections.Generic.List[string]
-                    if ($mask -eq 0x7FFFFFFF) { $profileNames.Add('Any') }
-                    else {
-                        if (($mask -band 1) -ne 0) { $profileNames.Add('Domain') }
-                        if (($mask -band 2) -ne 0) { $profileNames.Add('Private') }
-                        if (($mask -band 4) -ne 0) { $profileNames.Add('Public') }
-                    }
-                    [pscustomobject][ordered]@{
-                        Name          = [string]$rule.Name
-                        DisplayName   = [string]$rule.Name
-                        Profile       = ($profileNames.ToArray() -join ', ')
-                        LocalPort     = $localPorts
-                        RemoteAddress = $remote
-                        Program       = $program
-                    }
-                }
-            }
-            finally {
-                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($policy)
-            }
+            Select-GwFirewallPortRule -Rule @(Get-GwFirewallRuleRecord) -Port $Port
         }
         'Exists' {
             $existing = Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue

@@ -214,12 +214,57 @@ Describe 'Test-GwPortSpecMatch' {
     }
 }
 
-Describe 'Invoke-GwFirewall -Operation List (real, read-only)' {
-    It 'returns rule records with the documented properties, or nothing' {
-        $rules = @(Invoke-GwFirewall -Operation List -Port @(4001, 4002, 9810))
-        foreach ($rule in $rules) {
-            ($rule.PSObject.Properties.Name -join ',') | Should -Be 'Name,DisplayName,Profile,LocalPort,RemoteAddress,Program'
+Describe 'Select-GwFirewallPortRule' {
+    BeforeAll {
+        function Get-FakeRule {
+            param([string]$Name, [bool]$Enabled = $true, [int]$Direction = 1, [int]$Action = 1, [int]$Protocol = 6,
+                [string]$LocalPorts = '4002', [string]$RemoteAddresses = '*', [string]$ApplicationName = '', [int]$Profiles = 2147483647)
+            return [pscustomobject]@{
+                Name = $Name; Enabled = $Enabled; Direction = $Direction; Action = $Action; Protocol = $Protocol
+                LocalPorts = $LocalPorts; RemoteAddresses = $RemoteAddresses; ApplicationName = $ApplicationName; Profiles = $Profiles
+            }
         }
-        $rules.Count | Should -BeGreaterOrEqual 0
+        $script:fakeRules = @(
+            (Get-FakeRule -Name 'exact port')
+            (Get-FakeRule -Name 'range' -LocalPorts '80, 4000-4010' -RemoteAddresses 'LocalSubnet' -Profiles 2 -ApplicationName 'C:\x\app.exe')
+            (Get-FakeRule -Name 'disabled' -Enabled $false)
+            (Get-FakeRule -Name 'outbound' -Direction 2)
+            (Get-FakeRule -Name 'block' -Action 0)
+            (Get-FakeRule -Name 'udp' -Protocol 17)
+            (Get-FakeRule -Name 'other port' -LocalPorts '8080')
+            (Get-FakeRule -Name 'any port' -LocalPorts '*')
+            (Get-FakeRule -Name 'sidecar' -LocalPorts '9810' -Profiles 5)
+        )
+    }
+
+    It 'keeps only enabled inbound TCP allow rules that name one of the ports' {
+        $selected = @(Select-GwFirewallPortRule -Rule $script:fakeRules -Port @(4001, 4002, 9810))
+        $selected.Name | Should -Be @('exact port', 'range', 'sidecar')
+    }
+
+    It 'normalises ports, remote addresses, profiles and the program' {
+        $selected = @(Select-GwFirewallPortRule -Rule $script:fakeRules -Port @(4001, 4002, 9810))
+        ($selected[0].PSObject.Properties.Name -join ',') | Should -Be 'Name,DisplayName,Profile,LocalPort,RemoteAddress,Program'
+        $selected[0].RemoteAddress | Should -Be @('Any')
+        $selected[0].Profile | Should -Be 'Any'
+        $selected[0].Program | Should -Be 'Any'
+        $selected[1].LocalPort | Should -Be @('80', '4000-4010')
+        $selected[1].RemoteAddress | Should -Be @('LocalSubnet')
+        $selected[1].Profile | Should -Be 'Private'
+        $selected[1].Program | Should -Be 'C:\x\app.exe'
+        $selected[2].Profile | Should -Be 'Domain, Public'
+    }
+
+    It 'returns nothing when no rule names the ports' {
+        @(Select-GwFirewallPortRule -Rule $script:fakeRules -Port @(5555)).Count | Should -Be 0
+    }
+}
+
+Describe 'Get-GwFirewallRuleRecord (real, read-only)' {
+    It 'enumerates the firewall rules of this computer with the fields the selection needs' {
+        $records = @(Get-GwFirewallRuleRecord)
+        $records.Count | Should -BeGreaterThan 0 -Because 'every Windows installation ships firewall rules'
+        ($records[0].PSObject.Properties.Name -join ',') | Should -Be 'Name,Enabled,Direction,Action,Protocol,LocalPorts,RemoteAddresses,ApplicationName,Profiles'
+        @($records | Where-Object { $_.Direction -eq 1 }).Count | Should -BeGreaterThan 0
     }
 }

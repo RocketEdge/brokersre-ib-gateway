@@ -6,9 +6,15 @@
 # checks also work on a localised Windows.
 
 $script:GwApiPorts = @(4001, 4002, 9810)
-# Tiny image used to read the clock inside the container VM. Tag for readability, digest for
-# immutability (index digest of busybox:1.37.0, resolved 2026-11-12).
-$script:GwClockImage = 'busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec'
+# The one image reference in the kit: a tiny probe image the HOST runs for two read-only checks
+# (the clock inside the container VM, and whether a container can read the restricted secrets
+# folder). Tag for readability, digest for immutability (index digest, resolved 2026-11-12).
+# Accepted exception to invariant 1 of the repository ("every input is pinned and verified;
+# versions.json holds them; no other file carries a version"): versions.json describes what goes
+# INTO the gateway image, and this image is never part of it. It is pinned by digest here, in
+# this single constant, and a test fails when a second copy appears. Bump it by replacing tag
+# and digest together ('docker buildx imagetools inspect <image>:<tag>' prints the digest).
+$script:GwProbeImage = 'busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec'
 
 function Get-GwDefaultWslConfigPath {
     <#
@@ -988,7 +994,7 @@ function Test-GwVmClock {
     $containerName = 'winkit-clock-{0}' -f [guid]::NewGuid().ToString('N').Substring(0, 8)
     $arguments = @(
         'run', '--rm', '--name', $containerName, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-        '--security-opt', 'no-new-privileges:true', '--user', '65534:65534', $script:GwClockImage, 'adjtimex'
+        '--security-opt', 'no-new-privileges:true', '--user', '65534:65534', $script:GwProbeImage, 'adjtimex'
     )
     $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -TimeoutSeconds 300
     if ($result.ExitCode -ne 0) {

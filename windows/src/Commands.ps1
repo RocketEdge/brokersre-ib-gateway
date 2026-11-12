@@ -85,7 +85,7 @@ function Test-GwSecretMount {
         $arguments = @(
             'run', '--rm', '--name', $containerName, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges:true', '--user', '1000:1000',
-            '-v', ('{0}:/run/secrets/winkit-probe:ro' -f $probe), $script:GwClockImage, 'cat', '/run/secrets/winkit-probe'
+            '-v', ('{0}:/run/secrets/winkit-probe:ro' -f $probe), $script:GwProbeImage, 'cat', '/run/secrets/winkit-probe'
         )
         $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -TimeoutSeconds 300
     }
