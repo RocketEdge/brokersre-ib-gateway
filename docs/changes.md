@@ -5,6 +5,29 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — A runbook for every alert class of the sidecar
+
+- **What changed:** `docs/runbooks/` holds an index and one page per alert class (16), each
+  with the same five sections: what it means, check first, what to do, what not to do, when
+  it clears. The compose override sets `NOTIFY_RUNBOOK_BASE` to that folder, so a
+  notification links the page of its class. Tests of the sidecar keep the pages in step with
+  the code: a class without a page, a page without a class, a page whose heading is not the
+  catalogue title, and a relative link or anchor that leads nowhere all fail.
+- **Result:** sidecar suite green (counts in the pull request). The link test was shown to
+  fail on a wrong file name and on a wrong anchor before it was trusted.
+- **What did NOT work / root cause:** (1) *The sidecar could link a runbook since its first
+  version, and there was nothing to link.* The example value was a placeholder wiki address,
+  so every installation that copied it sent dead links, at the moment a person needs the
+  page. (2) The pages are written from the rules' code, not from incidents: no login has
+  completed on this image yet, so nothing in them is experience. Each page says only what the
+  code does, and the index says so. (3) Three alerts clear on a timer (`login_failed`,
+  `unknown_window`, a restart without a requested shutdown: 15 minutes) although nothing was
+  fixed; reading the rules for the pages made that visible, and the pages now say "check the
+  phase before you trust the resolved message". Whether the `resolved` text itself should
+  differ for a timed clearing is open.
+- **Next step:** after the first real incidents, correct the pages from what actually
+  happened; decide whether a clearing by timer should say so in the message.
+
 ### 2026-11-12 — `screenshot.sh` was not executable on Linux; the execute bit is now checked
 
 - **What changed:** `screenshot.sh` and `login-latch.sh` are recorded as executable in git,

@@ -213,7 +213,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
-| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. |
+| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. The pages of this repository: see [Alert classes](#alert-classes). |
 | `NOTIFY_ALLOW_HTTP` | `no` | `yes`, `no` | Allows `http://` channel URLs. Only for a receiver on a private network, such as a local ntfy. |
 | `NOTIFY_CHANNELS` | all configured | list of channel names | Channels for first notifications, resolutions and heartbeats. |
 | `NOTIFY_ESCALATION_CHANNELS` | all configured | list of channel names | Channels for escalations. |
@@ -291,6 +291,18 @@ in `ibgw_notify_failures_total`.
 
 A condition that cannot be decided (a value was not measured, a duration has not elapsed
 yet) neither raises nor resolves an alert.
+
+**Runbooks.** Every class has a one-page runbook in
+[docs/runbooks](../docs/runbooks/README.md): what the alert means, what to check first, what
+to do, what not to do and when it clears. With
+
+```yaml
+      NOTIFY_RUNBOOK_BASE: https://github.com/RocketEdge/brokersre-ib-gateway/tree/main/docs/runbooks
+```
+
+every notification links the page of its class (the compose override sets this). Copy the
+folder to your own wiki and point the variable there to add your contacts; the sidecar only
+appends `/<alert class>` to the base.
 
 For a stalled login, low disk space and memory pressure the gateway is the single source of
 truth: it reports each as a pair of events (`login_stalled`/`login_resumed`,

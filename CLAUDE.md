@@ -130,7 +130,7 @@ sidecar/                                              optional second image (Pyt
 compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
 windows/                                              host kit for Windows 10/11: setup, doctor, harden, start, uninstall (.ps1) over BrokerSre.Gateway.psm1 + src/{Native,Core,Secrets,Stack,Checks,Harden,Commands}.ps1; templates/compose.yaml.tmpl; tests/ (Pester); README.md (ADR 0011)
 .github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
-docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
+docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, runbooks/ (one page per sidecar alert class), adr/
 ```
 
 ## Gotchas
@@ -241,6 +241,12 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   API through the relay (`GATEWAY_HOST`, 4004/4003), never the loopback port, and cannot use
   the IBC command server. A new gateway event that puts the gateway into `needs-human` needs
   its cause added to `notify/rules.py`, or the alert says only that the phase is `needs-human`.
+- Every sidecar `AlertClass` has a runbook `docs/runbooks/<class>/README.md` (first line: `#` and
+  the catalogue title; sections What it means, Check first, What to do, What not to do,
+  When it clears) and a row in `docs/runbooks/README.md`; `sidecar/tests/test_docs.py` fails
+  on a class without a page, a page without a class, and a relative link or `#anchor` that
+  leads nowhere. Change a rule's firing or clearing condition and its page together, and
+  never write into a page what the code does not do (no measured claims without a run).
 - trivy-action ignores `severity` when `format: sarif` unless `limit-severities-for-sarif: "true"`
   is set; with `exit-code: 1` a gate then fails on any severity. Bump the Trivy version in the
   three workflows, `tests/bats/ci/workflows.bats` and `docs/evidence.md` together.
