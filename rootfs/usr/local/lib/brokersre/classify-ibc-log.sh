@@ -35,6 +35,8 @@ LIB="$(dirname "${BASH_SOURCE[0]}")"
 source "${LIB}/log.sh"
 # shellcheck source=/dev/null
 source "${LIB}/login-latch.sh"
+# shellcheck source=/dev/null
+source "${LIB}/screenshot.sh"
 
 LOG_DIR="${LOG_DIR:-/var/log/ibgateway}"
 PATTERNS_FILE="${IBC_PATTERNS:-/etc/brokersre/ibc-patterns.tsv}"
@@ -129,6 +131,9 @@ while IFS= read -r line || [ -n "${line}" ]; do
   if [ "${matched}" -eq 0 ] && [ "${#known_windows[@]}" -gt 0 ] && [[ "${line}" =~ ${window_opened_re} ]]; then
     if ! window_is_known "${BASH_REMATCH[2]}"; then
       log_event ibc warn unknown_window "IBC reported a window it has no handler for; it may block the login or a restart (title in ibc/ibc.log)"
+      # What the window says is on the screen: keep a picture of it (only with SCREENSHOTS=yes).
+      # Beside this loop, not in it: IBC's output pipe must never wait for the log volume.
+      (screenshot_save unknown_window) &
     fi
   fi
 done

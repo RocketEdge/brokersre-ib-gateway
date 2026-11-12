@@ -584,6 +584,22 @@ df_calls() { wc -l <"${WORK}/df-calls"; }
 
 # --- login_stalled / login_resumed ----------------------------------------------------------
 
+@test "a stalled login is photographed when SCREENSHOTS=yes, and only then" {
+  export RUN_DIR="${WORK}/run" SCREENSHOT_NOW=1794441600
+  mkdir -p "${RUN_DIR}/xvfb"
+  head -c 2048 /dev/urandom >"${RUN_DIR}/xvfb/Xvfb_screen0"
+  observe 1000 phase=login
+  observe 1301 phase=login
+  [ "$(events)" == "login_stalled " ]
+  [ ! -d "${LOG_DIR}/screens" ]
+  observe 1400 phase=logged-in
+  export SCREENSHOTS=yes
+  observe 2000 phase=login
+  observe 2301 phase=login
+  [ "$(events)" == "login_stalled login_resumed login_stalled screenshot_saved " ]
+  cmp "${RUN_DIR}/xvfb/Xvfb_screen0" "${LOG_DIR}/screens/20261112T000000Z-login_stalled.xwd"
+}
+
 @test "login_stalled fires once after more than LOGIN_STALL_S of login and login_resumed when it ends" {
   observe 1000 phase=login
   observe 1300 phase=login

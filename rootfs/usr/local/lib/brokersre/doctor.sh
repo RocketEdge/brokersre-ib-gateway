@@ -75,6 +75,7 @@ doctor_known_names=(
   JAVA_HEAP_MB RELAY_MODE TWOFA_MAX_PROMPTS LOGIN_STALL_S DOCTOR_STRICT STRICT_ENV SAMPLE_INTERVAL_S
   DISK_MIN_FREE_PCT IBGW_INSTANCE BOOT_ID DOCTOR_TCP DOCTOR_RESULT_FILE HEALTHCHECK_API
   RELAY_ALLOW_CIDR RELAY_REFUSED_REPORT_S LOGIN_LATCH LOGIN_CRED_FINGERPRINT
+  SCREENSHOTS SCREENSHOT_KEEP SCREENSHOT_MIN_INTERVAL_S SCREENSHOT_NOW
   MEM_HIGH_PCT MEM_HIGH_FOR_S RELAY_POLL_S IBC_KNOWN_WINDOWS IBC_CMD
   IB_GATEWAY_VERSION IB_GATEWAY_CHANNEL IBC_VERSION IBC_RELEASE_TAG IBC_PATH TWS_PATH LOG_DIR
   RUN_DIR IBC_PATTERNS IBC_TEMPLATE JTS_TEMPLATE BROKERSRE_LIB
@@ -82,7 +83,7 @@ doctor_known_names=(
 
 # Name prefixes that belong to this image: an unknown variable with one of them is most likely
 # a misspelt or outdated setting, and a setting that is silently ignored is the worst kind.
-doctor_watched_prefixes=(TWS_ TWOFA_ IBC_ AUTO_ JAVA_ VNC_ LOG_ LOGIN_ RELAY_ DOCTOR_)
+doctor_watched_prefixes=(TWS_ TWOFA_ IBC_ AUTO_ JAVA_ VNC_ LOG_ LOGIN_ RELAY_ DOCTOR_ SCREENSHOT)
 
 # IBKR's server reset windows, each in its own local time: the list of docs/env-vars.md
 # (AUTO_RESTART_TIME) plus the Saturday window. Disconnects are normal inside them.
