@@ -45,9 +45,15 @@ die() {
   exit 78
 }
 
-# matches <value> <extended regex>: true when the whole value matches. Used to make sure a
-# value is safe to paste into the rendered YAML (no quote, backslash, ampersand or newline).
+# matches <value> <extended regex>: true when the value is ONE line without any control
+# character and that line matches the pattern as a whole. Every value that is pasted into the
+# rendered YAML goes through here. The control-character test comes first on purpose: grep
+# matches line by line, so a multi-line value whose last line is valid would pass the pattern
+# alone, and its other lines would reach sed as commands.
 matches() {
+  case "$1" in
+    *[[:cntrl:]]*) return 1 ;;
+  esac
   printf '%s' "$1" | grep -Eqx -- "$2"
 }
 
@@ -66,10 +72,15 @@ matches "${endpoint}" 'https://[A-Za-z0-9.-]+(:[0-9]+)?/?' \
 matches "${immutable_id}" 'dcr-[0-9a-f]{32}' \
   || die "DCR_IMMUTABLE_ID must look like dcr- followed by 32 hex characters (deployment output dcrImmutableId)"
 
-tenant_id="${AZURE_TENANT_ID:-}"
-client_id="${AZURE_CLIENT_ID:-}"
-certificate_path="${AZURE_CLIENT_CERTIFICATE_PATH:-}"
+# Only validated values are ever handed to sed: with a managed identity the three certificate
+# variables are not used and therefore not read at all.
+tenant_id=''
+client_id=''
+certificate_path=''
 if [ "${auth}" = certificate ]; then
+  tenant_id="${AZURE_TENANT_ID:-}"
+  client_id="${AZURE_CLIENT_ID:-}"
+  certificate_path="${AZURE_CLIENT_CERTIFICATE_PATH:-}"
   matches "${tenant_id}" "${guid}" || die "AZURE_TENANT_ID must be the directory (tenant) id of the Entra application"
   matches "${client_id}" "${guid}" || die "AZURE_CLIENT_ID must be the application (client) id of the Entra application"
   matches "${certificate_path}" '/[A-Za-z0-9._/-]+' || die "AZURE_CLIENT_CERTIFICATE_PATH must be an absolute path"

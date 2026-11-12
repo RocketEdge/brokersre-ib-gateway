@@ -151,6 +151,7 @@ run_id="$$"
 # A carriage return, for the line-ending check. Assigned here because $'...' is not expanded
 # reliably inside a quoted command substitution by every bash build (Git Bash).
 carriage_return=$'\r'
+newline=$'\n'
 valid_env=(
   -e AZURE_AUTH=managed-identity
   -e DCR_LOGS_ENDPOINT=https://example-abcd.eastus-1.ingest.monitor.azure.com
@@ -271,6 +272,35 @@ group_entrypoint() {
     entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/absent -- validate --no-environment
   expect_refusal "refuses an empty user-name file" "IBGW_REDACT_USERNAME_FILE" \
     entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/empty -- validate --no-environment
+
+  # A value with a line break must be refused before it reaches sed: the pattern check looks
+  # at lines, so a multi-line value whose LAST line is valid used to pass and its other lines
+  # became sed commands that rewrote the rendered sink configuration (raw_out -> raw_file).
+  local variable valid baseline
+  while IFS='|' read -r variable valid; do
+    expect_refusal "refuses a line break in ${variable}" "${variable}" \
+      entrypoint "${valid_env[@]}" "${cert_env[@]}" \
+      -e "${variable}=injected|g${newline}s|- raw_out|- raw_file|${newline}${valid}" -- validate --no-environment
+  done <<'VARIABLES'
+DCR_LOGS_ENDPOINT|https://example.invalid
+DCR_IMMUTABLE_ID|dcr-00000000000000000000000000000000
+AZURE_TENANT_ID|00000000-0000-0000-0000-000000000000
+AZURE_CLIENT_ID|11111111-1111-1111-1111-111111111111
+AZURE_CLIENT_CERTIFICATE_PATH|/run/secrets/azure-client-cert.pfx
+VARIABLES
+  expect_refusal "refuses a tab in DCR_IMMUTABLE_ID" "DCR_IMMUTABLE_ID" \
+    entrypoint "${valid_env[@]}" -e "DCR_IMMUTABLE_ID=dcr-00000000000000000000000000000000	" -- validate --no-environment
+  # With a managed identity the three certificate variables are not used; whatever they hold
+  # must not reach the rendering either.
+  baseline="$(vector_container "${valid_env[@]}" -- -c "
+    /bin/sh /etc/vector/entrypoint.sh --version >/dev/null 2>&1 || exit 70
+    cat ${rendered}" 2>&1)"
+  out="$(vector_container "${valid_env[@]}" -e 'AZURE_CLIENT_ID=x|g;s|- raw_out|- raw_file|g;s|y' \
+    -e 'AZURE_TENANT_ID=x|g;s|- events_out|- raw_file|g;s|y' -e 'AZURE_CLIENT_CERTIFICATE_PATH=x|g;s|block|drop_newest|g;s|y' -- -c "
+    /bin/sh /etc/vector/entrypoint.sh --version >/dev/null 2>&1 || exit 70
+    cat ${rendered}" 2>&1)"
+  expect "managed identity: unused certificate variables cannot change the rendered configuration" \
+    '"${out}" == "${baseline}" && "${baseline}" == *"- raw_out"* && "${baseline}" != *"raw_file"*'
 
   # The user-name file is normalised as the gateway normalises it (a leading UTF-8 byte-order
   # mark and trailing line ends are not part of the name). The proof is positive: the redaction
