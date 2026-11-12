@@ -1,0 +1,580 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:29:57.810702436Z",
+  "ArtifactName": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "12.1"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d (debian 12.1)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-109518",
+          "PkgName": "apt",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/apt@2.6.1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.6.1",
+          "FixedVersion": "2.6.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apt: apt: Remote code execution via hard link reuse during package download retries"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-68973",
+          "PkgName": "gpgv",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/gpgv@2.2.40-1.1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.2.40-1.1",
+          "FixedVersion": "2.2.40-1.1+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "GnuPG: GnuPG: Information disclosure and potential arbitrary code execution via out-of-bounds write"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-109518",
+          "PkgName": "libapt-pkg6.0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libapt-pkg6.0@2.6.1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.6.1",
+          "FixedVersion": "2.6.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apt: apt: Remote code execution via hard link reuse during package download retries"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-4911",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: buffer overflow in ld.so leading to privilege escalation"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-6246",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: heap-based buffer overflow in __vsyslog_internal()"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-6779",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: off-by-one heap-based buffer overflow in __vsyslog_internal()"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-2961",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u6",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: Out of bounds write in iconv may lead to remote code execution"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-33599",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u7",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: stack-based buffer overflow in netgroup cache"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-4911",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: buffer overflow in ld.so leading to privilege escalation"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-6246",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: heap-based buffer overflow in __vsyslog_internal()"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-6779",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: off-by-one heap-based buffer overflow in __vsyslog_internal()"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-2961",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u6",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: Out of bounds write in iconv may lead to remote code execution"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-33599",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u7",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: stack-based buffer overflow in netgroup cache"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-4878",
+          "PkgName": "libcap2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libcap2@2.66-4?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.66-4",
+          "FixedVersion": "1:2.66-4+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "libcap: libcap: Privilege escalation via TOCTOU race condition in cap_set_file()"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-33845",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "gnutls: GnuTLS: Denial of Service via DTLS zero-length fragment"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42010",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "gnutls: gnutls: Authentication Bypass via NUL Character in Username"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-0553",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: incomplete fix for CVE-2023-5981"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-0567",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: rejects certificate chain with distributed trust"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-32988",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u5",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: Vulnerability in GnuTLS otherName SAN export"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-32990",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u5",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: Vulnerability in GnuTLS certtool template parsing"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-33846",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: GnuTLS: Denial of Service via heap buffer overflow in DTLS handshake fragment reassembly"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-3833",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: GnuTLS: Policy bypass due to case-sensitive nameConstraints comparison"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42009",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "gnutls: gnutls: Denial of Service via DTLS packet reordering vulnerability"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-31115",
+          "PkgName": "liblzma5",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/liblzma5@5.4.1-0.2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.4.1-0.2",
+          "FixedVersion": "5.4.1-1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "xz: XZ has a heap-use-after-free bug in threaded .xz decoder"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-6020",
+          "PkgName": "libpam-modules",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpam-modules@1.5.2-6?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.5.2-6",
+          "FixedVersion": "1.5.2-6+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "linux-pam: Linux-pam directory Traversal"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-6020",
+          "PkgName": "libpam-modules-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpam-modules-bin@1.5.2-6?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.5.2-6",
+          "FixedVersion": "1.5.2-6+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "linux-pam: Linux-pam directory Traversal"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-6020",
+          "PkgName": "libpam-runtime",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpam-runtime@1.5.2-6?arch=all&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.5.2-6",
+          "FixedVersion": "1.5.2-6+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "linux-pam: Linux-pam directory Traversal"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-6020",
+          "PkgName": "libpam0g",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpam0g@1.5.2-6?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.5.2-6",
+          "FixedVersion": "1.5.2-6+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "linux-pam: Linux-pam directory Traversal"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-103111",
+          "PkgName": "libpcre2-8-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "10.42-1",
+          "FixedVersion": "10.42-1+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "pcre2: pcre2: Out-of-bounds write via crafted regular expression"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-86145",
+          "PkgName": "libpcre2-8-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "10.42-1",
+          "FixedVersion": "10.42-1+deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "pcre2: PCRE2: Out-of-bounds write allows arbitrary code execution via crafted regular expressions"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-89157",
+          "PkgName": "libpcre2-8-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "10.42-1",
+          "FixedVersion": "10.42-1+deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "pcre2: PCRE2: Out-of-bounds write via large pattern input"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-89161",
+          "PkgName": "libpcre2-8-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libpcre2-8-0@10.42-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "10.42-1",
+          "FixedVersion": "10.42-1+deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "pcre2: PCRE2: Memory corruption vulnerability in pcre2_jit_match"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-50387",
+          "PkgName": "libsystemd0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsystemd0@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "FixedVersion": "252.23-1~deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "bind9: KeyTrap - Extreme CPU consumption in DNSSEC validator"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-50868",
+          "PkgName": "libsystemd0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsystemd0@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "FixedVersion": "252.23-1~deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "bind9: Preparing an NSEC3 closest encloser proof can exhaust CPU resources"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-50387",
+          "PkgName": "libudev1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libudev1@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "FixedVersion": "252.23-1~deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "bind9: KeyTrap - Extreme CPU consumption in DNSSEC validator"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-50868",
+          "PkgName": "libudev1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libudev1@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "FixedVersion": "252.23-1~deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "bind9: Preparing an NSEC3 closest encloser proof can exhaust CPU resources"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-13221",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "perl: Perl: Incorrect regular expression processing via large regular expressions"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42496",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "perl-archive-tar: perl-archive-tar: Path traversal via crafted symlinks allows arbitrary file access"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-8376",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "perl: Perl: Heap buffer overflow when compiling regular expressions on 32-bit builds"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-31484",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl: CPAN.pm does not verify TLS certificates when downloading distributions over HTTPS"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-47038",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl: Write past buffer end via illegal user-defined Unicode property"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-56406",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl: Perl 5.34, 5.36, 5.38 and 5.40 are vulnerable to a heap buffer overflow when transliterating non-ASCII bytes"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42497",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl-Archive-Tar: perl-Archive-Tar: Arbitrary file modification via crafted hardlinks during archive extraction"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-48962",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl-IO-Compress: perl-IO-Compress: Arbitrary code execution via attacker-controlled output glob"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-57432",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "perl: Perl: Information disclosure via integer overflow in pack/unpack operations"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-57433",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "FixedVersion": "5.36.0-7+deb12u4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "Storable: Storable: Denial of Service via signed integer overflow in deserialization"
+        }
+      ]
+    }
+  ]
+}

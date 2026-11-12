@@ -51,7 +51,7 @@ render() {
   render 'true' >/dev/null
   grep -q '^SecondFactorDevice=$' "${RUN_DIR}/config.ini"
   grep -q '^AutoRestartTime=$' "${RUN_DIR}/config.ini"
-  ! grep -q '\${' "${RUN_DIR}/config.ini"
+  ! grep -q '\${' "${RUN_DIR}/config.ini" || false
 }
 
 @test "jts.ini is written with the time zone only when absent" {
@@ -117,7 +117,7 @@ render() {
   bs='\'
   grep -q -F -x "IbPassword=hunter2${bs}u00e4${bs}u20ac${bs}ud83d${bs}ude00" "${RUN_DIR}/config.ini"
   # The rendered file is pure ASCII, so the parser's ISO-8859-1 decoding cannot corrupt it.
-  ! LC_ALL=C grep -q '[^ -~]' "${RUN_DIR}/config.ini"
+  ! LC_ALL=C grep -q '[^ -~]' "${RUN_DIR}/config.ini" || false
 }
 
 @test "the username gets the same escaping as the password" {

@@ -15,10 +15,10 @@
 | [0012](0012-azure-log-analytics-pack.md) | Azure Log Analytics pack: Vector on the host, a Direct data collection rule, redaction before shipping | Proposed (2026-11-12) |
 | [0013](0013-log-contract-v2-needs-human-gated-relay.md) | Log contract v2: events on the volume, a `needs-human` phase and a relay that follows the login | Accepted (2026-11-12) |
 | [0014](0014-paper-login-qualification.md) | A paper-login qualification that is not a test: one attended login, behind a reviewer | Accepted (2026-11-12) |
+| [0015](0015-login-controller-succession.md) | Login controller succession: stay on the IBC fork behind a narrow contract | Proposed (2026-11-12) |
 | [0016](0016-rejected-login-latch.md) | A rejected login is not repeated: the latch on the log volume | Accepted (2026-11-12) |
 
-Numbers 0011 and 0015 belong to records that arrive with their own changes (the Windows host
-kit, the login controller succession).
+Number 0011 belongs to a record that arrives with its own change (the Windows host kit).
 
 Template: Status, Context (with sources), Decision, Consequences (positive and negative),
 Revisit trigger. Never renumber or delete; supersede with a new record.

@@ -8,10 +8,14 @@ flowchart LR
   env --> bake["docker buildx bake (docker-bake.hcl)"]
   bake --> df["Dockerfile stage 1: fetch-installer.sh verifies SHA-256, installs Gateway; downloads IBC from RocketEdge/ibc, verifies SHA-256"]
   df --> rt["Dockerfile stage 2: ubuntu:26.04@digest + tini, Xvfb, socat, x11vnc, Java libs; uid 1000; rootfs/"]
-  rt --> scan["Trivy (amd64, before push)"]
-  scan --> push["multi-arch push -> ghcr.io/rocketedge/brokersre-ib-gateway"]
-  push --> sign["cosign sign + CycloneDX attestation + build provenance"]
-  sign --> rel["git tag v<version>-<channel>, GitHub release with digests-<channel>.json"]
+  vj --> plan["plan: channel list (publish-channels.sh), no tag in both channels (check-bake-tags.sh)"]
+  rt --> push["multi-arch build, no cache, pushed BY DIGEST (no tag)"]
+  push --> scan["Trivy v0.76.2 gate on linux/amd64 and linux/arm64 of that digest; each report checked for its platform"]
+  scan --> sbom["one SBOM per platform, attested to that platform's manifest"]
+  sbom --> sign["cosign sign + VEX attestation + build provenance on the index"]
+  sign --> tags["scripts/promote-tags.sh: tags -> the scanned digest"]
+  tags --> rel["git tag v<version>-<channel>, release with digests-<channel>.json, two SBOMs, VEX"]
+  daily["rebuild.yml (daily): scan the published images"] -. "fixable CRITICAL/HIGH -> issue, rebuild request" .-> plan
   ibkr["IBKR version.json (daily)"] -. "detect-releases.yml -> PR" .-> vj
   ibc["RocketEdge/ibc releases (daily)"] -. "detect-ibc-release.yml -> PR" .-> vj
 ```

@@ -29,7 +29,7 @@ instance() {
 
 # no_username_in_output: neither fake username, in any letter case, appears in $output.
 no_username_in_output() {
-  ! grep -q -i -F -e "${USER_A}" -e "${USER_B}" <<<"${output}"
+  ! grep -q -i -F -e "${USER_A}" -e "${USER_B}" <<<"${output}" || false
 }
 
 @test "no argument, two arguments and a missing directory are usage errors (exit 2)" {
@@ -75,7 +75,7 @@ no_username_in_output() {
   run "${SCRIPT}" "${SECRETS}"
   [ "$status" -eq 1 ]
   no_username_in_output
-  ! grep -q -E '[0-9a-f]{32}' <<<"${output}"
+  ! grep -q -E '[0-9a-f]{32}' <<<"${output}" || false
 }
 
 @test "a trailing newline, CRLF or a UTF-8 byte-order mark does not hide a shared username" {

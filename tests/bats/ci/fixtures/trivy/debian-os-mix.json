@@ -1,0 +1,306 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:30:04.9450943Z",
+  "ArtifactName": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "12.1"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d (debian 12.1)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-109518",
+          "PkgName": "apt",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/apt@2.6.1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.6.1",
+          "FixedVersion": "2.6.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apt: apt: Remote code execution via hard link reuse during package download retries"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bsdutils@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bsdutils@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-2219",
+          "PkgName": "dpkg",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/dpkg@1.21.22?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.21.22",
+          "FixedVersion": "1.21.23",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "It was discovered that dpkg-deb (a component of dpkg, the Debian packa ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41992",
+          "PkgName": "gzip",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/gzip@1.12-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.12-1",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "gzip: gzip: Information disclosure via global buffer overflow in LZH decompression"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-109518",
+          "PkgName": "libapt-pkg6.0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libapt-pkg6.0@2.6.1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.6.1",
+          "FixedVersion": "2.6.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apt: apt: Remote code execution via hard link reuse during package download retries"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-4911",
+          "PkgName": "libc-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc-bin@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: buffer overflow in ld.so leading to privilege escalation"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-4911",
+          "PkgName": "libc6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libc6@2.36-9%2Bdeb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.36-9+deb12u1",
+          "FixedVersion": "2.36-9+deb12u3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "glibc: buffer overflow in ld.so leading to privilege escalation"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-33845",
+          "PkgName": "libgnutls30",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libgnutls30@3.7.9-2?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "3.7.9-2",
+          "FixedVersion": "3.7.9-2+deb12u7",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "gnutls: GnuTLS: Denial of Service via DTLS zero-length fragment"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "util-linux-extra",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28085",
+          "PkgName": "util-linux-extra",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "FixedVersion": "2.38.1-5+deb12u1",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "util-linux: CVE-2024-28085: wall: escape sequence injection"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-45853",
+          "PkgName": "zlib1g",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Status": "will_not_fix",
+          "Severity": "CRITICAL",
+          "Title": "zlib: integer overflow and resultant heap-based buffer overflow in zipOpenNewFileInZip4_6"
+        }
+      ]
+    }
+  ]
+}

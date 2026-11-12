@@ -1,0 +1,413 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:30:04.9450943Z",
+  "ArtifactName": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "12.1"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "debian@sha256:050f00e86cc4d928b21de66096126fac52c2ea47885c232932b2e4c00f0c116d (debian 12.1)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bsdutils@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bsdutils@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/bsdutils@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41992",
+          "PkgName": "gzip",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/gzip@1.12-1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "1.12-1",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "gzip: gzip: Information disclosure via global buffer overflow in LZH decompression"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54369",
+          "PkgName": "libacl1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libacl1@2.3.1-3?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.3.1-3",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "acl: Symlink traversal privilege escalation via libacl functions"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libblkid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libmount1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsmartcols1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-16742",
+          "PkgName": "libsystemd0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libsystemd0@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "systemd: systemd-homed: Local privilege escalation via missing home-record signature verification"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69720",
+          "PkgName": "libtinfo6",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libtinfo6@6.4-4?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "6.4-4",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execution."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-16742",
+          "PkgName": "libudev1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libudev1@252.12-1~deb12u1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "252.12-1~deb12u1",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "systemd: systemd-homed: Local privilege escalation via missing home-record signature verification"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/libuuid1@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/mount@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69720",
+          "PkgName": "ncurses-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/ncurses-base@6.4-4?arch=all&distro=debian-12.1"
+          },
+          "InstalledVersion": "6.4-4",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execution."
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69720",
+          "PkgName": "ncurses-bin",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/ncurses-bin@6.4-4?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "6.4-4",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execution."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-9538",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/perl-base@5.36.0-7?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "5.36.0-7",
+          "Status": "fix_deferred",
+          "Severity": "HIGH",
+          "Title": "perl-Archive-Tar: perl-Archive-Tar: Denial of Service via crafted tar header with large entry size"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53613",
+          "PkgName": "util-linux-extra",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: TOCTOU in the mount program via ancestor directory swap on target path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-53615",
+          "PkgName": "util-linux-extra",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: Partition metadata compromise via integer overflow in DOS partition parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78410",
+          "PkgName": "util-linux-extra",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/util-linux-extra@2.38.1-5%2Bb1?arch=amd64&distro=debian-12.1"
+          },
+          "InstalledVersion": "2.38.1-5+b1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redirection"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-45853",
+          "PkgName": "zlib1g",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Status": "will_not_fix",
+          "Severity": "CRITICAL",
+          "Title": "zlib: integer overflow and resultant heap-based buffer overflow in zipOpenNewFileInZip4_6"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-76844",
+          "PkgName": "zlib1g",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "webpack-dev-middleware: webpack-dev-middleware: Information Disclosure via Path Traversal"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-85091",
+          "PkgName": "zlib1g",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.1&epoch=1"
+          },
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Status": "affected",
+          "Severity": "HIGH",
+          "Title": "zlib: zlib: Heap buffer overflow in gz_vacate() allows arbitrary code execution"
+        }
+      ]
+    }
+  ]
+}

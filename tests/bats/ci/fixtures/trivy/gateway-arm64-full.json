@@ -1,0 +1,1336 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:34:11.55204985Z",
+  "ArtifactName": "ghcr.io/rocketedge/brokersre-ib-gateway@sha256:693bd6306d94708a87e5b0c43180874f671010a5edf142796eb8f46f51e869ea",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "ubuntu",
+      "Name": "26.04"
+    },
+    "ImageConfig": {
+      "architecture": "arm64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "ghcr.io/rocketedge/brokersre-ib-gateway@sha256:693bd6306d94708a87e5b0c43180874f671010a5edf142796eb8f46f51e869ea (ubuntu 26.04)",
+      "Class": "os-pkgs",
+      "Type": "ubuntu",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "bsdutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/bsdutils@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04&epoch=1"
+          },
+          "InstalledVersion": "1:2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-87766",
+          "PkgName": "bubblewrap",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/bubblewrap@0.11.1-1ubuntu0.3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.11.1-1ubuntu0.3",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "bubblewrap: bubblewrap: symlink traversal via /oldroot allows writing files outside sandbox during setup"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-102473",
+          "PkgName": "dash",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/dash@0.5.12-12ubuntu3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.5.12-12ubuntu3",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "dash: dash: Super-polynomial backtracking in pmatch when libc fnmatch is disabled"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-102474",
+          "PkgName": "dash",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/dash@0.5.12-12ubuntu3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.5.12-12ubuntu3",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "dash: dash: Heap out-of-bounds write in conv_escape via undersized Unicode escape reservation"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41256",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: embedded NUL truncates top-level jq programs loaded with -f"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41257",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: signed-int overflow in stack_reallocate"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-43895",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: embedded NUL in jq import paths causes local redaction-policy bypass and preserves sensitive fields in published artifacts"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-43896",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: stack overflow in recursive object merge"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-44777",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: stack overflow in module loading on mutual include"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9403",
+          "PkgName": "jq",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "jq: assertion failure in run_jq_tests() of the file jq_test.c"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-90781",
+          "PkgName": "libasound2-data",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libasound2-data@1.2.15.3-1ubuntu1.1?arch=all&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.2.15.3-1ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "alsa-lib: alsa-lib: Denial of Service via off-by-one stack buffer overflow"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-90781",
+          "PkgName": "libasound2t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libasound2t64@1.2.15.3-1ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.2.15.3-1ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "alsa-lib: alsa-lib: Denial of Service via off-by-one stack buffer overflow"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-59529",
+          "PkgName": "libavahi-client3",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libavahi-client3@0.8-18ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.8-18ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "avahi: simple clients denial-of-service"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-59529",
+          "PkgName": "libavahi-common-data",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libavahi-common-data@0.8-18ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.8-18ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "avahi: simple clients denial-of-service"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-59529",
+          "PkgName": "libavahi-common3",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libavahi-common3@0.8-18ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.8-18ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "avahi: simple clients denial-of-service"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "libblkid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libblkid1@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2017-7475",
+          "PkgName": "libcairo-gobject2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libcairo-gobject2@1.18.4-3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.18.4-3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "cairo: NULL pointer dereference with a crafted font file"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-18064",
+          "PkgName": "libcairo-gobject2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libcairo-gobject2@1.18.4-3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.18.4-3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "cairo: Stack-based buffer overflow via parsing of crafted WebKitGTK+ document"
+        },
+        {
+          "VulnerabilityID": "CVE-2017-7475",
+          "PkgName": "libcairo2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libcairo2@1.18.4-3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.18.4-3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "cairo: NULL pointer dereference with a crafted font file"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-18064",
+          "PkgName": "libcairo2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libcairo2@1.18.4-3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.18.4-3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "cairo: Stack-based buffer overflow via parsing of crafted WebKitGTK+ document"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-66382",
+          "PkgName": "libexpat1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libexpat1@2.7.4-1ubuntu0.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.7.4-1ubuntu0.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "libexpat: libexpat: Denial of service via crafted file processing"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-102633",
+          "PkgName": "libexpat1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libexpat1@2.7.4-1ubuntu0.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.7.4-1ubuntu0.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "expat: expat: Denial of Service via integer overflow in expat_realloc"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-93990",
+          "PkgName": "libexpat1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libexpat1@2.7.4-1ubuntu0.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.7.4-1ubuntu0.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "expat: Expat: XML Injection via Malformed UTF-16 Input"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-18090",
+          "PkgName": "libgdk-pixbuf-2.0-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgdk-pixbuf-2.0-0@2.44.5%2Bdfsg-4ubuntu1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.44.5+dfsg-4ubuntu1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gdk-pixbuf: gdk-pixbuf: heap out-of-bounds read in uncompress() via crafted ICNS RLE block"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-18090",
+          "PkgName": "libgdk-pixbuf2.0-common",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgdk-pixbuf2.0-common@2.44.5%2Bdfsg-4ubuntu1?arch=all&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.44.5+dfsg-4ubuntu1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gdk-pixbuf: gdk-pixbuf: heap out-of-bounds read in uncompress() via crafted ICNS RLE block"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-86469",
+          "PkgName": "libglib2.0-0t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libglib2.0-0t64@2.88.0-1ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.88.0-1ubuntu0.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "glib2: TOCTOU Symlink Race in `G_FILE_CREATE_REPLACE_DESTINATION` Fallback Path"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-67693",
+          "PkgName": "libgnutls30t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "3.8.12-2ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gnutls: gnutls: Information disclosure via contradictory Key Usage and Extended Key Usage extensions"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-88647",
+          "PkgName": "libgnutls30t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "3.8.12-2ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gnutls: gnutls: Information disclosure via hostname verification bypass"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-88648",
+          "PkgName": "libgnutls30t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "3.8.12-2ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gnutls: gnutls: Cross-domain certificate restriction bypass via incomplete X.509 validation"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-95184",
+          "PkgName": "libgnutls30t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "3.8.12-2ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gnutls: gnutls: legitimate user certificates incorrectly rejected causing denial of service"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-95210",
+          "PkgName": "libgnutls30t64",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "3.8.12-2ubuntu1.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "gnutls: gnutls: certificates with invalid extensions incorrectly accepted"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-10126",
+          "PkgName": "libjpeg-turbo8",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjpeg-turbo8@2.1.5-4ubuntu4?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.1.5-4ubuntu4",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "libtiff: NULL pointer dereference in the jpeg_fdct_16x16 function in jfdctint.c"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41256",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: embedded NUL truncates top-level jq programs loaded with -f"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-41257",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: signed-int overflow in stack_reallocate"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-43895",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: embedded NUL in jq import paths causes local redaction-policy bypass and preserves sensitive fields in published artifacts"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-43896",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: stack overflow in recursive object merge"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-44777",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "jq: stack overflow in module loading on mutual include"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9403",
+          "PkgName": "libjq1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.8.1-4ubuntu2",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "jq: assertion failure in run_jq_tests() of the file jq_test.c"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-52584",
+          "PkgName": "libjxl0.11",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libjxl0.11@0.11.1-6ubuntu4.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.11.1-6ubuntu4.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "libjxl: libjxl: Information disclosure via Buffer Overflow in DecodeImageAPNG function"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "libmount1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libmount1@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-13757",
+          "PkgName": "libp11-kit0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libp11-kit0@0.26.2-2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.26.2-2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "p11-kit: Stack exhaustion via unbounded recursion in RPC attribute parsing"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "libpam-systemd",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libpam-systemd@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-37769",
+          "PkgName": "libpixman-1-0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libpixman-1-0@0.46.4-1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.46.4-1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "stress-test master commit e4c878 was discovered to contain a FPE vulne ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-107161",
+          "PkgName": "libsasl2-2",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libsasl2-2@2.1.28%2Bdfsg1-9ubuntu3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.1.28+dfsg1-9ubuntu3",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "cyrus-sasl: Heap buffer overflow in cyrus-sasl add_to_challenge() allows malicious server to crash or compromise DIGEST-MD5 clients"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-107161",
+          "PkgName": "libsasl2-modules-db",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libsasl2-modules-db@2.1.28%2Bdfsg1-9ubuntu3?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.1.28+dfsg1-9ubuntu3",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "cyrus-sasl: Heap buffer overflow in cyrus-sasl add_to_challenge() allows malicious server to crash or compromise DIGEST-MD5 clients"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "libsmartcols1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libsmartcols1@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "libsystemd-shared",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libsystemd-shared@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "libsystemd0",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libsystemd0@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "libudev1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libudev1@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "libuuid1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libuuid1@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-88807",
+          "PkgName": "libxrender1",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/libxrender1@0.9.12-1build1?arch=arm64&distro=ubuntu-26.04&epoch=1"
+          },
+          "InstalledVersion": "1:0.9.12-1build1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "libXrender: libXrender: Code injection via heap overflow in RenderQueryPictFormats"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "login",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/login@4.16.0-2%2Breally2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04&epoch=1"
+          },
+          "InstalledVersion": "1:4.16.0-2+really2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-56433",
+          "PkgName": "login.defs",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/login.defs@4.17.4-2ubuntu3?arch=all&distro=ubuntu-26.04&epoch=1"
+          },
+          "InstalledVersion": "1:4.17.4-2ubuntu3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "shadow-utils: Default subordinate ID configuration in /etc/login.defs could lead to compromise"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "mount",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/mount@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-83357",
+          "PkgName": "openjdk-25-jre",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/openjdk-25-jre@25.0.5.0.3%2B1-1~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "25.0.5.0.3+1-1~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "Vulnerability in the Oracle GraalVM for JDK, Oracle GraalVM produ ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-83357",
+          "PkgName": "openjdk-25-jre-headless",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/openjdk-25-jre-headless@25.0.5.0.3%2B1-1~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "25.0.5.0.3+1-1~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "Vulnerability in the Oracle GraalVM for JDK, Oracle GraalVM produ ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2024-56433",
+          "PkgName": "passwd",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/passwd@4.17.4-2ubuntu3?arch=arm64&distro=ubuntu-26.04&epoch=1"
+          },
+          "InstalledVersion": "1:4.17.4-2ubuntu3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "shadow-utils: Default subordinate ID configuration in /etc/login.defs could lead to compromise"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-9538",
+          "PkgName": "perl-base",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/perl-base@5.40.1-7ubuntu0.4?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "5.40.1-7ubuntu0.4",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "perl-Archive-Tar: perl-Archive-Tar: Denial of Service via crafted tar header with large entry size"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35341",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "rust-coreutils: uutils coreutils mkfifo: Information disclosure via unauthorized file permission modification"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35344",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The dd utility in uutils coreutils suppresses errors during file trunc ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35345",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A vulnerability in the tail utility of uutils coreutils allows for the ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35348",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The sort utility in uutils coreutils is vulnerable to a process panic  ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35350",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The cp utility in uutils coreutils fails to properly handle setuid and ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35351",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The mv utility in uutils coreutils fails to preserve file ownership du ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35354",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A Time-of-Check to Time-of-Use (TOCTOU) vulnerability exists in the mv ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35357",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The cp utility in uutils coreutils is vulnerable to an information dis ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35359",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A Time-of-Check to Time-of-Use (TOCTOU) vulnerability in the cp utilit ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35360",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The touch utility in uutils coreutils is vulnerable to a Time-of-Check ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35363",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A vulnerability in the rm utility of uutils coreutils allows the bypas ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35364",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "rust-coreutils: uutils coreutils mv utility: Arbitrary File Overwrite via TOCTOU Race Condition"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35367",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The nohup utility in uutils coreutils creates its default output file, ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35368",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "rust-coreutils: uutils coreutils: Privilege escalation and arbitrary code execution in chroot utility"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35370",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The id utility in uutils coreutils miscalculates the groups= section o ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35371",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "The id utility in uutils coreutils exhibits incorrect behavior in its  ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35373",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A logic error in the ln utility of uutils coreutils causes the program ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35374",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A Time-of-Check to Time-of-Use (TOCTOU) vulnerability exists in the sp ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35376",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A Time-of-Check to Time-of-Use (TOCTOU) vulnerability exists in the ch ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-35377",
+          "PkgName": "rust-coreutils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "0.10.0-1ubuntu2~26.04.1",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "A logic error in the env utility of uutils coreutils causes a failure  ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "systemd",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/systemd@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40228",
+          "PkgName": "systemd-sysv",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/systemd-sysv@259.9-0ubuntu0.1?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "259.9-0ubuntu0.1",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "systemd: systemd-journald: Unintended output to user terminals via logger command"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-18477",
+          "PkgName": "tar",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/tar@1.35%2Bdfsg-4ubuntu0.4?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.35+dfsg-4ubuntu0.4",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "tar: tar: TOCTOU in incremental dumpdir 'X' rename handling allows restore path escape"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-18508",
+          "PkgName": "tar",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/tar@1.35%2Bdfsg-4ubuntu0.4?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.35+dfsg-4ubuntu0.4",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "tar: tar: --one-top-level hardlink targets not confined to top-level directory enabling arbitrary file overwrite"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-78408",
+          "PkgName": "util-linux",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/util-linux@2.41.3-3ubuntu2.2?arch=arm64&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "2.41.3-3ubuntu2.2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-52968",
+          "PkgName": "xdg-utils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/xdg-utils@1.2.1-2ubuntu2?arch=all&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.2.1-2ubuntu2",
+          "Status": "affected",
+          "Severity": "MEDIUM",
+          "Title": "xdg-utils: xdg-open bypassing SameSite=Strict"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-4055",
+          "PkgName": "xdg-utils",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/xdg-utils@1.2.1-2ubuntu2?arch=all&distro=ubuntu-26.04"
+          },
+          "InstalledVersion": "1.2.1-2ubuntu2",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "xdg-utils: improper parse of mailto URIs allows bypass of Thunderbird security mechanism for attachments"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-5574",
+          "PkgName": "xserver-common",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/xserver-common@21.1.22-1ubuntu1.3?arch=all&distro=ubuntu-26.04&epoch=2"
+          },
+          "InstalledVersion": "2:21.1.22-1ubuntu1.3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "xorg-x11-server: Use-after-free bug in DamageDestroy"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-5574",
+          "PkgName": "xvfb",
+          "PkgIdentifier": {
+            "PURL": "pkg:deb/ubuntu/xvfb@21.1.22-1ubuntu1.3?arch=arm64&distro=ubuntu-26.04&epoch=2"
+          },
+          "InstalledVersion": "2:21.1.22-1ubuntu1.3",
+          "Status": "affected",
+          "Severity": "LOW",
+          "Title": "xorg-x11-server: Use-after-free bug in DamageDestroy"
+        }
+      ]
+    },
+    {
+      "Target": "Java",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2025-52999",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.15.0",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: jackson-core Potential StackoverflowError"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-68494",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 2.21.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: tools.jackson.core/jackson-core: jackson-core: Denial of Service via incomplete fix in async JSON parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-89425",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.21.7, 2.22.3, 2.18.11",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: Jackson-core: Denial of Service via unbounded StringBuilder growth during malformed token processing"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-49128",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.13.0",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "com.fasterxml.jackson.core/jackson-core: Jackson-core Memory Disclosure via Source Snippet in JsonLocation"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-36518",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.13.2.1, 2.12.6.1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: denial of service via a large depth of nested objects"
+        },
+        {
+          "VulnerabilityID": "CVE-2021-46877",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.6, 2.13.1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: Possible DoS if using JDK serialization to serialize JsonNode"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-42003",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.7.1, 2.13.4.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: deep wrapper array nesting wrt UNWRAP_SINGLE_VALUE_ARRAYS"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-42004",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.7.1, 2.13.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: use of deeply nested arrays"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54512",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 3.1.4, 2.21.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: jackson-databind: Arbitrary code execution via PolymorphicTypeValidator bypass"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54513",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 2.21.4, 3.1.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: Jackson-databind: Security bypass allows arbitrary code execution"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-91776",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.11, 2.21.7, 2.22.3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: com.fasterxml.jackson/jackson-core: jackson-databind: Denial of Service via unbounded cache growth in TypeDeserializerBase"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-91777",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.21.7, 2.18.11, 2.22.3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core:jackson-databind: Jackson-databind: Denial of Service via quadratic forward-reference completion"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-19032",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.10, 2.21.6, 2.22.2",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core/jackson-databind: Jackson-databind: Uncontrolled URI scheme resolution in Path deserialization"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-50193",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.14.0",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "jackson-databind: Jackson-databind: Denial of Service via deeply nested JSON processing"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54514",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 2.21.4",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "jackson-databind: jackson-databind: Information Disclosure via Eager DNS Resolution"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54515",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "3.1.4, 2.18.9, 2.21.5, 2.22.1",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "jackson-databind: jackson-databind: Ignored properties can be unexpectedly modified"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-59889",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.21.5, 2.18.9, 2.22.1",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: Jackson-databind: Privilege escalation via improper handling of @JsonUnwrapped properties"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-77310",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.9, 2.21.5, 2.22.1",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: jackson-databind: Server-Side Request Forgery and internal host enumeration via eager DNS resolution"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-83557",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.10, 2.21.6, 2.22.2",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core/jackson-databind: jackson-databind: Path traversal via incomplete type validation"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-47554",
+          "PkgName": "commons-io:commons-io",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/commons-io-2.11.0.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/commons-io/commons-io@2.11.0"
+          },
+          "InstalledVersion": "2.11.0",
+          "FixedVersion": "2.14.0",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apache-commons-io: Possible denial of service attack on untrusted input to XmlStreamReader"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-49844",
+          "PkgName": "org.apache.logging.log4j:log4j-api",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/log4j-api-2.25.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.logging.log4j/log4j-api@2.25.3"
+          },
+          "InstalledVersion": "2.25.3",
+          "FixedVersion": "2.25.5, 2.26.1",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "org.apache.logging.log4j/log4j-api: Apache Log4j API: Malformed JSON output due to improper encoding of floating-point values"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-34477",
+          "PkgName": "org.apache.logging.log4j:log4j-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/log4j-core-2.25.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+          },
+          "InstalledVersion": "2.25.3",
+          "FixedVersion": "2.25.4",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Man-in-the-middle attack due to incomplete hostname verification"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-34478",
+          "PkgName": "org.apache.logging.log4j:log4j-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/log4j-core-2.25.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+          },
+          "InstalledVersion": "2.25.3",
+          "FixedVersion": "2.25.4",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Log injection via CRLF sequences due to configuration attribute renames"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-34479",
+          "PkgName": "org.apache.logging.log4j:log4j-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/log4j-core-2.25.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+          },
+          "InstalledVersion": "2.25.3",
+          "FixedVersion": "2.25.4",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "org.apache.logging.log4j/log4j-1.2-api: Apache Log4j 1-to-Log4j 2 bridge: Log processing denial of service due to improper XML escaping"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-34480",
+          "PkgName": "org.apache.logging.log4j:log4j-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/log4j-core-2.25.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+          },
+          "InstalledVersion": "2.25.3",
+          "FixedVersion": "2.25.4",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Invalid XML output causes denial of service in logging"
+        }
+      ]
+    },
+    {
+      "Target": "usr/bin/pebble",
+      "Class": "lang-pkgs",
+      "Type": "gobinary",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-97054",
+          "PkgName": "stdlib",
+          "PkgIdentifier": {
+            "PURL": "pkg:golang/stdlib@v1.27.3"
+          },
+          "InstalledVersion": "v1.27.3",
+          "FixedVersion": "1.26.11, 1.27.4",
+          "Status": "fixed",
+          "Severity": "UNKNOWN",
+          "Title": "For HTTP/1 servers, when MaxBytesReader's limit is exceeded, \"Connecti ..."
+        }
+      ]
+    }
+  ]
+}

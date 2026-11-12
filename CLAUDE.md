@@ -13,7 +13,8 @@ docker buildx bake stable --set '*.platform=linux/amd64' --load      # local bui
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh examples/*.sh
 git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
-tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch, README table), on the host (needs jq)
+tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table), on the host (needs jq)
+scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json                     # VEX document valid (add Trivy `--pkg-types library --list-all-pkgs --format json` reports to compare)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy); offline
 (cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
@@ -65,7 +66,11 @@ All of these must be green before claiming a change done; run them fresh.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
-   only through `publish.yml` after Trivy passes; consumers pin digests.
+   only through `publish.yml` after Trivy passes on both platforms of the pushed digest;
+   consumers pin digests. Tags are created from the scanned, signed digest by
+   `scripts/promote-tags.sh`; nothing else may tag. In `publish.yml` and `rebuild.yml` every
+   action is pinned by commit, Trivy by version, and no `${{ }}` appears inside a `run:`
+   script (`tests/bats/ci/workflows.bats`).
 9. **Tests never log in**: nothing started by a push or a pull request contacts IBKR; the IBC
    smoke test runs with `--network none`. The one exception is not a test: the qualification
    (`scripts/qualify-paper.sh`, `qualify-paper.yml`, ADR 0014) makes exactly one login to a
@@ -93,6 +98,10 @@ rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM 
 rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
 scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
+scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-report-arch.sh, promote-tags.sh   decisions of publish.yml as tested scripts (channel list, no tag in both channels, platform manifests, platform of a scan report, tags -> the scanned digest)
+scripts/rebuild-decision.sh, rebuild-channels.sh, rebuild-issue.sh   decisions of rebuild.yml (fixable CRITICAL/HIGH -> rebuild request; one issue per channel, one comment per day, stop after REBUILD_MAX_ATTEMPTS days)
+scripts/check-vex.sh, security/vex/               OpenVEX statements for IBKR's bundled jars and their drift check; docs/evidence.md maps due-diligence questions to artefacts
+tests/bats/ci/workflows.bats, workflow-steps.awk    workflow policy as tests (gate flags, pins, no expression in a script, cron strings); tests/bats/ci/fixtures/ real Trivy reports
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
 schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
@@ -214,3 +223,19 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   API through the relay (`GATEWAY_HOST`, 4004/4003), never the loopback port, and cannot use
   the IBC command server. A new gateway event that puts the gateway into `needs-human` needs
   its cause added to `notify/rules.py`, or the alert says only that the phase is `needs-human`.
+- trivy-action ignores `severity` when `format: sarif` unless `limit-severities-for-sarif: "true"`
+  is set; with `exit-code: 1` a gate then fails on any severity. Bump the Trivy version in the
+  three workflows, `tests/bats/ci/workflows.bats` and `docs/evidence.md` together.
+- A new or vanished CVE in IBKR's jars shows as a VEX drift warning in CI and publish: update
+  `security/vex/ibgateway-vendor-jars.openvex.json` (bump `version`, never `fixed`, never
+  `not_affected` without evidence). `tests/bats/ci/fixtures/vex/in-sync.openvex.json` and
+  `fixtures/trivy/gateway-library.json` are a frozen pair: refresh both or neither.
+- A bats line `! command` that is not the last line of a test never fails it (checked with a
+  four-line probe in bats 1.14): write `! command || false`, or `run ! command` with
+  `bats_require_minimum_version 1.5.0`. Twelve such lines existed, several guarding "no secret
+  appears here".
+- jq's `test("^...$")` matches per line; validate tokens with a negated character class.
+- syft and Trivy read the runner's platform from an image index. Pass a platform manifest
+  digest (`scripts/platform-digests.sh`) or `--platform`, and check the result
+  (`scripts/check-report-arch.sh`). The CI-script suite must also pass under gawk (the GitHub
+  runner), not only under the image's mawk.
