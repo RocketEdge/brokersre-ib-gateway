@@ -47,6 +47,65 @@ Describe 'Write-GwFileAtomic' {
         Write-GwFileAtomic -Path $path -Text "a`nb`n"
         ([System.IO.File]::ReadAllBytes($path) -contains 13) | Should -BeFalse
     }
+
+    It 'retries and succeeds when another process holds the target for a moment' {
+        $directory = Join-Path $TestDrive 'locked-briefly'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        $path = Join-Path $directory 'file.txt'
+        $marker = Join-Path $TestDrive 'locked-briefly.marker'
+        [System.IO.File]::WriteAllText($path, 'old')
+        $shell = (Get-Process -Id $PID).Path
+        $helper = Join-Path (Join-Path $PSScriptRoot 'helpers') 'Lock-TestFile.ps1'
+        $locker = Start-Process -FilePath $shell -PassThru -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $helper), '-Path', ('"{0}"' -f $path), '-Marker', ('"{0}"' -f $marker), '-Milliseconds', '400'
+        )
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            while (-not (Test-Path -LiteralPath $marker) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+            Test-Path -LiteralPath $marker | Should -BeTrue -Because 'the helper must hold the lock before the write starts'
+            Write-GwFileAtomic -Path $path -Text 'new'
+        }
+        finally {
+            $locker.WaitForExit(30000) | Out-Null
+        }
+        [System.IO.File]::ReadAllText($path) | Should -Be 'new'
+        @(Get-ChildItem -LiteralPath $directory -Force).Count | Should -Be 1
+    }
+
+    It 'gives up with the error, within bounded time, when the target stays locked, and leaves no temporary file' {
+        $directory = Join-Path $TestDrive 'locked-for-good'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        $path = Join-Path $directory 'file.txt'
+        [System.IO.File]::WriteAllText($path, 'old')
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            { Write-GwFileAtomic -Path $path -Text 'new' } | Should -Throw
+            $watch.Elapsed.TotalSeconds | Should -BeLessThan 10
+        }
+        finally {
+            $stream.Dispose()
+        }
+        [System.IO.File]::ReadAllText($path) | Should -Be 'old'
+        @(Get-ChildItem -LiteralPath $directory -Force).Count | Should -Be 1
+    }
+}
+
+Describe 'Move-GwFileOverwrite' {
+    It 'creates the target when it does not exist' {
+        $source = Join-Path $TestDrive 'move-source-1'
+        $target = Join-Path $TestDrive 'move-target-1'
+        [System.IO.File]::WriteAllText($source, 'x')
+        Move-GwFileOverwrite -Source $source -Destination $target
+        [System.IO.File]::ReadAllText($target) | Should -Be 'x'
+        Test-Path -LiteralPath $source | Should -BeFalse
+    }
+
+    It 'does not retry an error that is not a lock' {
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        { Move-GwFileOverwrite -Source (Join-Path $TestDrive 'no-such-source') -Destination (Join-Path $TestDrive 'move-target-2') -MaxAttempts 1 } | Should -Throw
+        $watch.Elapsed.TotalSeconds | Should -BeLessThan 2
+    }
 }
 
 Describe 'Read-GwTextFile' {
@@ -116,6 +175,32 @@ Describe 'INI helpers' {
 
     It 'leaves the text unchanged when the key to remove is absent' {
         Remove-GwIniValue -Text $script:iniText -Section 'wsl2' -Key 'swap' | Should -Be $script:iniText
+    }
+
+    It 'keeps an emptied section header unless asked to remove it' {
+        $text = "# c`n[wsl2]`nmemory=1GB`n`n[general]`ninstanceIdleTimeout=-1`n"
+        Remove-GwIniValue -Text $text -Section 'general' -Key 'instanceIdleTimeout' | Should -Be "# c`n[wsl2]`nmemory=1GB`n`n[general]`n"
+    }
+
+    It 'removes an emptied section and the blank line before it with -RemoveEmptySection' {
+        $text = "# c`n[wsl2]`nmemory=1GB`n`n[general]`ninstanceIdleTimeout=-1`n"
+        Remove-GwIniValue -Text $text -Section 'general' -Key 'instanceIdleTimeout' -RemoveEmptySection | Should -Be "# c`n[wsl2]`nmemory=1GB`n"
+    }
+
+    It 'keeps a section that still has keys or comments, even with -RemoveEmptySection' {
+        $text = "[wsl2]`nmemory=1GB`nprocessors=4`n"
+        Remove-GwIniValue -Text $text -Section 'wsl2' -Key 'memory' -RemoveEmptySection | Should -Be "[wsl2]`nprocessors=4`n"
+        $commented = "[wsl2]`n# keep me`nmemory=1GB`n"
+        Remove-GwIniValue -Text $commented -Section 'wsl2' -Key 'memory' -RemoveEmptySection | Should -Be "[wsl2]`n# keep me`n"
+    }
+
+    It 'returns empty text when the only section becomes empty with -RemoveEmptySection' {
+        Remove-GwIniValue -Text "[wsl2]`nmemory=1GB`n" -Section 'wsl2' -Key 'memory' -RemoveEmptySection | Should -Be ''
+    }
+
+    It 'removes an emptied middle section without touching its neighbours' {
+        $text = "[a]`nx=1`n`n[b]`ny=2`n`n[c]`nz=3`n"
+        Remove-GwIniValue -Text $text -Section 'b' -Key 'y' -RemoveEmptySection | Should -Be "[a]`nx=1`n`n[c]`nz=3`n"
     }
 }
 

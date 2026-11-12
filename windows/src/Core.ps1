@@ -121,6 +121,56 @@ function Resolve-GwFullPath {
     return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 }
 
+function Move-GwFileOverwrite {
+    <#
+    .SYNOPSIS
+    Moves a finished temporary file onto its target in one step, retrying when the target is briefly locked.
+    .DESCRIPTION
+    The second half of every atomic write in the kit. An existing target is replaced with
+    File.Replace (atomic on NTFS, keeps the target's access list); a new target is created with
+    File.Move. Antivirus and indexing services open a file right after it is written, and the
+    replace then fails with "Unable to remove the file to be replaced" (observed 2026-11-12), so
+    a sharing or access error is retried with exponential back-off and jitter: 50, 100, 200,
+    400, 800 ms, at most 1.6 s in total, then the error is raised. Bounded, never silent.
+    .PARAMETER Source
+    The temporary file, in the same directory as the target.
+    .PARAMETER Destination
+    The target file.
+    .PARAMETER MaxAttempts
+    Number of attempts before the error is raised; default 6.
+    .OUTPUTS
+    None. On failure the last System.IO.IOException or UnauthorizedAccessException is thrown;
+    the caller removes the temporary file.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Internal step of an atomic write; the functions that decide to write own ShouldProcess.')]
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [ValidateRange(1, 12)][int]$MaxAttempts = 6
+    )
+    $random = New-Object System.Random
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if ([System.IO.File]::Exists($Destination)) { [System.IO.File]::Replace($Source, $Destination, [NullString]::Value) }
+            else { [System.IO.File]::Move($Source, $Destination) }
+            return
+        }
+        catch {
+            # .NET surfaces a locked target as IOException or UnauthorizedAccessException (wrapped
+            # by PowerShell in MethodInvocationException). Anything else is not a lock: rethrow.
+            $cause = $_.Exception
+            while ($null -ne $cause.InnerException) { $cause = $cause.InnerException }
+            $transient = ($cause -is [System.IO.IOException]) -or ($cause -is [System.UnauthorizedAccessException])
+            if (-not $transient -or $attempt -ge $MaxAttempts) { throw }
+            $delay = [Math]::Min(800, 50 * [Math]::Pow(2, $attempt - 1)) + $random.Next(0, 25)
+            Write-Verbose ('Target busy (attempt {0} of {1}); retrying in {2} ms.' -f $attempt, $MaxAttempts, [int]$delay)
+            Start-Sleep -Milliseconds ([int]$delay)
+        }
+    }
+}
+
 function Write-GwFileAtomic {
     <#
     .SYNOPSIS
@@ -131,7 +181,8 @@ function Write-GwFileAtomic {
     is written exactly as given: no byte-order mark and no newline are added. Windows
     PowerShell 5.1 cmdlets (Out-File, Set-Content -Encoding UTF8, '>') add a mark or write
     UTF-16, which is why this function uses System.IO.File with UTF8Encoding($false).
-    When the target exists it is replaced with File.Replace, which keeps the target's ACL.
+    The final step is Move-GwFileOverwrite, which keeps the target's access list and retries
+    when the target is briefly locked.
     .PARAMETER Path
     Target file. Its directory must exist.
     .PARAMETER Text
@@ -150,12 +201,7 @@ function Write-GwFileAtomic {
     $encoding = New-Object System.Text.UTF8Encoding($false)
     try {
         [System.IO.File]::WriteAllText($temporary, $Text, $encoding)
-        if ([System.IO.File]::Exists($target)) {
-            [System.IO.File]::Replace($temporary, $target, [NullString]::Value)
-        }
-        else {
-            [System.IO.File]::Move($temporary, $target)
-        }
+        Move-GwFileOverwrite -Source $temporary -Destination $target
     }
     finally {
         if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) }
@@ -340,13 +386,17 @@ function Remove-GwIniValue {
     Returns INI text with one key removed; every other line stays.
     .DESCRIPTION
     Counterpart of Set-GwIniValue, used by the undo path to restore "this key was not set".
-    Text in, text out; an absent key returns the input unchanged.
+    Text in, text out; an absent key returns the input unchanged. With -RemoveEmptySection a
+    section left without any key or comment is removed too, together with the blank lines that
+    separated it, so that undoing "add a key to a new section" restores the original text.
     .PARAMETER Text
     Current INI text.
     .PARAMETER Section
     Section name without brackets.
     .PARAMETER Key
     Key name.
+    .PARAMETER RemoveEmptySection
+    Also remove the section header when nothing but blank lines remains in the section.
     .OUTPUTS
     System.String, the new INI text.
     #>
@@ -357,13 +407,40 @@ function Remove-GwIniValue {
     param(
         [AllowEmptyString()][AllowNull()][string]$Text,
         [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][string]$Key
+        [Parameter(Mandatory = $true)][string]$Key,
+        [switch]$RemoveEmptySection
     )
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($line in (Split-GwIniLine -Text $Text)) { $lines.Add($line) }
     $found = Find-GwIniKey -Line $lines.ToArray() -Section $Section -Key $Key
     if ($found.KeyIndex -lt 0) { return [string]$Text }
     $lines.RemoveAt($found.KeyIndex)
+    if ($RemoveEmptySection) {
+        # The section spans from its header to the line before the next header (or the end).
+        $header = $found.SectionIndex
+        $next = $lines.Count
+        for ($index = $header + 1; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match '^\s*\[[^\]]+\]\s*$') {
+                $next = $index
+                break
+            }
+        }
+        $hasContent = $false
+        for ($index = $header + 1; $index -lt $next; $index++) {
+            if ($lines[$index].Trim().Length -gt 0) { $hasContent = $true }
+        }
+        if (-not $hasContent) {
+            $lines.RemoveRange($header, $next - $header)
+            # Drop the blank lines that separated the removed section from the text above it,
+            # unless another section follows and still needs one separator.
+            $above = $header - 1
+            while ($above -ge 0 -and $lines[$above].Trim().Length -eq 0) {
+                $lines.RemoveAt($above)
+                $above--
+            }
+            if ($above -ge 0 -and ($above + 1) -lt $lines.Count) { $lines.Insert($above + 1, '') }
+        }
+    }
     if ($lines.Count -eq 0) { return '' }
     return (($lines.ToArray() -join "`n") + "`n")
 }
