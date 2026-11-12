@@ -1,0 +1,128 @@
+# Sidecar CI: lint, type-check and test the Python package (coverage gate 90 %), lint the
+# Dockerfile and the smoke script, build the image for amd64, run the container smoke test and
+# scan with Trivy. Nothing here has credentials and nothing contacts IBKR: the API probe is
+# tested against an in-process fake gateway.
+name: Sidecar
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - sidecar/**
+      - compose/docker-compose.sidecar.yml
+      - docs/sidecar.md
+      - docs/adr/0010-sidecar-for-probe-status-and-alerts.md
+      - .github/workflows/sidecar.yml
+      - .github/workflows/sidecar-publish.yml
+  pull_request:
+    paths:
+      - sidecar/**
+      - compose/docker-compose.sidecar.yml
+      - docs/sidecar.md
+      - docs/adr/0010-sidecar-for-probe-status-and-alerts.md
+      - .github/workflows/sidecar.yml
+      - .github/workflows/sidecar-publish.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sidecar-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.7" # the version pinned (by digest) in sidecar/Dockerfile
+
+jobs:
+  test:
+    name: lint, types, tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sidecar
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: sidecar/uv.lock
+      - name: Install (exactly uv.lock; Python 3.14 from .python-version)
+        run: uv sync --frozen
+      - name: ruff
+        run: uv run ruff check .
+      - name: black
+        run: uv run black --check .
+      - name: mypy (strict)
+        run: uv run mypy
+      - name: pytest with the coverage gate (fail_under = 90 in pyproject.toml)
+        run: uv run pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: The committed status schema is what the code generates
+        run: uv run brokersre-sidecar print-schema status | diff - schemas/status.v1.schema.json
+      - name: The override compose file merges with the reference file
+        working-directory: compose
+        run: docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml config -q
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: sidecar/Dockerfile
+          config: .hadolint.yaml
+      - name: shellcheck (smoke script)
+        working-directory: .
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -x sidecar/tests/container/run.sh
+      - name: shfmt (diff only)
+        working-directory: .
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d sidecar/tests/container/run.sh
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: sidecar-coverage
+          path: sidecar/coverage.xml
+          if-no-files-found: ignore
+
+  image:
+    name: image build, smoke, Trivy
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # Trivy SARIF upload
+      actions: read          # upload-sarif reads the run for telemetry
+    env:
+      TEST_IMAGE: brokersre-ib-gateway-sidecar:ci
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Build (amd64) and load
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: sidecar
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.TEST_IMAGE }}
+          build-args: |
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=sidecar
+          cache-to: type=gha,mode=max,scope=sidecar
+          provenance: false
+          sbom: false
+      - name: Container smoke test (read-only, uid 1000, endpoints, notification, shutdown)
+        run: IMAGE="$TEST_IMAGE" sidecar/tests/container/run.sh
+      - name: Trivy gate (fixable CRITICAL/HIGH in OS packages and Python libraries)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.TEST_IMAGE }}
+          format: sarif
+          output: trivy-sidecar.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+      - name: Upload Trivy SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4.39.3
+        with:
+          sarif_file: trivy-sidecar.sarif
+          category: sidecar
