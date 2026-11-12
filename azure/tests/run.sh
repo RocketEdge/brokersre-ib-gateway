@@ -1027,6 +1027,15 @@ group_compose() {
     '"$(printf "%s" "${cert}" | jq_cli -r "[(.services | keys | join(\",\")), (.services[\"vector-cert\"].secrets | map(.source) | join(\",\"))] | join(\" \")")" == "ib-gateway,vector-cert ib-username,azure-client-cert"'
   expect "without a profile no shipper is started" \
     '"$(printf "%s" "${none}" | jq_cli -r ".services | keys | join(\",\")")" == "ib-gateway"'
+  # The Vector image is named in two files: the compose override (what this suite runs) and the
+  # default of the VM template (what a VM would pull). They must be the same image, or a VM
+  # ships with a shipper nobody tested.
+  local compose_vector vm_vector
+  compose_vector="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(timberio\/vector[^[:space:]]*\).*/\1/p' "${repo}/compose/docker-compose.azure.yml" | head -n 1)"
+  vm_vector="$(sed -n "s/^param vectorImage string = '\(timberio\/vector[^']*\)'.*/\1/p" "${repo}/azure/bicep/vm.bicep" | head -n 1)"
+  # shellcheck disable=SC2016  # evaluated by expect
+  expect "the VM template's default Vector image is the one the compose override pins" \
+    '-n "${compose_vector}" && "${vm_vector}" == "${compose_vector}"'
   expect "the override leaves the gateway service exactly as the reference file defines it" \
     '"$(printf "%s" "${base}" | jq_cli -cS ".services[\"ib-gateway\"]")" == "$(printf "%s" "${both}" | jq_cli -cS ".services[\"ib-gateway\"]")" && "${base}" == *"ib-gateway"*'
   for service in vector vector-cert; do
