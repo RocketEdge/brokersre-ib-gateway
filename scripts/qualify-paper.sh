@@ -119,7 +119,7 @@ if ! docker run -d --name "${name}" --restart no --stop-timeout 90 \
   -v "$(host_path "${secrets_dir}"):/run/secrets:ro" \
   -e TWS_USERID_FILE=/run/secrets/ib-username -e TWS_PASSWORD_FILE=/run/secrets/ib-password \
   -e TRADING_MODE=paper -e READ_ONLY_API=yes \
-  -e TWOFA_TIMEOUT_ACTION=exit -e RELOGIN_AFTER_TWOFA_TIMEOUT=no \
+  -e TWOFA_TIMEOUT_ACTION=exit -e RELOGIN_AFTER_TWOFA_TIMEOUT=no -e SAMPLE_INTERVAL_S=10 \
   ${QUALIFY_DOCKER_ARGS:-} "${image}" >/dev/null; then
   reason="the container could not be started"
 fi
@@ -194,6 +194,22 @@ if [ -z "${reason}" ]; then
   else
     check fail relay "relay port 4004 closed although the phase is logged-in"
     reason="${reason:-the relay did not open}"
+  fi
+  # What a logged-in Gateway really uses: recorded as information (it sizes the host and
+  # confirms that the resource sampler sees the Gateway JVM), never a reason to fail.
+  # shellcheck disable=SC2016  # evaluated inside the container
+  if resources="$(in_container 'for i in $(seq 1 45); do
+      line="$(tail -n 1 /var/log/ibgateway/metrics/metrics.jsonl 2>/dev/null)"
+      if printf "%s" "${line}" | jq -e ".phase == \"logged-in\"" >/dev/null 2>&1; then
+        printf "%s" "${line}" | jq -r "\"mem_working_set_bytes=\(.mem_working_set_bytes // \"not_measured\") java_rss_bytes=\(.java_rss_bytes // \"not_measured\") java_threads=\(.java_threads // \"not_measured\") open_fds=\(.open_fds // \"not_measured\")\""
+        exit 0
+      fi
+      sleep 1
+    done
+    exit 1' 2>/dev/null)"; then
+    check info resources "${resources}"
+  else
+    check info resources "no resource sample in phase logged-in within 45 s"
   fi
 fi
 
