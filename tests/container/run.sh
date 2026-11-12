@@ -6,6 +6,12 @@
 # Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh
 # Exit code: 0 when every test passed. Each test prints PASS/FAIL with its reason.
 set -uo pipefail
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a credential is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
 # Git Bash on Windows rewrites POSIX-looking arguments into Windows paths; keep docker's
 # container-side paths literal and convert only host paths explicitly (no-op on Linux).
 export MSYS_NO_PATHCONV=1
@@ -137,22 +143,22 @@ if [ "${doctor_rc}" -eq 1 ] && printf '%s' "${doctor_json}" | docker run --rm -i
 else
   fail "doctor restart time" "exit ${doctor_rc}: $(printf '%s' "${doctor_json}" | head -c 300)"
 fi
-if printf '%s' "${doctor_json}" | grep -q -e 'dummyuser' -e 'dummypassword-not-real'; then fail "doctor leak" "a credential appears in doctor's output"; else pass "doctor: no credential in its output"; fi
+if printf '%s' "${doctor_json}" | quiet_grep -e 'dummyuser' -e 'dummypassword-not-real'; then fail "doctor leak" "a credential appears in doctor's output"; else pass "doctor: no credential in its output"; fi
 # At container start a failed preflight stops everything before IBC, with an event that names
 # the problem; a wrong restart time must not lead to a login that then runs without restarts.
 run_container -e AUTO_RESTART_TIME='9:30 PM'
 if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
   && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" = "1" ] \
-  && docker logs ibgw-test 2>&1 | grep -q '"event":"doctor_failed"' \
-  && ! docker logs ibgw-test 2>&1 | grep -q '"event":"ibc_starting"'; then
+  && docker logs ibgw-test 2>&1 | quiet_grep '"event":"doctor_failed"' \
+  && ! docker logs ibgw-test 2>&1 | quiet_grep '"event":"ibc_starting"'; then
   pass "a failed preflight stops the container before IBC starts (doctor_failed, exit 1)"
 else
   fail "preflight stop" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
 fi
 run_container -e IBC_LAUNCH=no -e AUTO_RESTART_TIME='9:30 PM' -e DOCTOR_STRICT=no -e JAVA_HEAP_SIZE=1024
 if wait_for 30 port_open 4004 \
-  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_failed"' | grep -q '"level":"warn"' \
-  && docker logs ibgw-test 2>&1 | grep '"event":"config_deprecated"' | grep -q 'JAVA_HEAP_SIZE'; then
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_failed"' | quiet_grep '"level":"warn"' \
+  && docker logs ibgw-test 2>&1 | grep '"event":"config_deprecated"' | quiet_grep 'JAVA_HEAP_SIZE'; then
   pass "DOCTOR_STRICT=no starts anyway; an ignored gnzsnz variable is reported by name (config_deprecated)"
 else
   fail "preflight non-strict" "$(docker logs ibgw-test 2>&1 | tail -4 | cut -c1-300)"
@@ -168,7 +174,7 @@ host_fake_doctor="${fake_doctor}"
 if command -v cygpath >/dev/null 2>&1; then host_fake_doctor="$(cygpath -m "${fake_doctor}")"; fi
 run_container -e IBC_LAUNCH=no -v "${host_fake_doctor}/doctor.sh:/usr/local/lib/brokersre/doctor.sh:ro"
 if wait_for 30 port_open 4004 \
-  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_warning"' | grep -q 'ended abnormally (exit status 1)'; then
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_warning"' | quiet_grep 'ended abnormally (exit status 1)'; then
   pass "a preflight that aborts (status 1, no verdict) does not stop the start; it is reported"
 else
   fail "preflight abort" "exit=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
@@ -197,7 +203,7 @@ docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
 run_container -e IBC_LAUNCH=no --read-only --tmpfs /tmp --tmpfs /run/brokersre -v ibgw-test-logs:/var/log/ibgateway
 if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
   && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" != "0" ] \
-  && docker logs ibgw-test 2>&1 | grep -q '"event":"dirs_not_writable"'; then
+  && docker logs ibgw-test 2>&1 | quiet_grep '"event":"dirs_not_writable"'; then
   pass "root-owned tmpfs fails fast with a structured dirs_not_writable event"
 else
   fail "read-only negative" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3)"
@@ -244,7 +250,7 @@ docker stop -t 90 ibgw-test >/dev/null 2>&1 &
 stop_pid=$!
 if wait_for 95 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true'; then pass "SIGTERM stops the container (IBC STOP path)"; else fail "shutdown" "container still running after 95 s"; fi
 wait "${stop_pid}" 2>/dev/null || true
-if docker logs ibgw-test 2>&1 | grep -q '"event":"shutdown_complete"'; then pass "shutdown_complete event emitted"; else
+if docker logs ibgw-test 2>&1 | quiet_grep '"event":"shutdown_complete"'; then pass "shutdown_complete event emitted"; else
   fail "shutdown event" "missing"
   docker logs ibgw-test 2>&1 | tail -5
 fi
@@ -272,12 +278,12 @@ if in_container 'test "$(cat /var/log/ibgateway/state/phase)" = needs-human'; th
 # Give IBC the time it would need to appear if the latch had not held, then look for it.
 sleep 10
 if in_container 'pgrep -x java >/dev/null'; then fail "latch holds" "a Java process runs: a login was attempted"; else pass "latched start: no IBC, no Gateway, no login"; fi
-if docker logs ibgw-test 2>&1 | grep -q '"event":"ibc_starting"'; then fail "latch holds" "ibc_starting was emitted"; else pass "latched start: IBC was never started"; fi
+if docker logs ibgw-test 2>&1 | quiet_grep '"event":"ibc_starting"'; then fail "latch holds" "ibc_starting was emitted"; else pass "latched start: IBC was never started"; fi
 if [ "$(docker inspect -f '{{.State.Running}}' ibgw-test 2>/dev/null)" = "true" ]; then pass "latched start: the container stays up (no restart loop)"; else fail "latch hold" "the container exited"; fi
 if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh >/dev/null 2>&1'; then fail "latch health" "reported healthy"; else pass "latched start: unhealthy"; fi
 if in_container 'test -s /var/log/ibgateway/state/login-rejected'; then pass "latched start: the record is kept"; else fail "latch record" "the record was removed"; fi
 if wait_for 20 in_container 'jq -e -s "length > 0 and (.[-1].phase == \"needs-human\")" /var/log/ibgateway/metrics/metrics.jsonl'; then pass "latched start: resource samples go on (a waiting gateway is not a silent one)"; else fail "latch samples" "no sample in phase needs-human"; fi
-if docker logs ibgw-test 2>&1 | grep -q -e dummyuser -e dummypassword; then fail "latch secrecy" "a credential appears in the events"; else pass "latched start: no credential in the events"; fi
+if docker logs ibgw-test 2>&1 | quiet_grep -e dummyuser -e dummypassword; then fail "latch secrecy" "a credential appears in the events"; else pass "latched start: no credential in the events"; fi
 docker stop -t 30 ibgw-test >/dev/null 2>&1 &
 stop_pid=$!
 if wait_for 20 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true'; then pass "latched start: SIGTERM stops the container at once"; else fail "latch stop" "still running after 20 s"; fi
