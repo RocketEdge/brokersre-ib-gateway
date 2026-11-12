@@ -13,13 +13,15 @@
 # Dependabot pull requests (ecosystems `docker` and `uv`, directory /sidecar, in
 # .github/dependabot.yml); the weekly sidecar-rescan.yml run scans the PUBLISHED image and
 # asks for a rebuild when a finding has a fix.
-ARG PYTHON_IMAGE=python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490
+# Both images are named directly in a FROM line, once each: Dependabot does not update an
+# image reference that is held in an ARG (GitHub's documentation of the docker ecosystem).
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
-FROM ${UV_IMAGE} AS uv
+# The one pin of the Python base; the build and the runtime stage both start from it.
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS base
 
 # Build stage: resolve nothing, install exactly uv.lock into /opt/sidecar.
-FROM ${PYTHON_IMAGE} AS build
+FROM base AS build
 COPY --from=uv /uv /usr/local/bin/uv
 # --frozen: fail instead of re-resolving. Bytecode is compiled here because the runtime root
 # file system is read-only. The virtual environment uses the image's own interpreter, which is
@@ -36,7 +38,7 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 # Runtime stage.
-FROM ${PYTHON_IMAGE} AS runtime
+FROM base AS runtime
 
 ARG VERSION=0.1.0
 ARG REVISION=unknown
