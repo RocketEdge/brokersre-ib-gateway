@@ -128,6 +128,11 @@ Next step.
   - *A bare `! command` in a bats test asserts nothing unless it is the last line.* Twelve
     such lines existed across the suites, several of them guarding "no secret appears here";
     all now end in `|| false` and still pass. A four-test probe showed the difference.
+  - *The container suite, the compose suite and the qualification script ended pipelines in
+    `grep -q` under `pipefail`.* When the quiet grep exits at its first match the writer dies
+    of SIGPIPE and the pipeline is false: for "a credential is in the events: fail, else
+    pass" that is a false pass, and it shows only on a fast Linux host. Fourteen host-side
+    pipelines now use a helper that reads all input; both suites pass with it.
   - *jq's `^` and `$` match per line*, so an anchored check let a line break through.
   - Deleting the untagged image of a failed gate was rejected: only the index can be deleted
     safely, and the platform manifests hold the bulk.

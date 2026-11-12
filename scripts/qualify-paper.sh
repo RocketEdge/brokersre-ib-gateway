@@ -36,6 +36,12 @@
 # Needs only bash and the docker CLI on the host: JSON is built with the jq inside the image.
 # QUALIFY_DOCKER_ARGS adds arguments to `docker run` (the offline test passes --network none).
 set -uo pipefail
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a credential is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
 # Git Bash on Windows rewrites POSIX-looking arguments into Windows paths; keep the
 # container-side paths literal and convert host paths explicitly (no-op elsewhere).
 export MSYS_NO_PATHCONV=1
@@ -253,7 +259,7 @@ if running; then
   stop_start=${SECONDS}
   docker stop -t 90 "${name}" >/dev/null 2>&1 || true
   stop_seconds=$((SECONDS - stop_start))
-  if docker logs "${name}" 2>&1 | grep -q '"event":"shutdown_complete"' && [ "${stop_seconds}" -le 75 ]; then
+  if docker logs "${name}" 2>&1 | quiet_grep '"event":"shutdown_complete"' && [ "${stop_seconds}" -le 75 ]; then
     check pass graceful_stop "shutdown_complete after ${stop_seconds} s"
   else
     check fail graceful_stop "no shutdown_complete event, or the stop took ${stop_seconds} s"
