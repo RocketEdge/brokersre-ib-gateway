@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
+from brokersre_sidecar.model.events import GatewayEvent
 from brokersre_sidecar.model.health import ProbeSnapshot
 from brokersre_sidecar.model.state import GatewaySnapshot
 from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, Phase, ProbeStatus
@@ -265,18 +266,39 @@ class RuleEngine:
 
     @staticmethod
     def _needs_human(gateway: GatewaySnapshot, known: bool) -> Evaluation:
-        """Active while the phase is ``needs-human``; the detail names the cause when known."""
+        """Active while the phase is ``needs-human``; the detail names the cause when known.
+
+        The gateway reaches the phase in three ways, each announced by one event: IBKR rejected
+        the login in this start (``login_failed_dialog``), the second factor was not approved
+        after the configured number of prompts (``needs_human``), or the gateway did not log
+        in at all because IBKR had rejected the same secret files at an earlier start
+        (``login_rejected_latched``, the gateway's rejected-login latch). The newest of the
+        three names the cause; on a tie the order below decides, so the result is the same on
+        every evaluation. Without any of them the detail is the bare phase.
+        """
         if not known:
             return _UNKNOWN
         if gateway.phase != Phase.NEEDS_HUMAN:
             return _INACTIVE
-        rejected = gateway.last_events.get("login_failed_dialog")
-        unapproved = gateway.last_events.get("needs_human")
+        causes = (
+            ("login_failed_dialog", "IBKR rejected the login"),
+            ("needs_human", "the second factor was not approved"),
+            (
+                "login_rejected_latched",
+                "IBKR rejected these credentials at an earlier start; "
+                "the gateway will not log in until the secret files are corrected",
+            ),
+        )
         detail = "gateway phase is needs-human"
-        if rejected is not None and (unapproved is None or rejected.ts >= unapproved.ts):
-            detail += ": IBKR rejected the login"
-        elif unapproved is not None:
-            detail += ": the second factor was not approved"
+        newest: GatewayEvent | None = None
+        cause = ""
+        for name, text in causes:
+            event = gateway.last_events.get(name)
+            if event is not None and (newest is None or event.ts > newest.ts):
+                newest = event
+                cause = text
+        if cause:
+            detail += f": {cause}"
         return Evaluation(_ACTIVE, detail)
 
     def _login_failed(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:

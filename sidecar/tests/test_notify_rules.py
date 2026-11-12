@@ -191,6 +191,38 @@ def test_needs_human_after_unapproved_prompts_says_so() -> None:
     )
 
 
+def test_needs_human_after_a_latched_start_names_the_earlier_rejection() -> None:
+    # The gateway's rejected-login latch: at a start whose secret files IBKR already rejected
+    # it does not log in at all. There is no login_failed_dialog in this start, only
+    # login_rejected_latched, and the person must be told to correct the secret files.
+    events = {
+        "login_rejected_latched": gateway_event("login_rejected_latched", T0 - timedelta(seconds=5))
+    }
+    gateway = {"phase": "needs-human", "last_events": events}
+    states = evaluate(gateway=gateway)
+    assert states[AlertClass.NEEDS_HUMAN] is ACTIVE
+    assert details(gateway=gateway)[AlertClass.NEEDS_HUMAN] == (
+        "gateway phase is needs-human: IBKR rejected these credentials at an earlier start; "
+        "the gateway will not log in until the secret files are corrected"
+    )
+
+
+def test_the_newest_cause_of_needs_human_wins() -> None:
+    # A rejection in this start after a latched one cannot happen (a latched start never logs
+    # in), but the reverse order can sit in the feed of one boot when events are replayed;
+    # the newest event names the cause.
+    events = {
+        "login_rejected_latched": gateway_event(
+            "login_rejected_latched", T0 - timedelta(seconds=30)
+        ),
+        "login_failed_dialog": gateway_event("login_failed_dialog", T0 - timedelta(seconds=5)),
+    }
+    gateway = {"phase": "needs-human", "last_events": events}
+    assert details(gateway=gateway)[AlertClass.NEEDS_HUMAN] == (
+        "gateway phase is needs-human: IBKR rejected the login"
+    )
+
+
 def test_an_unknown_window_is_reported_while_not_logged_in() -> None:
     events = {"unknown_window": gateway_event("unknown_window", T0 - timedelta(minutes=1))}
     assert (
