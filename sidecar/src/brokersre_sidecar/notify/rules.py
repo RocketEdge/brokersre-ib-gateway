@@ -33,8 +33,9 @@ _NOT_RUNNING = frozenset({Phase.STOPPING, Phase.STOPPED, Phase.EXITED})
 # Phases the gateway passes through between two second-factor prompts.
 _BETWEEN_PROMPTS = frozenset({Phase.LOGIN, Phase.RESTARTING, Phase.STARTING})
 _TWOFA_EVENTS = ("twofa_initiated", "twofa_dialog", "twofa_timeout")
-# Phases in which another alert takes over from a pending second factor.
-_TWOFA_SUCCESSORS: dict[str, AlertClass] = {
+# Phases in which another alert takes over from a pending second factor or a stalled login:
+# the gateway did not recover, it moved on to something a different alert describes.
+_SUCCESSORS: dict[str, AlertClass] = {
     Phase.NEEDS_HUMAN: AlertClass.NEEDS_HUMAN,
     Phase.EXITED: AlertClass.GATEWAY_EXITED,
     Phase.STOPPING: AlertClass.GATEWAY_STOPPED,
@@ -197,8 +198,8 @@ class RuleEngine:
         phase = gateway.phase
         if phase == Phase.TWOFA_PENDING:
             return Evaluation(_ACTIVE, "gateway phase is 2fa-pending")
-        if phase in _TWOFA_SUCCESSORS:
-            return Evaluation(Condition.INACTIVE, superseded_by=_TWOFA_SUCCESSORS[phase])
+        if phase in _SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_SUCCESSORS[phase])
         if phase not in _BETWEEN_PROMPTS:
             return _INACTIVE
         prompts = [
@@ -297,7 +298,12 @@ class RuleEngine:
 
     @staticmethod
     def _login_stalled(gateway: GatewaySnapshot, known: bool) -> Evaluation:
-        """Active while the gateway's ``login_stalled`` pair is open and it is still logging in."""
+        """Active while the gateway's ``login_stalled`` pair is open and it is still logging in.
+
+        A stall that ends because the gateway gave up, exited or was stopped did not
+        recover: the verdict is then a hand-over to the alert that describes the gateway
+        now, so the closing message does not say "no action needed".
+        """
         if not known:
             return _UNKNOWN
         pair = gateway.pairs.get("login_stalled")
@@ -307,6 +313,8 @@ class RuleEngine:
             return _UNKNOWN if gateway.phase == Phase.LOGIN else _INACTIVE
         if pair.open and gateway.phase == Phase.LOGIN:
             return Evaluation(_ACTIVE, "the gateway reports a stalled login")
+        if pair.open and gateway.phase in _SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_SUCCESSORS[gateway.phase])
         return _INACTIVE
 
     def _unknown_window(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:

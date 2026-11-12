@@ -524,3 +524,48 @@ def test_half_the_round_trip_time_is_added_to_the_tolerance() -> None:
     fast = RuleEngine(RuleConfig())
     evaluate(engine=fast, probe=skewed(0, 3.2))
     assert evaluate(engine=fast, probe=skewed(1, 3.2))[AlertClass.CLOCK_SKEW] is ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("phase", "successor"),
+    [
+        ("needs-human", AlertClass.NEEDS_HUMAN),
+        ("exited", AlertClass.GATEWAY_EXITED),
+        ("stopping", AlertClass.GATEWAY_STOPPED),
+        ("stopped", AlertClass.GATEWAY_STOPPED),
+    ],
+)
+def test_a_stalled_login_that_ends_without_a_login_is_handed_over_not_resolved(
+    phase: str, successor: AlertClass
+) -> None:
+    # Seen end to end: the gateway was stopped while its login was stalled, and the
+    # sidecar said "resolved, no action needed" about the stall.
+    result = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(T0, phase=phase, pairs={"login_stalled": opened()}),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    verdict = result[AlertClass.LOGIN_STALLED]
+    assert verdict.state is INACTIVE
+    assert verdict.superseded_by is successor
+    assert result[successor].state is ACTIVE
+
+
+def test_a_stalled_login_that_resumes_is_plainly_resolved() -> None:
+    result = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(T0, phase="2fa-pending", pairs={"login_stalled": closed()}),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    verdict = result[AlertClass.LOGIN_STALLED]
+    assert (verdict.state, verdict.superseded_by) == (INACTIVE, None)
+    # A closed pair is over, whatever the phase: no hand-over for a stall that ended earlier.
+    stopped = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(T0, phase="stopped", pairs={"login_stalled": closed()}),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    assert stopped[AlertClass.LOGIN_STALLED].superseded_by is None
