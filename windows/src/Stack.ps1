@@ -610,7 +610,9 @@ function Wait-GwGatewayLogin {
     Polls the phase token and prints one plain-language line per change. Read-only: it only
     runs 'docker exec ... cat', 'docker logs' and 'docker inspect'. It never starts, restarts
     or recreates anything and never touches 2FA; the operator approves on the phone.
-    Each poll decides in this order: logged-in ends with LoggedIn; a rejected login reported on
+    Each poll decides in this order: logged-in, read on two consecutive polls (the phase file
+    outlives the container, so one reading right after a start may be left over from the
+    previous run), ends with LoggedIn; a rejected login reported on
     stdout ends with LoginFailed, on the first such event and before any other exit (also when
     the gateway process has already exited, so the caller can stop the stack before Docker's
     restart policy sends the credentials again); a container that is not running ends with
@@ -649,6 +651,7 @@ function Wait-GwGatewayLogin {
     $deadline = $started.AddSeconds($TimeoutSeconds)
     $lastShown = $null
     $lastPhase = ''
+    $confirmations = 0
     $logsHint = 'See the events with: docker logs {0}' -f $ContainerName
     $finish = {
         param([string]$Outcome, [string]$Message)
@@ -662,9 +665,18 @@ function Wait-GwGatewayLogin {
         if ($null -ne $phase) { $info = Get-GwPhaseMessage -Phase $phase -ApiPort $ApiPort -ContainerName $ContainerName }
 
         if ($null -ne $info -and $info.Kind -eq 'Success') {
-            Write-GwConsole -Message $info.Text -Status 'PASS'
-            return (& $finish $info.Outcome $info.Text)
+            # The phase file lives on a volume that outlives the container, so right after a
+            # start it can still hold 'logged-in' from the previous run until the entrypoint
+            # writes 'starting'. Success therefore needs the token on two consecutive polls.
+            if ($confirmations -ge 1) {
+                Write-GwConsole -Message $info.Text -Status 'PASS'
+                return (& $finish $info.Outcome $info.Text)
+            }
+            $confirmations++
+            Wait-GwDelay -Seconds $PollSeconds
+            continue
         }
+        $confirmations = 0
 
         # A rejected login outranks every other state, including "exited" and "not running".
         if (Test-GwLoginFailure -Runtime $Runtime -ContainerName $ContainerName -Since $Since) {

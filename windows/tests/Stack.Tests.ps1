@@ -338,6 +338,20 @@ Describe 'Wait-GwGatewayLogin' {
         Should -Invoke -ModuleName BrokerSre.Gateway Write-GwConsole -Times 1 -Exactly -ParameterFilter { $Message -match 'Logged in\. API ready on 127\.0\.0\.1:4002' }
     }
 
+    It 'does not trust a single logged-in reading: a token left by the previous run is replaced by starting' {
+        foreach ($phase in @('logged-in', 'starting', 'login', 'needs-human')) { $script:phases.Enqueue($phase) }
+        $result = Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2
+        $result.Outcome | Should -Be 'NeedsHuman'
+        Should -Invoke -ModuleName BrokerSre.Gateway Write-GwConsole -Times 0 -Exactly -ParameterFilter { $Message -match 'Logged in' }
+    }
+
+    It 'reports success once logged-in was read on two consecutive polls' {
+        $script:phases.Enqueue('logged-in')
+        $result = Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2
+        $result.Outcome | Should -Be 'LoggedIn'
+        Should -Invoke -ModuleName BrokerSre.Gateway Wait-GwDelay -Times 1 -Exactly
+    }
+
     It 'prints each phase once, not on every poll' {
         foreach ($phase in @('login', 'login', 'login', 'logged-in')) { $script:phases.Enqueue($phase) }
         Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2 | Out-Null
