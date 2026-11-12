@@ -81,6 +81,9 @@ jobs:
         run: IMAGE="$TEST_IMAGE" tests/container/run.sh
       - name: Compose tests (several gateways, gateway + strategy; offline)
         run: IMAGE="$TEST_IMAGE" tests/compose/run.sh
+      # CI builds and scans linux/amd64 only: an arm64 build under emulation is too slow for a
+      # pull request. publish.yml scans both platforms of the exact digest it publishes, with
+      # this same gate, before any tag moves.
       - name: Trivy gate (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -103,6 +106,33 @@ jobs:
           exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+      # The VEX document states this project's position on every CVE of the bundled jars
+      # (security/vex/, docs/limitations.md L08). The check names findings without a statement
+      # and statements without a finding. It needs the unfiltered list (no severity filter, no
+      # ignore-unfixed) and never fails the job: a CVE published today must not block a pull
+      # request that has nothing to do with it. The document's own validity is gated by the
+      # bats suite of the lint job.
+      - name: Trivy JSON of the bundled jars (input of the VEX drift check)
+        if: always()
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.TEST_IMAGE }}
+          vuln-type: library
+          format: json
+          output: trivy-library.json
+          exit-code: "0"
+          list-all-pkgs: "true"
+      - name: VEX drift check (not gated, docs/limitations.md L08)
+        if: always()
+        run: |
+          rc=0
+          scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json trivy-library.json || rc=$?
+          case "$rc" in
+            0) ;;
+            1) echo "::warning title=VEX drift::security/vex/ibgateway-vendor-jars.openvex.json and Trivy's findings for the bundled jars differ; see the MISSING and STALE lines of this step. CI scans the stable channel only: a statement that is STALE here may belong to the latest channel." ;;
+            *) echo "::warning title=VEX drift check did not run::scripts/check-vex.sh exited $rc; see this step's log." ;;
+          esac
       - name: Upload Trivy SARIF
         if: always()
         continue-on-error: true

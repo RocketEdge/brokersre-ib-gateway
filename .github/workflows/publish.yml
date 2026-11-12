@@ -1,7 +1,20 @@
-# Build, scan, push, sign and attest both channels whenever an image input changes on main, or on
-# demand (also used for monthly OS-patch rebuilds with a -rYYYYMMDD suffix). Each channel gets a
-# git tag v<version>-<channel>[-rDATE] and a GitHub release carrying digests.json and the SBOM.
-# The scan runs on the amd64 build BEFORE anything is pushed, so a vulnerable build never moves a tag.
+# Build, scan, sign, attest and tag both channels whenever an image input changes on main, or on
+# demand (also used for OS-patch rebuilds with a -rYYYYMMDD suffix, monthly and when rebuild.yml
+# finds a fixable finding). Each channel gets a git tag v<version>-<channel>[-rDATE] and a GitHub
+# release carrying digests.json, the SBOM and the VEX document for IBKR's bundled jars.
+#
+# Order, and why (a tag never points at bytes that were not scanned and signed):
+#   1. build linux/amd64 and linux/arm64 once and push the image index BY DIGEST ONLY: it has no
+#      tag, so no consumer of a tag can receive it;
+#   2. Trivy scans both platforms of exactly that digest from the registry (it reads the layers;
+#      nothing is emulated). The gate is the same for both: fixable CRITICAL/HIGH in OS packages.
+#      Scanning the pushed digest, rather than a local build, is what makes the scanned bytes
+#      and the published bytes the same bytes;
+#   3. SBOM, cosign signature, SBOM and VEX attestations, build provenance, all on the digest;
+#   4. only then scripts/promote-tags.sh points the tags at that digest and checks that every
+#      tag resolves to it.
+# A build that fails the gate leaves an untagged, unsigned manifest in the registry and nothing
+# else: no tag, no signature, no release (SECURITY.md).
 name: Publish
 
 on:
@@ -104,43 +117,120 @@ jobs:
         run: |
           if [ "$CHANNEL" = stable ]; then x64="$STABLE_SHA256_X64"; arm="$STABLE_SHA256_ARM"; else x64="$LATEST_SHA256_X64"; arm="$LATEST_SHA256_ARM"; fi
           scripts/prefetch-installers.sh "$CHANNEL" "$VERSION" "$x64" "$arm" downloads
-      - name: Build amd64 and load for scanning
-        run: docker buildx bake ${{ matrix.channel }} --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
-      - name: Trivy gate before anything is pushed (fixable CRITICAL/HIGH in OS packages)
+      - name: Build both platforms and push by digest only (no tag moves)
+        id: push
+        # `*.tags=<name without a tag>` plus push-by-digest pushes the image index under its
+        # digest alone. The tags of docker-bake.hcl are applied later by promote-tags.sh.
+        run: |
+          docker buildx bake ${{ matrix.channel }} \
+            --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' \
+            --set "*.tags=$IMAGE" \
+            --set '*.output=type=image,push-by-digest=true,name-canonical=true,push=true' \
+            --metadata-file meta.json
+          digest=$(jq -r '.["${{ matrix.channel }}"]["containerimage.digest"]' meta.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest in meta.json (got '$digest')"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "pushed by digest, untagged: $IMAGE@$digest"
+      # The two gates differ only in TRIVY_PLATFORM. TRIVY_IMAGE_SRC=remote makes Trivy read the
+      # pushed digest from the registry instead of looking for a local image first. The arm64
+      # gate also runs when the amd64 gate failed, so one run shows both results.
+      - name: Trivy gate, linux/amd64, before any tag moves (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+          TRIVY_IMAGE_SRC: remote
         with:
-          image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           format: sarif
-          output: trivy.sarif
+          output: trivy-amd64.sarif
           exit-code: "1"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           # OS packages are what this image can patch. IBKR's bundled jars are reported by the
-          # next step but not gated: see docs/limitations.md L08.
+          # steps below but not gated: see docs/limitations.md L08.
+          vuln-type: os
+      - name: Trivy gate, linux/arm64, before any tag moves (fixable CRITICAL/HIGH in OS packages)
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: sarif
+          output: trivy-arm64.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
           vuln-type: os
       - name: Trivy report of IBKR-bundled jars (not gated, docs/limitations.md L08)
-        if: always()
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+          TRIVY_IMAGE_SRC: remote
         with:
-          image-ref: ${{ env.IMAGE }}:${{ matrix.channel }}
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           vuln-type: library
           format: table
           exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-      - name: Upload Trivy SARIF
+      # Unfiltered JSON of the jars of both platforms: the input of the VEX drift check. Neither
+      # these scans nor the check can fail the publish (an OS-patch rebuild must not wait for a
+      # document), so each step continues on error and the check only warns.
+      - name: Trivy JSON of the bundled jars, linux/amd64 (input of the VEX drift check)
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          vuln-type: library
+          format: json
+          output: trivy-library-amd64.json
+          exit-code: "0"
+          list-all-pkgs: "true"
+      - name: Trivy JSON of the bundled jars, linux/arm64 (input of the VEX drift check)
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          vuln-type: library
+          format: json
+          output: trivy-library-arm64.json
+          exit-code: "0"
+          list-all-pkgs: "true"
+      - name: VEX drift check (not gated, docs/limitations.md L08)
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        run: |
+          rc=0
+          scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json trivy-library-amd64.json trivy-library-arm64.json || rc=$?
+          case "$rc" in
+            0) ;;
+            1) echo "::warning title=VEX drift (${{ matrix.channel }})::security/vex/ibgateway-vendor-jars.openvex.json and Trivy's findings for the bundled jars differ; see the MISSING and STALE lines of this step. A statement that is STALE here may belong to the other channel." ;;
+            *) echo "::warning title=VEX drift check did not run (${{ matrix.channel }})::scripts/check-vex.sh exited $rc; see this step's log." ;;
+          esac
+      - name: Upload Trivy SARIF (linux/amd64)
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4.39.3
         with:
-          sarif_file: trivy.sarif
-      - name: Build multi-arch and push
-        id: push
-        run: |
-          docker buildx bake ${{ matrix.channel }} --set '*.cache-from=type=gha' --push --metadata-file meta.json
-          digest=$(jq -r '.["${{ matrix.channel }}"]["containerimage.digest"]' meta.json)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "pushed $IMAGE@$digest"
+          sarif_file: trivy-amd64.sarif
+          category: trivy-os-${{ matrix.channel }}-amd64
+      - name: Upload Trivy SARIF (linux/arm64)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4.39.3
+        with:
+          sarif_file: trivy-arm64.sarif
+          category: trivy-os-${{ matrix.channel }}-arm64
       - name: SBOM (CycloneDX)
         uses: anchore/sbom-action@v0.24.3
         with:
@@ -153,10 +243,14 @@ jobs:
       - name: Sign and attest (keyless)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
+        # The VEX document (docs/limitations.md L08) is attested like the SBOM, so a scanner can
+        # find this project's statements about IBKR's bundled jars next to the image
+        # (`trivy image --vex oci`), signed by the same workflow identity.
         run: |
           cosign sign --yes "$IMAGE@$DIGEST"
           cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.channel }}.cdx.json" "$IMAGE@$DIGEST"
-      - name: Verify the signature and attestation just published (evidence in this log)
+          cosign attest --yes --type openvex --predicate security/vex/ibgateway-vendor-jars.openvex.json "$IMAGE@$DIGEST"
+      - name: Verify the signature and attestations just published (evidence in this log)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
           IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@${{ github.ref }}
@@ -167,11 +261,22 @@ jobs:
           cosign verify-attestation --type cyclonedx "$IMAGE@$DIGEST" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "$IDENTITY" > /dev/null && echo "cyclonedx attestation verified for $IMAGE@$DIGEST"
+          cosign verify-attestation --type openvex "$IMAGE@$DIGEST" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$IDENTITY" > /dev/null && echo "openvex attestation verified for $IMAGE@$DIGEST"
       - uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+      - name: Move the channel's tags to the scanned and signed digest
+        # The tag list is the bake target's (docker-bake.hcl), the single place that names tags.
+        # promote-tags.sh creates them from the digest and fails unless each resolves to it.
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mapfile -t tags < <(docker buildx bake --print "${{ matrix.channel }}" | jq -r '.target["${{ matrix.channel }}"].tags[]')
+          scripts/promote-tags.sh "$IMAGE" "$DIGEST" "${tags[@]}"
       - name: digests.json
         run: |
           jq -n --arg channel "${{ matrix.channel }}" --arg version "${{ steps.vars.outputs.version }}" \
@@ -188,10 +293,11 @@ jobs:
           TAG: ${{ steps.vars.outputs.tag }}
         run: |
           # Built with printf so every line stays indented inside this YAML block scalar.
-          notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+          notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "IB Gateway ${{ steps.vars.outputs.version }} (IBKR ${{ matrix.channel }} channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
             "Pin this exact build: \`$IMAGE@${{ steps.push.outputs.digest }}\`" \
             "Verify: \`cosign verify $IMAGE@${{ steps.push.outputs.digest }} --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'\`" \
+            "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
             "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers.")"
           # The tag is created server-side by the release API: GITHUB_TOKEN may not `git push` a ref
           # whose commit contains workflow files ("refusing to allow a GitHub App to create or update workflow").
@@ -199,8 +305,8 @@ jobs:
             # Republishing an already released version: replace the assets and the notes, so the
             # digest the notes show is the one the channel tag now points at. Editing a release
             # sends watchers no notification; only a new release does.
-            gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --clobber
+            gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json --clobber
             gh release edit "$TAG" --notes "$notes"
           else
-            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
+            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
           fi
