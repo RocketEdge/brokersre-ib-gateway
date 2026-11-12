@@ -1,0 +1,536 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/RocketEdge/brokersre-ib-gateway/blob/main/security/vex/ibgateway-vendor-jars.openvex.json",
+  "author": "RocketEdge.com Pte. Ltd. (security@rocketedge.com)",
+  "role": "Maintainer of the container image; not the vendor of the components named in the statements",
+  "timestamp": "2026-11-12T03:00:00Z",
+  "version": 1,
+  "tooling": "Findings listed with Trivy 0.76.2 (trivy image --pkg-types library); statements written by hand from the CVE descriptions. IB Gateway's code was not inspected.",
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2025-49128",
+        "description": "com.fasterxml.jackson.core/jackson-core: Jackson-core Memory Disclosure via Source Snippet in JsonLocation",
+        "aliases": [
+          "GHSA-wf8f-6423-gfxg"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a parse error while reading JSON from a byte array with an offset; up to 500 bytes of the reused buffer then appear in the exception message. Not known: whether IB Gateway parses from pooled buffers and where it writes such messages. IB Gateway is closed source and this project does not inspect its code. The Gateway's log files stay on the volumes of the host; this image forwards none of their lines."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2025-52999",
+        "description": "com.fasterxml.jackson.core/jackson-core: jackson-core Potential StackoverflowError",
+        "aliases": [
+          "GHSA-h46c-h94j-95f3"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: parsing a deeply nested JSON document, which ends in a StackOverflowError. Not known: which inputs IB Gateway parses with Jackson. IB Gateway is closed source and this project does not inspect its code. In this image the API listener accepts loopback connections only and the relay is published on loopback or a private address (reference compose). The open question is whether JSON from IBKR's servers or from an API client on a trusted host reaches this parser."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-68494",
+        "description": "com.fasterxml.jackson.core/jackson-core: tools.jackson.core/jackson-core: jackson-core: Denial of Service via incomplete fix in async JSON parser",
+        "aliases": [
+          "GHSA-r7wm-3cxj-wff9"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: an attacker streams JSON in small chunks to Jackson's non-blocking (async) parser. Not known: whether IB Gateway uses the non-blocking parser at all, and on which input. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-89425",
+        "description": "com.fasterxml.jackson.core/jackson-core: Jackson-core: Denial of Service via unbounded StringBuilder growth during malformed token processing",
+        "aliases": [
+          "GHSA-7hhh-6rmp-j9qf"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a malformed token sent to a parser created through JsonFactory.createParser(DataInput). Not known: whether IB Gateway parses JSON from a DataInput source, and whose data that is. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2020-36518",
+        "description": "jackson-databind: denial of service via a large depth of nested objects",
+        "aliases": [
+          "GHSA-57j2-w4cx-62h2"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: deserialising a JSON document with a large depth of nested objects, which ends in a StackOverflowError. Not known: which inputs IB Gateway binds with jackson-databind. IB Gateway is closed source and this project does not inspect its code. In this image the API listener accepts loopback connections only and the relay is published on loopback or a private address (reference compose). The open question is whether JSON from IBKR's servers or from an API client on a trusted host reaches this code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2021-46877",
+        "description": "jackson-databind: Possible DoS if using JDK serialization to serialize JsonNode",
+        "aliases": [
+          "GHSA-3x8x-79m2-3w2w"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: 'uncommon situations involving JsonNode JDK serialization'. Not known: whether IB Gateway serialises JsonNode values with JDK serialisation. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2022-42003",
+        "description": "jackson-databind: deep wrapper array nesting wrt UNWRAP_SINGLE_VALUE_ARRAYS",
+        "aliases": [
+          "GHSA-jjjh-jjxp-wpff"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: the UNWRAP_SINGLE_VALUE_ARRAYS feature is enabled and the input nests arrays deeply. Not known: how IB Gateway configures its ObjectMapper. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2022-42004",
+        "description": "jackson-databind: use of deeply nested arrays",
+        "aliases": [
+          "GHSA-rgv9-q543-rqg4"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: deeply nested arrays, and an application is 'vulnerable only with certain customized choices for deserialization'. Not known: whether IB Gateway makes those choices. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-19032",
+        "description": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core/jackson-databind: Jackson-databind: Uncontrolled URI scheme resolution in Path deserialization",
+        "aliases": [
+          "GHSA-wjgm-6hv5-3cvf"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: untrusted JSON bound to a java.nio.file.Path value; with only the JDK's built-in file system providers the resolved path is inert. Not known: whether IB Gateway binds Path values from JSON and whether another FileSystemProvider is on its class path. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-50193",
+        "description": "jackson-databind: Jackson-databind: Denial of Service via deeply nested JSON processing",
+        "aliases": [
+          "GHSA-3wrr-7qpf-2prh"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "The CVE text gives the affected range as 2.13.0 up to 2.14.0, which would exclude the bundled 2.12.3; Trivy's advisory data matches 2.12.3 (fixed version 2.14.0), which is why it is reported. The trigger is reading deeply nested JSON as JsonNode and writing it out with JsonNode.toString(). Not resolved here: which range is right, and whether IB Gateway uses that pattern. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54512",
+        "description": "jackson-databind: jackson-databind: Arbitrary code execution via PolymorphicTypeValidator bypass",
+        "aliases": [
+          "GHSA-j3rv-43j4-c7qm"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: polymorphic typing is enabled with a PolymorphicTypeValidator allow-list and the attacker controls the type identifier in the JSON; a class outside the allow-list is then instantiated. Not known: whether IB Gateway enables polymorphic typing on any input. IB Gateway is closed source and this project does not inspect its code. If it does, the affected process is the Gateway JVM, which holds the brokerage session. In this image the API listener accepts loopback connections only and the relay is published on loopback or a private address (reference compose)."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54513",
+        "description": "jackson-databind: Jackson-databind: Security bypass allows arbitrary code execution",
+        "aliases": [
+          "GHSA-rmj7-2vxq-3g9f"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a PolymorphicTypeValidator built with allowIfSubTypeIsArray() and attacker-controlled JSON; an array of a class outside the allow-list is then instantiated. Not known: whether IB Gateway builds such a validator. IB Gateway is closed source and this project does not inspect its code. If it does, the affected process is the Gateway JVM, which holds the brokerage session. In this image the API listener accepts loopback connections only and the relay is published on loopback or a private address (reference compose)."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54514",
+        "description": "jackson-databind: jackson-databind: Information Disclosure via Eager DNS Resolution",
+        "aliases": [
+          "GHSA-hgj6-7826-r7m5"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: untrusted JSON bound to a type that contains an InetSocketAddress field; a DNS query for an attacker-chosen name is then sent during deserialisation. Not known: whether IB Gateway binds such a type. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54515",
+        "description": "jackson-databind: jackson-databind: Ignored properties can be unexpectedly modified",
+        "aliases": [
+          "GHSA-5jmj-h7xm-6q6v"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a bean that combines per-property @JsonIgnoreProperties with case-insensitive property matching; an ignored property then becomes writable from JSON. Not known: whether IB Gateway has such a type. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-59889",
+        "description": "com.fasterxml.jackson.core/jackson-databind: Jackson-databind: Privilege escalation via improper handling of @JsonUnwrapped properties",
+        "aliases": [
+          "GHSA-5gvw-p9qm-jgwh"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "The CVE text gives the affected range as starting at 2.18.0, which would exclude the bundled 2.12.3; Trivy's advisory data matches 2.12.3, which is why it is reported. The trigger is a property annotated with both @JsonView and @JsonUnwrapped. Not resolved here: which range is right, and whether IB Gateway has such a property. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-77310",
+        "description": "com.fasterxml.jackson.core/jackson-databind: jackson-databind: Server-Side Request Forgery and internal host enumeration via eager DNS resolution",
+        "aliases": [
+          "GHSA-vvgp-rfg2-7rr6"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: attacker-controlled JSON bound to a java.net.InetAddress value; a DNS query for an attacker-chosen name is then sent during deserialisation. Not known: whether IB Gateway binds InetAddress values from JSON. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-83557",
+        "description": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core/jackson-databind: jackson-databind: Path traversal via incomplete type validation",
+        "aliases": [
+          "GHSA-gx83-3vf8-gh7j"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a property or class annotated with @JsonTypeInfo whose base type is java.lang.Comparable, with no custom PolymorphicTypeValidator; an attacker-chosen class that implements Comparable is then instantiated. Not known: whether IB Gateway declares such a type. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-91776",
+        "description": "jackson-databind: com.fasterxml.jackson/jackson-core: jackson-databind: Denial of Service via unbounded cache growth in TypeDeserializerBase",
+        "aliases": [
+          "GHSA-wv8q-qhhj-9h54"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: name-based polymorphism with a fallback type (defaultImpl), attacker-influenced type identifiers and a long-lived ObjectMapper; memory grows with every new identifier. Not known: whether IB Gateway uses that configuration. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-91777",
+        "description": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core:jackson-databind: Jackson-databind: Denial of Service via quadratic forward-reference completion",
+        "aliases": [
+          "GHSA-cxp5-3px4-pw24"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: attacker-influenced JSON deserialised into a collection or map that uses @JsonIdentityInfo object ids, which costs quadratic CPU time. Not known: whether IB Gateway uses object identity in any bound type. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2024-47554",
+        "description": "apache-commons-io: Possible denial of service attack on untrusted input to XmlStreamReader",
+        "aliases": [
+          "GHSA-78wr-2p64-hpwj"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/commons-io/commons-io@2.11.0"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: maliciously crafted input read through org.apache.commons.io.input.XmlStreamReader, which then uses excessive CPU time. Not known: whether IB Gateway uses that class, and on which input. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-49844",
+        "description": "org.apache.logging.log4j/log4j-api: Apache Log4j API: Malformed JSON output due to improper encoding of floating-point values",
+        "aliases": [
+          "GHSA-qv9r-c865-cp47"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/org.apache.logging.log4j/log4j-api@2.25.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: a layout that relies on MapMessage.asJson() and a logged MapMessage that carries an attacker-controlled non-finite floating-point value; the log output is then not valid JSON. Not known: IB Gateway's Log4j configuration. IB Gateway is closed source and this project does not inspect its code. Nothing in this image parses the Gateway's log files as JSON."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-34477",
+        "description": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Man-in-the-middle attack due to incomplete hostname verification",
+        "aliases": [
+          "GHSA-6hg6-v5c8-fphq"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: an SMTP, Socket or Syslog appender with TLS configured through a nested Ssl element. Not known: IB Gateway's Log4j configuration, in particular whether it uses a network appender. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-34478",
+        "description": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Log injection via CRLF sequences due to configuration attribute renames",
+        "aliases": [
+          "GHSA-445c-vh5m-36rj"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: Rfc5424Layout configured directly for a stream-based syslog service. Not known: IB Gateway's Log4j configuration. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-34479",
+        "description": "org.apache.logging.log4j/log4j-1.2-api: Apache Log4j 1-to-Log4j 2 bridge: Log processing denial of service due to improper XML escaping",
+        "aliases": [
+          "GHSA-h383-gmxw-35v2"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "The CVE text names the Log4j 1 to Log4j 2 bridge (Log4j1XmlLayout); Trivy's advisory data matches log4j-core 2.25.3, which is why it is reported. No jar named log4j-1.2-api is in the Gateway's jars directory of this image (file listing), but classes can be repackaged inside IBKR's own jars, which were not inspected. Not known: whether the bridge layout is present and configured. IB Gateway is closed source and this project does not inspect its code."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-34480",
+        "description": "org.apache.logging.log4j/log4j-core: Apache Log4j Core: Invalid XML output causes denial of service in logging",
+        "aliases": [
+          "GHSA-3pxv-7cmr-fjr4"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/brokersre-ib-gateway?repository_url=ghcr.io/rocketedge/brokersre-ib-gateway",
+          "subcomponents": [
+            {
+              "@id": "pkg:maven/org.apache.logging.log4j/log4j-core@2.25.3"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Trigger per the CVE text: XmlLayout in use and a log message or MDC value that contains characters forbidden in XML 1.0; the output is then malformed XML or the log event is lost. Not known: IB Gateway's Log4j configuration. IB Gateway is closed source and this project does not inspect its code."
+    }
+  ]
+}
