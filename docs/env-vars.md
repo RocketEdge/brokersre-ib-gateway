@@ -88,6 +88,7 @@ Read by Docker Compose or by the scripts, never by the container.
 |---|---|---|---|
 | compose/docker-compose.multi.yml | `IBGW_LIVE_PORT`, `IBGW_PAPER_PORT` | `4001`, `4002` | Host ports of the two relays. |
 | compose/docker-compose.multi.yml | `LIVE_READ_ONLY_API`, `PAPER_READ_ONLY_API` | `yes` | `READ_ONLY_API` per gateway. |
+| compose/docker-compose.console.yml | `IBGW_CONSOLE_PORT` | `5901` | Host port, on `127.0.0.1` only, of the break-glass console's bridge ([console.md](console.md)). The same file passes `VNC_VIEW_ONLY` on to the gateway. |
 | examples/compose-with-client.yml | `STRATEGY_IMAGE` | the gateway image | Image of the placeholder strategy service. |
 | examples/wait-for-gateway.sh and both sample clients | `IBGW_HOST`, `IBGW_PORT` | `127.0.0.1`, `4002` | Gateway endpoint. |
 | examples/wait-for-gateway.sh | `IBGW_WAIT_TIMEOUT`, `IBGW_ATTEMPT_TIMEOUT` | `300`, `5` | Overall and per-attempt wait in seconds. |

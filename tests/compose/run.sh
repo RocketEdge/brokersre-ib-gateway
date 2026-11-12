@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016  # single-quoted $(...) and $VAR are evaluated by jq or inside a container
 # Compose-level tests for the files users copy: compose/docker-compose.multi.yml (several
-# gateways on one host) and examples/compose-with-client.yml (a gateway and a strategy on a
-# private network). They run against a built image with the Docker CLI, need no IBKR
+# gateways on one host), examples/compose-with-client.yml (a gateway and a strategy on a
+# private network) and compose/docker-compose.console.yml (the break-glass console on top of
+# the reference compose). They run against a built image with the Docker CLI, need no IBKR
 # credentials and never contact IBKR: every container runs with IBC_LAUNCH=no.
 #
 # Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh
 # Environment (optional):
-#   COMPOSE_TEST_PROJECT     compose project name prefix (default ibgw-compose-test); the two
-#                            stacks are <prefix>-multi and <prefix>-client
+#   COMPOSE_TEST_PROJECT     compose project name prefix (default ibgw-compose-test); the
+#                            stacks are <prefix>-multi, <prefix>-client and <prefix>-console
 #   COMPOSE_TEST_LIVE_PORT   host port for the live gateway while the stack runs (default 14001)
 #   COMPOSE_TEST_PAPER_PORT  the same for the paper gateway (default 14002)
+#   COMPOSE_TEST_CONSOLE_PORT  host port of the console bridge while the stack runs (default 15901)
 #   The defaults of the shipped file (4001/4002) are asserted on the rendered configuration;
 #   other ports are used for the running stack so that a gateway already running on this host
 #   does not fail the test.
@@ -29,6 +31,7 @@ IMAGE="${IMAGE:?set IMAGE to the image under test}"
 PROJECT="${COMPOSE_TEST_PROJECT:-ibgw-compose-test}"
 LIVE_PORT="${COMPOSE_TEST_LIVE_PORT:-14001}"
 PAPER_PORT="${COMPOSE_TEST_PAPER_PORT:-14002}"
+CONSOLE_PORT="${COMPOSE_TEST_CONSOLE_PORT:-15901}"
 failures=0
 pass() { echo "PASS  $1"; }
 fail() {
@@ -45,6 +48,7 @@ repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 multi_file="$(host_path "${repo_root}/compose/docker-compose.multi.yml")"
 reference_file="$(host_path "${repo_root}/compose/docker-compose.example.yml")"
 client_file="$(host_path "${repo_root}/examples/compose-with-client.yml")"
+console_file="$(host_path "${repo_root}/compose/docker-compose.console.yml")"
 check_usernames="${repo_root}/scripts/check-compose-usernames.sh"
 
 # Obviously fake credentials, one set per instance. mktemp -d creates a 0700 directory; uid
@@ -60,11 +64,14 @@ done
 # The single-gateway layout, for the client example.
 printf 'dummysingle' >"${secrets_dir}/ib-username"
 printf 'dummypassword-not-real-single' >"${secrets_dir}/ib-password"
+# The break-glass console's password: an obvious fake, assembled so no scanner objects.
+printf '%s\n' "dummy""vnc" >"${secrets_dir}/vnc-password"
 chmod -R a+rX "${secrets_dir}"
 host_secrets="$(host_path "${secrets_dir}")"
 
 multi_project="${PROJECT}-multi"
 client_project="${PROJECT}-client"
+console_project="${PROJECT}-console"
 # compose_multi ARGS...: docker compose on the multi-gateway file as shipped, in test mode.
 compose_multi() {
   IBGW_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no \
@@ -75,10 +82,17 @@ compose_client() {
   IBGW_IMAGE="${IMAGE}" STRATEGY_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no \
     docker compose -p "${client_project}" -f "${client_file}" "$@"
 }
+# compose_console ARGS...: the reference compose with the console override, as the console
+# guide starts it, in test mode and on a test port for the bridge.
+compose_console() {
+  IBGW_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no IBGW_CONSOLE_PORT="${CONSOLE_PORT}" \
+    PRIVATE_IP=127.0.0.1 docker compose -p "${console_project}" -f "${reference_file}" -f "${console_file}" "$@"
+}
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
   compose_multi --profile live --profile paper down -v --remove-orphans >/dev/null 2>&1 || true
   compose_client down -v --remove-orphans >/dev/null 2>&1 || true
+  compose_console down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "${secrets_dir}" "${work_dir}"
 }
 trap cleanup EXIT
@@ -309,6 +323,75 @@ if compose_client down -v >/dev/null 2>&1 && [ $((SECONDS - s_start)) -lt 90 ] &
   pass "down -v stops both and leaves no container, volume or network"
 else
   fail "client down" "took $((SECONDS - s_start)) s; left: $(project_leftovers "${client_project}" | tr '\n' ' ')"
+fi
+
+echo "== break-glass console on top of the reference compose (compose/docker-compose.console.yml) =="
+# docs/console.md tells a person to add this file with a second -f, open a bridge with
+# `docker compose exec`, and point a VNC viewer at the host's loopback port. The test does the
+# same, the bash client of the container suite standing in for the viewer on the host.
+rendered_console="$(compose_console config --format json 2>/dev/null)"
+rendered_console_default="$(IBGW_IMAGE="${IMAGE}" IBGW_SECRETS_DIR="${host_secrets}" docker compose -p "${console_project}" -f "${reference_file}" -f "${console_file}" config --format json 2>/dev/null)"
+rendered_console_input="$(VNC_VIEW_ONLY=no compose_console config --format json 2>/dev/null)"
+check "console: the VNC password comes from a secret file and the console is view-only by default" "${rendered_console}" \
+  '.services["ib-gateway"] | .environment.VNC_SERVER_PASSWORD_FILE == "/run/secrets/vnc-password" and .environment.VNC_VIEW_ONLY == "yes" and ([.secrets[].source] | index("vnc-password") != null) and (.environment | has("VNC_SERVER_PASSWORD") | not)'
+check "console: VNC_VIEW_ONLY=no in the environment of docker compose is passed on" "${rendered_console_input}" \
+  '.services["ib-gateway"].environment.VNC_VIEW_ONLY == "no"'
+check "console: the bridge port is published on the host's loopback only (5901 by default), the VNC port 5900 never" "${rendered_console_default}" \
+  '.services["ib-gateway"].ports | ([.[] | select(.target == 5901)] | length == 1 and .[0].host_ip == "127.0.0.1" and (.[0].published | tostring) == "5901") and ([.[] | select(.target == 5900)] | length == 0)'
+check "console: IBGW_CONSOLE_PORT moves the host port" "${rendered_console}" \
+  ".services[\"ib-gateway\"].ports | [.[] | select(.target == 5901)] | .[0].host_ip == \"127.0.0.1\" and (.[0].published | tostring) == \"${CONSOLE_PORT}\""
+check_pair "console: the hardening settings of the reference compose are unchanged" "${reference}" "${rendered_console}" \
+  "${hardening}"' (.[0].services["ib-gateway"] | hardening) == (.[1].services["ib-gateway"] | hardening)'
+# The reference file publishes 4001 and 4002; the running stack uses the test ports instead, so
+# that a gateway already running on this host does not fail the test.
+printf '%s\n' 'services:' '  ib-gateway:' '    ports: !override' \
+  "      - \"127.0.0.1:${LIVE_PORT}:4003\"" "      - \"127.0.0.1:${PAPER_PORT}:4004\"" "      - \"127.0.0.1:${CONSOLE_PORT}:5901\"" >"${work_dir}/console-test-ports.yml"
+up_console() { compose_console -f "$(host_path "${work_dir}/console-test-ports.yml")" "$@"; }
+console_container="${console_project}-ib-gateway-1"
+console_logs() { docker logs "${console_container}" 2>&1; }
+# shellcheck disable=SC2329  # invoked through wait_for
+console_has_event() { console_logs | grep -q "\"event\":\"$1\""; }
+bridge_open() { in_container "${console_container}" 'timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/5901" 2>/dev/null'; }
+bridge_closed() { [ "$(docker inspect -f '{{.State.Running}}' "${console_container}" 2>/dev/null)" = "true" ] && ! bridge_open; }
+up_console down -v --remove-orphans >/dev/null 2>&1 || true
+if up_console up -d >/dev/null 2>&1 && wait_for 60 console_has_event vnc_enabled \
+  && console_logs | jq_image -es 'map(select(.event == "vnc_enabled")) | length == 1 and .[0].data.view_only == "yes"' >/dev/null 2>&1; then
+  pass "console: the reference compose with the override starts (hardened, test mode) with the console on, view-only"
+else
+  fail "console up" "$(console_logs | tail -3 | cut -c1-300)"
+fi
+if bridge_closed; then
+  pass "console: until a person opens the bridge nothing listens on the bridge port"
+else
+  fail "console bridge" "5901 listens inside the container before the bridge was opened"
+fi
+# The two commands of docs/console.md, word for word after the compose options.
+up_console exec -d ib-gateway socat TCP-LISTEN:5901,fork,reuseaddr TCP:127.0.0.1:5900 >/dev/null 2>&1
+wait_for 15 bridge_open
+viewer_out="$(bash "${repo_root}/tests/container/vnc-client.sh" --host 127.0.0.1 --port "${CONSOLE_PORT}" --password-file "${secrets_dir}/vnc-password" --hold 1 2>&1)"
+viewer_rc=$?
+if [ "${viewer_rc}" -eq 0 ] && wait_for 15 console_has_event vnc_client_disconnected \
+  && console_logs | jq_image -es 'map(select(.event == "vnc_client_connected")) | length == 1 and .[0].level == "warn" and .[0].data.view_only == "yes"' >/dev/null 2>&1; then
+  pass "console: a viewer on the host reaches the console through the bridge, and the visit is two events"
+else
+  fail "console viewer" "exit ${viewer_rc} (${viewer_out}); logs: $(console_logs | tail -2 | cut -c1-300)"
+fi
+if console_logs | grep -qF -- "$(cat "${secrets_dir}/vnc-password")"; then
+  fail "console leak" "the VNC password appears in the container's output"
+else
+  pass "console: the VNC password is not in the container's output"
+fi
+up_console exec -T ib-gateway pkill -f TCP-LISTEN:5901 >/dev/null 2>&1
+if wait_for 10 bridge_closed && [ "$(docker inspect -f '{{.State.Running}}' "${console_container}" 2>/dev/null)" = "true" ] \
+  && in_container "${console_container}" 'timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/4004"'; then
+  pass "console: closing the bridge leaves the gateway and its API relay running"
+else
+  fail "console bridge close" "bridge still open, the container stopped, or the API relay is gone"
+fi
+if up_console down -v >/dev/null 2>&1 && [ -z "$(project_leftovers "${console_project}")" ]; then
+  pass "console: down -v leaves no container, volume or network"
+else
+  fail "console down" "left: $(project_leftovers "${console_project}" | tr '\n' ' ')"
 fi
 
 echo
