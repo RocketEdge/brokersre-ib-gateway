@@ -738,6 +738,33 @@ Describe 'Commands' {
             Test-Path -LiteralPath $script:folder | Should -BeFalse
         }
 
+        It 'keeps every file when -RemoveData could not remove the container: the next run still needs them' {
+            $script:runtime = [pscustomobject]@{ Mode = 'None'; Distro = ''; EngineName = ''; OsType = ''; ServerVersion = ''; Detail = 'nothing' }
+            $before = Get-TestTreeSnapshot -Path $script:folder
+            $result = Invoke-GwUninstall -Path $script:folder -RemoveData -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            Get-TestTreeSnapshot -Path $script:folder | Should -Be $before
+            ($script:console -join "`n") | Should -Match 'Nothing was deleted from'
+        }
+
+        It 'keeps every file when docker compose down failed' {
+            $script:downExitCode = 1
+            $result = Invoke-GwUninstall -Path $script:folder -RemoveData -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            Test-Path -LiteralPath (Join-Path $script:folder 'kit-state.json') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $script:folder 'secrets\ib-password') | Should -BeTrue
+        }
+
+        It 'leaves the clock task when this gateway only replaced an existing one, or never managed to register it' {
+            Add-GwJournalEntry -Path $script:folder -Action 'ResumeClockFix' -Kind 'ScheduledTask' -Description 'replaced' `
+                -Data @{ TaskName = '\BrokerSRE\Gateway - clock fix after resume'; ExistedBefore = $true } | Out-Null
+            $failed = Add-GwJournalEntry -Path $script:folder -Action 'ResumeClockFix' -Kind 'ScheduledTask' -Description 'failed' `
+                -Data @{ TaskName = '\BrokerSRE\Gateway - clock fix after resume'; ExistedBefore = $false }
+            Set-GwJournalEntryState -Path $script:folder -Id $failed.Id -Note 'not applied: schtasks exit code 1'
+            Invoke-GwUninstall -Path $script:folder -Confirm:$false | Out-Null
+            $script:tasks | Should -Be @('\BrokerSRE\Gateway - clock fix after resume')
+        }
+
         It 'leaves the per-computer clock task alone when this gateway did not register it' {
             Invoke-GwUninstall -Path $script:folder -Confirm:$false | Out-Null
             $script:tasks | Should -Be @('\BrokerSRE\Gateway - clock fix after resume')

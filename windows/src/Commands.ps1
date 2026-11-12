@@ -886,9 +886,13 @@ function Invoke-GwUninstall {
     Acts only on a folder that holds the kit-state.json setup wrote; any other folder is
     refused untouched. Stops the stack ('docker compose stop', then 'down'), deletes the
     scheduled tasks of this gateway (the per-computer clock task only when this gateway
-    registered it) and, only with -RemoveData, also deletes the named volumes (gateway settings
+    created it) and, only with -RemoveData, also deletes the named volumes (gateway settings
     and logs) and the files the kit wrote: the two secret files, compose.yaml and its backups,
-    the state file, the journal and the log. Files the kit did not write are never deleted;
+    the state file, the journal and the log. The files are deleted only after everything
+    before succeeded: when the container engine does not answer, 'docker compose down' fails,
+    a task cannot be deleted or the container step was declined, nothing is deleted from the
+    folder and the exit code is 1, because compose.yaml and kit-state.json are what the next
+    run needs to remove the container and its volumes. Files the kit did not write are never deleted;
     the folder is removed only when it is empty afterwards. Without -RemoveData the folder,
     the secrets and the volumes stay. Host changes made by harden.ps1 are not reverted here: while the journal
     still lists some, -RemoveData refuses to delete the folder (the journal is what undo
@@ -933,7 +937,10 @@ function Invoke-GwUninstall {
         return [pscustomobject]@{ ExitCode = 1 }
     }
 
+    # False while a container of this gateway may still exist: its files are then kept.
+    $containerRemoved = $true
     if (Test-Path -LiteralPath (Join-Path $folder 'compose.yaml')) {
+        $containerRemoved = $false
         $preference = 'Auto'
         $distro = ''
         $recorded = Get-GwRuntimeFromState -State $state
@@ -953,20 +960,25 @@ function Invoke-GwUninstall {
                 Write-GwConsole -Message 'docker compose down failed.' -Status 'FAIL'
             }
             else {
+                $containerRemoved = $true
                 Write-GwConsole -Message 'The gateway container was stopped and removed.' -Status 'PASS'
             }
         }
     }
 
     # The start tasks belong to this gateway (they carry its trading mode). The clock task is
-    # one per computer: it is removed only when this gateway's journal shows it registered it.
+    # one per computer: it is removed only when this gateway's journal shows that it created
+    # the task (the entry was applied, is not reverted, and the task did not exist before).
     $taskNames = New-Object System.Collections.Generic.List[string]
     $taskNames.Add((Get-GwTaskName -Kind 'Boot' -TradingMode $tradingMode))
     $taskNames.Add((Get-GwTaskName -Kind 'SignIn' -TradingMode $tradingMode))
     $clockTask = Get-GwTaskName -Kind 'ClockFix'
-    if (@($journalEntries | Where-Object { $_.Kind -eq 'ScheduledTask' -and [string](Get-GwPropertyValue -InputObject $_.Data -Name 'TaskName' -Default '') -eq $clockTask }).Count -gt 0) {
-        $taskNames.Add($clockTask)
-    }
+    $createdClockTask = @($journalEntries | Where-Object {
+            $_.Kind -eq 'ScheduledTask' -and -not $_.Reverted -and
+            [string](Get-GwPropertyValue -InputObject $_.Data -Name 'TaskName' -Default '') -eq $clockTask -and
+            (Get-GwPropertyValue -InputObject $_.Data -Name 'ExistedBefore' -Default $false) -ne $true
+        })
+    if ($createdClockTask.Count -gt 0) { $taskNames.Add($clockTask) }
     foreach ($taskName in $taskNames) {
         if (-not (Test-GwKitTask -Name $taskName)) { continue }
         if (-not $PSCmdlet.ShouldProcess($taskName, 'Delete scheduled task')) { continue }
@@ -980,7 +992,16 @@ function Invoke-GwUninstall {
         }
     }
 
-    if ($RemoveData) {
+    if ($RemoveData -and ($exitCode -ne 0 -or (-not $containerRemoved -and -not $WhatIfPreference))) {
+        # compose.yaml and kit-state.json are what the next run needs to find and remove the
+        # container and its volumes (the log volume may hold the username). Deleting them now
+        # would orphan both and make the next run refuse the folder.
+        $kept = ('Nothing was deleted from {0}: a step above did not finish, and the folder holds what uninstall needs to remove the container and its volumes. ' +
+            'Fix what is reported above and run uninstall.ps1 -RemoveData again.') -f $folder
+        Write-GwConsole -Status 'FAIL' -Message $kept
+        $exitCode = 1
+    }
+    elseif ($RemoveData) {
         # Only the files the kit writes are deleted, by name. Anything else the operator keeps
         # in the folder stays, and the folder itself is removed only when it is empty.
         if ($PSCmdlet.ShouldProcess($folder, 'Delete the files the kit wrote here, including the IBKR secret files')) {
