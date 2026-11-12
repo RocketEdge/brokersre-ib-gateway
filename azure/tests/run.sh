@@ -1162,10 +1162,41 @@ group_lint() {
     '"$(tail -n 2 "${repo}/azure/README.md" | tr "\n" " ")" == *"Interactive Brokers, IBKR, IB Gateway and Trader Workstation are trademarks of Interactive Brokers LLC. This project is not affiliated with, endorsed by or sponsored by Interactive Brokers."*'
 }
 
+# ensure_images <image...>: pull every helper image that is not on this machine yet, quietly,
+# before any check runs.
+#
+# Why: many checks compare a tool's output together with its standard error, so that the
+# tool's own error message shows up in a failure. On a machine that has not pulled an image
+# yet, `docker run` writes "Unable to find image ... Pulling from ..." to standard error, and
+# that text lands in the compared value: the first check that used the yq image failed on the
+# first run in GitHub Actions, while every image was cached on the development host.
+# A pull that fails is reported once here; the checks that need the image then fail by name.
+ensure_images() {
+  local image
+  for image in "$@"; do
+    [[ -n "${image}" ]] || continue
+    if ! docker image inspect "${image}" >/dev/null 2>&1; then
+      if ! docker pull -q "${image}" >/dev/null 2>&1; then
+        echo "WARN  could not pull ${image}; the checks that use it will fail" >&2
+      fi
+    fi
+  done
+}
+
 groups=("$@")
 if [[ ${#groups[@]} -eq 0 ]]; then
   groups=(vector entrypoint pipeline drift kql kql-run bicep compose secrets lint)
 fi
+helper_images=("${VECTOR_IMAGE}" "${YQ_IMAGE}" "${SHELLCHECK_IMAGE}" "${SHFMT_IMAGE}" "${ACTIONLINT_IMAGE}" "${UBUNTU_IMAGE}")
+# jq and the .NET SDK come from the host when it has them (the CI runner has jq; the SDK image
+# is large, so it is pulled only for the groups that compile the query check).
+if ! command -v jq >/dev/null 2>&1; then helper_images+=("${JQ_IMAGE}"); fi
+if [[ " ${groups[*]} " == *" kql "* || " ${groups[*]} " == *" kql-run "* ]]; then
+  if ! command -v dotnet >/dev/null 2>&1 || [[ "$(dotnet --version 2>/dev/null | cut -d. -f1)" -lt 10 ]]; then
+    helper_images+=("${DOTNET_IMAGE}")
+  fi
+fi
+ensure_images "${helper_images[@]}"
 for group in "${groups[@]}"; do
   case "${group}" in
     vector) group_vector ;;
