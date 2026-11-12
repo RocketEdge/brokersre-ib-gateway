@@ -380,24 +380,25 @@ jobs:
           IDENTITY_REGEXP: '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
         run: |
           # Built with printf so every line stays indented inside this YAML block scalar.
-          notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
+          printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "IB Gateway $VERSION (IBKR $CHANNEL channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
             "Pin this exact build: \`$IMAGE@$DIGEST\`" \
             "Verify: \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '$IDENTITY_REGEXP'\`" \
             "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. Each platform has its own SBOM (\`sbom-$CHANNEL-linux-amd64.cdx.json\`, \`sbom-$CHANNEL-linux-arm64.cdx.json\`), attested to that platform's manifest; the two manifest digests are in \`digests-$CHANNEL.json\` under \`platforms\`. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
-            "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers.")"
-          assets=("digests-$CHANNEL.json" "sbom-$CHANNEL-linux-amd64.cdx.json" "sbom-$CHANNEL-linux-arm64.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json)
-          # The tag is created server-side by the release API: GITHUB_TOKEN may not `git push` a ref
-          # whose commit contains workflow files ("refusing to allow a GitHub App to create or update workflow").
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # Republishing an already released version: replace the assets and the notes, so the
-            # digest the notes show is the one the channel tag now points at. Editing a release
-            # sends watchers no notification; only a new release does.
-            gh release upload "$TAG" "${assets[@]}" --clobber
-            # A release made before SBOMs were per platform carries one `sbom-<channel>.cdx.json`
-            # that describes the previous image; it must not stay beside the new assets.
-            gh release delete-asset "$TAG" "sbom-$CHANNEL.cdx.json" --yes >/dev/null 2>&1 || true
-            gh release edit "$TAG" --notes "$notes"
-          else
-            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
-          fi
+            "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers." \
+            > "$RUNNER_TEMP/release-notes.md"
+          # The tags moved in the step before this one, so this step must not die of a short
+          # GitHub outage (it did, on 2026-11-13: HTTP 502 on one asset left the tags on a new
+          # image and the release on the previous one). scripts/release-upsert.sh repeats the
+          # whole create-or-update and reads the release back before it reports success.
+          #   - A new release: its tag is created server-side by the release API (GITHUB_TOKEN
+          #     may not `git push` a ref whose commit contains workflow files).
+          #   - A release that exists (the same version republished): assets and notes are
+          #     replaced, so the digest the notes show is the one the channel tag points at.
+          #     Editing a release sends watchers no notification; only a new release does.
+          #   - A release made before SBOMs were per platform carries one
+          #     `sbom-<channel>.cdx.json` that describes the previous image; it is removed.
+          scripts/release-upsert.sh --tag "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --expect-in-notes "$DIGEST" \
+            --remove-asset "sbom-$CHANNEL.cdx.json" \
+            "digests-$CHANNEL.json" "sbom-$CHANNEL-linux-amd64.cdx.json" "sbom-$CHANNEL-linux-arm64.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json
