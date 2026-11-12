@@ -74,3 +74,16 @@ The image runs with `read_only: true`. The paths it writes are:
 
 The entrypoint checks these paths before starting anything and exits with the structured stdout
 event `dirs_not_writable` when one is not writable by uid 1000.
+
+## Variables of the compose files and the examples
+
+Read by Docker Compose or by the scripts, never by the container.
+
+| Read by | Variable | Default | Meaning |
+|---|---|---|---|
+| compose/docker-compose.multi.yml | `IBGW_LIVE_PORT`, `IBGW_PAPER_PORT` | `4001`, `4002` | Host ports of the two relays. |
+| compose/docker-compose.multi.yml | `LIVE_READ_ONLY_API`, `PAPER_READ_ONLY_API` | `yes` | `READ_ONLY_API` per gateway. |
+| examples/compose-with-client.yml | `STRATEGY_IMAGE` | the gateway image | Image of the placeholder strategy service. |
+| examples/wait-for-gateway.sh and both sample clients | `IBGW_HOST`, `IBGW_PORT` | `127.0.0.1`, `4002` | Gateway endpoint. |
+| examples/wait-for-gateway.sh | `IBGW_WAIT_TIMEOUT`, `IBGW_ATTEMPT_TIMEOUT` | `300`, `5` | Overall and per-attempt wait in seconds. |
+| both sample clients | `IB_CLIENT_ID` | `101` | TWS API client id. |

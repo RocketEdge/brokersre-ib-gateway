@@ -20,6 +20,8 @@ by or endorsed by Interactive Brokers.
 - [Quick start](#quick-start)
 - [Going live](#going-live)
 - [The weekly login](#the-weekly-login)
+- [Several gateways on one host](#several-gateways-on-one-host)
+- [Connecting a strategy](#connecting-a-strategy)
 - [Environment variables](#environment-variables)
 - [Ports, volumes and the sidecar contract](#ports-volumes-and-the-sidecar-contract)
 - [Health, phases and logs](#health-phases-and-logs)
@@ -174,6 +176,30 @@ the container.
 
 Plan it: decide who approves the prompt and when, and make sure that person learns that it is
 waiting.
+
+## Several gateways on one host
+
+IBKR allows one session per username and this image runs one session per container, so "live
+and paper together" or "one gateway per desk" means several services.
+[compose/docker-compose.multi.yml](compose/docker-compose.multi.yml) runs a `live` gateway
+(host port 4001) and a `paper` gateway (4002) side by side, each with its own secrets, volumes
+and instance label, and carries a commented block for further usernames and a cold standby:
+
+```bash
+scripts/check-compose-usernames.sh compose/secrets   # two gateways must never share a username
+docker compose -f compose/docker-compose.multi.yml --profile live --profile paper up -d
+```
+
+Secrets layout, ports and the pattern for more usernames: [compose/README.md](compose/README.md).
+
+## Connecting a strategy
+
+The API relay listens only while the gateway is logged in, so "connection refused" means "not
+ready yet": retry. [examples/README.md](examples/README.md) states the readiness rules in plain
+words (wait for healthy, stop sending on IBKR code 1100, continue on 1102, re-subscribe on 1101,
+expect the daily restart) and ships read-only samples that follow them: `wait-for-gateway.sh`,
+a compose file with the strategy on a private network, and a Python and a C# client. The
+samples were run against stand-ins only, never against a logged-in Gateway.
 
 ## Environment variables
 
@@ -335,6 +361,7 @@ docker buildx bake stable --set '*.platform=linux/amd64' --load
 git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core  # LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable   # unit suite inside the image
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh  # offline container tests
+IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh    # compose files as shipped: several gateways, gateway + strategy
 ```
 
 The container tests never log in: the IBC smoke test runs with `--network none` and proves that
@@ -424,13 +451,16 @@ file, JSON event contract on stdout and on the log volume, a preflight (`doctor`
 variables carried over from gnzsnz which this image ignores, a relay that follows the login,
 resource samples, command server on loopback, checksum pinning of every input, SBOM and
 signatures, read-only filesystem support.
+`scripts/migrate-from-gnzsnz.sh old.env > new.env` converts a gnzsnz `.env` file and reports
+every variable it dropped or renamed on stderr, without printing a value.
 
 ## Documentation
 
 [docs/architecture.md](docs/architecture.md) (Mermaid), [docs/adr/README.md](docs/adr/README.md),
 [docs/changes.md](docs/changes.md), [docs/limitations.md](docs/limitations.md),
 [docs/env-vars.md](docs/env-vars.md), [docs/log-contract.md](docs/log-contract.md),
-[docs/upgrade-policy.md](docs/upgrade-policy.md).
+[docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
+[examples/README.md](examples/README.md).
 
 ## License
 

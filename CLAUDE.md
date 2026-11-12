@@ -10,11 +10,14 @@ derived from gnzsnz/ib-gateway-docker and consumed by RocketEdge BrokerSRE. This
 eval "$(scripts/bake-env.sh)"                                        # variables from versions.json (jq)
 docker buildx bake --print stable latest > /dev/null                 # bake definition resolves
 docker buildx bake stable --set '*.platform=linux/amd64' --load      # local build
-hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh
+hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh examples/*.sh
 git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
 tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch, README table), on the host (needs jq)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
+IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy); offline
+(cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
+(cd examples/csharp && dotnet build -warnaserror && dotnet test && dotnet format GatewayClient.slnx --verify-no-changes)
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
@@ -56,6 +59,9 @@ All of these must be green before claiming a change done; run them fresh.
    never retries. Do not add a retry, a schedule or a `pull_request` trigger to it.
 10. Public repository: no BrokerSRE pricing, client names, Azure identifiers or internal plans.
 11. Trademark sentence on every public artefact (README, release notes, image description).
+12. **Examples are read-only**: no order, cancel or what-if API name under `examples/`
+    (`examples/python/tests/test_no_order_api.py` scans for them), and no IBKR code or binary
+    is ever committed (the C# sample takes the path of the user's own `CSharpAPI.dll`).
 
 ## Layout
 
@@ -72,6 +78,11 @@ rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl,
 schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
 tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
 compose/docker-compose.example.yml
+compose/docker-compose.multi.yml, compose/README.md   several gateways on one host (profiles live/paper, commented third block)
+scripts/check-compose-usernames.sh                    no two gateways with the same username (SHA-256; prints no username)
+scripts/migrate-from-gnzsnz.sh                        gnzsnz .env -> this image's .env; report on stderr, never a value
+examples/                                             wait-for-gateway.sh, compose-with-client.yml, python/ (uv, ib_async), csharp/ (.NET 10; the user supplies IBKR's CSharpAPI.dll), README.md
+tests/compose/run.sh                                  both compose files above, started as shipped (docker CLI)
 .github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
@@ -134,3 +145,17 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
   tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
   processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.
+- `scripts/migrate-from-gnzsnz.sh` carries its own copy of the doctor's known names (it must run
+  outside the image); `tests/bats/ci/migrate-from-gnzsnz.bats` fails when the two differ, so a
+  new variable goes into `doctor.sh`, `docs/env-vars.md` and the converter together.
+- `docs/env-vars.md`: `doctor.bats` requires every backticked name in the first column of any
+  table to be known to the doctor; keep compose-only variables out of that column.
+- `docker-compose.multi.yml`: `docker compose down` without the profiles stops nothing; `exec
+  <service>` and `ps` work without them. Docker mounts a compose tmpfs `noexec`: run a script
+  placed there with `bash <file>`.
+- `gitleaks dir examples` and markdownlint over `examples/**/*.md` also scan
+  `examples/python/.venv` and the C# `bin`/`obj` folders: scan a clean checkout or a
+  `git archive` export.
+- ib_async 2.1.0: `readonly=True` still requests positions; `IB._onError` opens an
+  account-summary subscription on every 1102; `timeout` applies per connect step; its loggers
+  print IBKR's message text. The Python sample works around each (see its docstrings).
