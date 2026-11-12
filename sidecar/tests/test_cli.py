@@ -315,3 +315,41 @@ def test_run_starts_serves_and_stops_cleanly_when_told_to(tmp_path: Path) -> Non
     events = [json.loads(line)["event"] for line in out.getvalue().splitlines()]
     assert events[0] == "sidecar_started"
     assert events[-1] == "sidecar_stopped"
+
+
+def test_support_bundle_scrubs_the_values_of_redact_files_that_patterns_cannot_know(
+    tmp_path: Path,
+) -> None:
+    volume = tmp_path / "volume"
+    (volume / "events").mkdir(parents=True)
+    line = {
+        "ts": "2026-11-12T15:00:00.000Z",
+        "src": "ibc",
+        "level": "info",
+        "event": "login_dialog",
+        "msg": "window of CANARY_USERNAME opened",
+    }
+    (volume / "events" / "events.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
+    username = tmp_path / "ib-username"
+    username.write_bytes(b"\xef\xbb\xbfCANARY_USERNAME\r\n")
+    env = {"SIDECAR_PORT": str(free_port()), "GATEWAY_LOG_DIR": str(volume)}
+
+    def bundle_text(*extra: str) -> str:
+        out_dir = tmp_path / f"out{len(extra)}"
+        out_dir.mkdir()
+        code, out, _ = run_cli("support-bundle", "--out", str(out_dir), *extra, env=env)
+        assert code == 0
+        with tarfile.open(out.strip(), "r:gz") as archive:
+            member = archive.extractfile("events.jsonl")
+            assert member is not None
+            return member.read().decode()
+
+    assert "CANARY_USERNAME" in bundle_text()  # free text: no pattern can know a username
+    scrubbed = bundle_text("--redact-file", str(username))
+    assert "CANARY_USERNAME" not in scrubbed
+    assert "window of [REDACTED] opened" in scrubbed
+    code, _, err = run_cli(
+        "support-bundle", "--out", str(tmp_path), "--redact-file", str(tmp_path / "absent"), env=env
+    )
+    assert code == 2
+    assert "--redact-file" in err

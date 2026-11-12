@@ -98,6 +98,13 @@ def _build_parser(err: TextIO) -> _Parser:
     bundle = commands.add_parser("support-bundle", help="write a redacted support bundle")
     bundle.add_argument("--out", required=True, help="existing directory for the archive")
     bundle.add_argument("--lines", type=int, default=500, help="lines per feed (default 500)")
+    bundle.add_argument(
+        "--redact-file",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="file whose content is scrubbed from the bundle (for example the username secret)",
+    )
     return parser
 
 
@@ -263,11 +270,26 @@ def _notify_test(env: Mapping[str, str], out: TextIO, err: TextIO) -> int:
 
 
 def _support_bundle(
-    env: Mapping[str, str], out_dir: Path, lines: int, out: TextIO, err: TextIO
+    env: Mapping[str, str],
+    out_dir: Path,
+    lines: int,
+    redact_files: Sequence[str],
+    out: TextIO,
+    err: TextIO,
 ) -> int:
-    """Write the redacted support bundle into ``out_dir`` and print its path."""
+    """Write the redacted support bundle into ``out_dir`` and print its path.
+
+    ``redact_files`` name files whose content must not appear in the bundle (typically the
+    IBKR username secret): pattern-based redaction cannot know a username in free text.
+    """
     from brokersre_sidecar.clock import SystemClock
-    from brokersre_sidecar.config import ConfigError, load_secrets, load_settings
+    from brokersre_sidecar.config import (
+        ConfigError,
+        SecretFileError,
+        load_secrets,
+        load_settings,
+        read_secret_file,
+    )
     from brokersre_sidecar.redaction import SecretRegistry
     from brokersre_sidecar.support import create_bundle
 
@@ -281,6 +303,12 @@ def _support_bundle(
             err.write(f"{problem}\n")
         return EXIT_USAGE
     registry = SecretRegistry()
+    for name in redact_files:
+        try:
+            registry.add(read_secret_file(Path(name), "--redact-file"))
+        except SecretFileError as error:
+            err.write(f"{error}\n")
+            return EXIT_USAGE
     # Best effort: the secrets are loaded only so they can be scrubbed from the bundle; a
     # shell that cannot read the secret files still gets a (pattern-redacted) bundle.
     with contextlib.suppress(ConfigError):
@@ -413,4 +441,11 @@ def main(
 
         stdout.write(json.dumps(status_json_schema(), indent=2, sort_keys=True) + "\n")
         return EXIT_OK
-    return _support_bundle(environment, Path(arguments.out), arguments.lines, stdout, stderr)
+    return _support_bundle(
+        environment,
+        Path(arguments.out),
+        arguments.lines,
+        arguments.redact_file,
+        stdout,
+        stderr,
+    )
