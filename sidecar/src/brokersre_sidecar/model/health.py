@@ -161,6 +161,11 @@ class TaskSnapshot:
         restarts: Times the task was restarted after a crash.
         last_error: Exception class name of the last crash, or None.
         last_crash_at: When it last crashed, or None.
+        progress_age_s: Seconds since the task last completed a step of its loop (since
+            the supervisor started, before the first step). None for a task that
+            reports no progress (it serves requests or waits for a queue) and before
+            the supervisor runs.
+        stalled: True when ``progress_age_s`` is beyond the task's limit.
     """
 
     name: str
@@ -168,3 +173,5 @@ class TaskSnapshot:
     restarts: int
     last_error: str | None
     last_crash_at: datetime | None
+    progress_age_s: float | None = None
+    stalled: bool = False

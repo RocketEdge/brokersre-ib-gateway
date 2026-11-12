@@ -142,6 +142,11 @@ class Task(_Model):
     restarts: int = Field(ge=0)
     last_error: str | None = Field(description="Exception class name of the last crash")
     last_crash_at: Timestamp | None
+    progress_age_s: float | None = Field(
+        description="Seconds since the task completed a step of its loop; null for a task "
+        "that has no periodic step"
+    )
+    stalled: bool = Field(description="No progress for longer than the task's limit")
 
 
 class StatusDocument(_Model):
@@ -303,6 +308,8 @@ def build_status(
                     "restarts": task.restarts,
                     "last_error": task.last_error,
                     "last_crash_at": _ts(task.last_crash_at),
+                    "progress_age_s": _rounded(task.progress_age_s, 1),
+                    "stalled": task.stalled,
                 }
                 for task in tasks
             ],

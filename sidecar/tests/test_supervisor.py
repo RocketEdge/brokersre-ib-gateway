@@ -164,3 +164,61 @@ async def test_states_distinguish_running_from_waiting_to_restart() -> None:
     assert supervisor.snapshot()[0].state == "running"
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_progress_is_measured_per_task_and_a_silent_task_counts_as_stalled() -> None:
+    supervisor, _, clock = make()
+
+    async def idle() -> None:
+        await asyncio.Event().wait()
+
+    supervisor.add("follow", idle, stale_after_s=120.0)
+    supervisor.add("http", idle)  # serves requests: no periodic progress to report
+    task = asyncio.ensure_future(supervisor.run())
+    try:
+        await asyncio.sleep(0)
+        clock.advance(30)
+        records = {record.name: record for record in supervisor.snapshot()}
+        assert records["follow"].progress_age_s == 30.0  # counted from the start
+        assert records["http"].progress_age_s is None
+        supervisor.beat("follow")
+        clock.advance(120)
+        assert supervisor.stalled() == ()
+        clock.advance(1)
+        assert supervisor.stalled() == (("follow", 121.0),)
+        follow, http = supervisor.snapshot()
+        assert (follow.progress_age_s, follow.stalled) == (121.0, True)
+        assert http.stalled is False
+        supervisor.beat("follow")
+        assert supervisor.stalled() == ()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_task_that_only_crashes_makes_no_progress() -> None:
+    supervisor, _, clock = make()
+    supervisor.add("probe", Crashing(10_000), stale_after_s=60.0)
+    started = clock.monotonic()
+    task = asyncio.ensure_future(supervisor.run())
+    try:
+        async with asyncio.timeout(5):
+            # The recorded back-off sleeps move the fake clock: a minute of crash and retry.
+            while clock.monotonic() - started <= 61:  # noqa: ASYNC110
+                await asyncio.sleep(0)
+        assert [name for name, _ in supervisor.stalled()] == ["probe"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_before_the_supervisor_runs_nothing_is_stalled() -> None:
+    supervisor, _, clock = make()
+
+    async def idle() -> None:
+        await asyncio.Event().wait()
+
+    supervisor.add("follow", idle, stale_after_s=1.0)
+    clock.advance(500)
+    assert supervisor.stalled() == ()
+    assert supervisor.snapshot()[0].progress_age_s is None

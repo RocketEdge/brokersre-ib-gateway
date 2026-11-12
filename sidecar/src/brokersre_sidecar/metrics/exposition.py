@@ -220,4 +220,24 @@ def render_metrics(
             task.restarts,
             f'{{task="{task.name}"}}',
         )
+    for task in tasks:
+        if task.progress_age_s is None:
+            continue  # a task without a periodic step: nothing was measured
+        out.add(
+            "ibgw_sidecar_task_progress_age_seconds",
+            "gauge",
+            "Seconds since a sidecar task completed a step of its loop.",
+            task.progress_age_s,
+            f'{{task="{task.name}"}}',
+        )
+    for task in tasks:
+        if task.progress_age_s is None:
+            continue
+        out.add(
+            "ibgw_sidecar_task_stalled",
+            "gauge",
+            "1 while a sidecar task has made no progress for longer than its limit.",
+            1 if task.stalled else 0,
+            f'{{task="{task.name}"}}',
+        )
     return out.text()

@@ -511,3 +511,45 @@ async def test_a_stuck_volume_read_is_waited_for_and_never_started_twice(tmp_pat
     finally:
         release.set()
         await harness.shutdown()
+
+
+async def test_a_task_without_progress_fails_livez_and_is_visible(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, {}, webhook=False, feed_read_timeout_s=0.05)
+    release = threading.Event()
+    real_read = harness.app.feed.read
+    stuck = False
+
+    def read() -> Any:
+        if stuck:
+            release.wait(20)
+        return real_read()
+
+    harness.app.feed.read = read  # type: ignore[method-assign]
+    try:
+        await harness.start()
+        harness.volume.phase("starting")
+        await until(lambda: harness.app.gateway_snapshot().phase == "starting")
+        assert (await harness.get("/livez"))[:1] == (200,)
+        stuck = True
+        await until(lambda: harness.app.gateway_snapshot().phase is None)
+        # A minute and a half without one completed read of the volume.
+        await let_time_pass(harness, 90)
+        status, _, body = await harness.get("/livez")
+        assert status == 503
+        assert re.fullmatch(rb"no progress: follow \(\d+ s\)\n", body), body
+        tasks = {task["name"]: task for task in (await harness.status())["tasks"]}
+        assert tasks["follow"]["stalled"] is True
+        assert tasks["follow"]["progress_age_s"] >= 90
+        assert tasks["probe"]["stalled"] is False
+        assert tasks["http"]["progress_age_s"] is None
+        text = (await harness.get("/metrics"))[2].decode()
+        assert 'ibgw_sidecar_task_stalled{task="follow"} 1' in text
+        assert 'ibgw_sidecar_task_stalled{task="probe"} 0' in text
+        assert re.search(r'ibgw_sidecar_task_progress_age_seconds\{task="follow"\} \d', text)
+        stuck = False
+        release.set()
+        await until(lambda: harness.app.gateway_snapshot().phase == "starting")
+        assert (await harness.get("/livez"))[0] == 200
+    finally:
+        release.set()
+        await harness.shutdown()

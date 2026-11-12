@@ -280,6 +280,8 @@ Metric names are frozen. A value that was not measured is **omitted**, never exp
 | `ibgw_notify_dropped_total{channel}` | counter | Notifications discarded because the channel's outbox was full. |
 | `ibgw_notify_undelivered_alerts` | gauge | Active alerts that no channel has accepted yet. They are sent again with a capped back-off. |
 | `ibgw_sidecar_task_restarts_total{task}` | counter | Restarts of a sidecar task after a crash. |
+| `ibgw_sidecar_task_progress_age_seconds{task}` | gauge | Seconds since a periodic sidecar task (`follow`, `probe`, `notify`, `deadman`) completed a step of its loop. |
+| `ibgw_sidecar_task_stalled{task}` | gauge | 1 while such a task has made no progress for longer than its limit (about a minute plus the longest wait a step may take). `/livez` then answers 503. |
 | `ibgw_sidecar_info{version}` | gauge | Constant 1. |
 
 Sampler values are re-exported only while the gateway's sample is younger than two minutes.

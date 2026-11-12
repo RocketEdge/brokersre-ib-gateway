@@ -397,10 +397,27 @@
           "title": "Name",
           "type": "string"
         },
+        "progress_age_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Seconds since the task completed a step of its loop; null for a task that has no periodic step",
+          "title": "Progress Age S"
+        },
         "restarts": {
           "minimum": 0,
           "title": "Restarts",
           "type": "integer"
+        },
+        "stalled": {
+          "description": "No progress for longer than the task's limit",
+          "title": "Stalled",
+          "type": "boolean"
         },
         "state": {
           "enum": [
@@ -417,7 +434,9 @@
         "state",
         "restarts",
         "last_error",
-        "last_crash_at"
+        "last_crash_at",
+        "progress_age_s",
+        "stalled"
       ],
       "title": "Task",
       "type": "object"

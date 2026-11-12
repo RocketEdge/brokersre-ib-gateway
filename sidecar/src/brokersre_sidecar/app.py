@@ -85,6 +85,10 @@ EXIT_ORPHANED = 75
 """Exit code (EX_TEMPFAIL) when the sidecar leaves a dead network namespace."""
 
 _NAMESPACE_SAMPLE_S = 5.0
+# A periodic task that completes no step for this long (plus the longest wait its step
+# may legitimately take) is stalled, and /livez fails.
+_STALE_AFTER_S = 60.0
+_STALE_AFTER_TICKS = 30
 # A gateway in one of these phases is running (its feeds must also be fresh, if any).
 _ALIVE_PHASES = frozenset(
     {
@@ -232,8 +236,16 @@ class Application:
         """Exit code after ``run`` returned (75 after leaving an orphaned namespace)."""
 
         self._supervisor = Supervisor(self._clock, sleep)
-        self._supervisor.add("follow", self._follow)
-        self._supervisor.add("probe", self._probe)
+        self._stale_after_s = max(_STALE_AFTER_S, _STALE_AFTER_TICKS * tick_s)
+        self._supervisor.add(
+            "follow", self._follow, stale_after_s=self._stale_after_s + feed_read_timeout_s
+        )
+        # One probe step is bounded by the handshake plus the round trip.
+        self._supervisor.add(
+            "probe",
+            self._probe,
+            stale_after_s=self._stale_after_s + 2 * settings.probe_timeout_s,
+        )
         self._supervisor.add("http", self._serve_http)
 
         self._transport: HttpTransport | None = None
@@ -298,7 +310,7 @@ class Application:
             # ladder waits, and the restarted sidecar announces from the replayed feed.
             ready=lambda: self._feed_ready and not self.namespace_suspect,
         )
-        self._supervisor.add("notify", self._notify)
+        self._supervisor.add("notify", self._notify, stale_after_s=self._stale_after_s)
         for name in self._dispatcher.channel_names():
             self._supervisor.add(f"notify-{name}", self._channel_worker(name))
 
@@ -429,6 +441,7 @@ class Application:
                 log_event(_LOGGER, logging.INFO, "feed_read_resumed")
             self.feed.apply(batch)
             self._feed_ready = True
+            self._supervisor.beat("follow")
             phase = self._state.phase
             if phase != self._last_phase:
                 self._last_phase = phase
@@ -503,6 +516,7 @@ class Application:
         while True:
             self._check_namespace()
             await self._engine.tick()
+            self._supervisor.beat("probe")
             snapshot = self._engine.snapshot()
             if snapshot.status is not self._last_status:
                 self._last_status = snapshot.status
@@ -521,6 +535,7 @@ class Application:
         assert notifier is not None  # noqa: S101 - registered only when configured
         while True:
             await notifier.tick()
+            self._supervisor.beat("notify")
             await self._sleep(self._tick_s)
 
     async def _serve_http(self) -> None:
@@ -549,10 +564,14 @@ class Application:
         self._feed_worker.close()
 
     def _livez(self) -> Response:
-        """200 while the supervisor is running its tasks."""
-        if self._supervisor.alive():
-            return Response(200, _TEXT, b"ok\n")
-        return Response(503, _TEXT, b"the supervisor is not running\n")
+        """200 while the supervisor runs its tasks and every periodic task makes progress."""
+        if not self._supervisor.alive():
+            return Response(503, _TEXT, b"the supervisor is not running\n")
+        stalled = self._supervisor.stalled()
+        if stalled:
+            listed = ", ".join(f"{name} ({age:.0f} s)" for name, age in stalled)
+            return Response(503, _TEXT, f"no progress: {listed}\n".encode())
+        return Response(200, _TEXT, b"ok\n")
 
     def _readyz(self) -> Response:
         """200 only when the API probe is ready; otherwise 503 and a one-line reason."""

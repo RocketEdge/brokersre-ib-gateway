@@ -5,6 +5,11 @@ HTTP, notify). Each runs as its own task under ``Supervisor``; a task that raise
 is recorded (name of the exception, time, restart count) and started again after a capped
 exponential back-off. A crash in one task never cancels another. The records are published
 in ``/status`` and ``/metrics``, so a subsystem that keeps crashing is visible, not silent.
+
+A task that is running is not necessarily working: it may hang in a call that never
+returns. Every periodic task therefore reports each completed step with ``beat``; a task
+registered with ``stale_after_s`` that has not reported for longer is ``stalled``, which
+makes ``/livez`` fail. A task that crashes on every start makes no progress either.
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ class _Record:
     restarts: int = 0
     last_error: str | None = None
     last_crash_at: datetime | None = None
+    stale_after_s: float | None = None
+    progressed_at: float | None = None
 
 
 class Supervisor:
@@ -73,15 +80,42 @@ class Supervisor:
         self._records: dict[str, _Record] = {}
         self._alive = False
 
-    def add(self, name: str, factory: TaskFactory) -> None:
+    def add(self, name: str, factory: TaskFactory, *, stale_after_s: float | None = None) -> None:
         """Register a task before ``run`` is called.
 
         Args:
             name: Stable task name shown in ``/status`` and as a metric label.
             factory: Called for every (re)start of the task.
+            stale_after_s: The task calls ``beat`` after every step of its loop and counts
+                as stalled when it has not done so for this long. None for a task without
+                a periodic step.
         """
         self._factories[name] = factory
-        self._records[name] = _Record()
+        self._records[name] = _Record(stale_after_s=stale_after_s)
+
+    def beat(self, name: str) -> None:
+        """Record that task ``name`` completed one step of its loop just now."""
+        self._records[name].progressed_at = self._clock.monotonic()
+
+    def stalled(self) -> tuple[tuple[str, float], ...]:
+        """Return ``(name, seconds without progress)`` of every stalled task.
+
+        Empty while the supervisor is not running: nothing is expected to progress.
+        """
+        now = self._clock.monotonic()
+        return tuple(
+            (name, age)
+            for name, record in self._records.items()
+            if (age := self._age(record, now)) is not None
+            and record.stale_after_s is not None
+            and age > record.stale_after_s
+        )
+
+    def _age(self, record: _Record, now: float) -> float | None:
+        """Seconds since the record's task progressed; None when that is not tracked."""
+        if record.stale_after_s is None or record.progressed_at is None or not self._alive:
+            return None
+        return now - record.progressed_at
 
     def alive(self) -> bool:
         """Report whether the supervisor is running its tasks."""
@@ -89,6 +123,8 @@ class Supervisor:
 
     def snapshot(self) -> tuple[TaskSnapshot, ...]:
         """Return the supervision record of every task, in registration order."""
+        now = self._clock.monotonic()
+        stalled = {name for name, _ in self.stalled()}
         return tuple(
             TaskSnapshot(
                 name=name,
@@ -96,6 +132,8 @@ class Supervisor:
                 restarts=record.restarts,
                 last_error=record.last_error,
                 last_crash_at=record.last_crash_at,
+                progress_age_s=self._age(record, now),
+                stalled=name in stalled,
             )
             for name, record in self._records.items()
         )
@@ -103,6 +141,9 @@ class Supervisor:
     async def run(self) -> None:
         """Run every registered task until this coroutine is cancelled."""
         self._alive = True
+        started = self._clock.monotonic()
+        for record in self._records.values():
+            record.progressed_at = started  # the age counts from the start
         try:
             async with asyncio.TaskGroup() as group:
                 for name, factory in self._factories.items():

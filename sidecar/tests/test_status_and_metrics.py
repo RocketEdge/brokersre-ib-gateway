@@ -46,8 +46,9 @@ NOTIFIER_ON = NotifierSnapshot(
     state_persistence_reason="the state directory is not writable",
 )
 TASKS = (
-    TaskSnapshot("follow", "running", 0, None, None),
-    TaskSnapshot("probe", "backoff", 2, "RuntimeError", T0),
+    TaskSnapshot("follow", "running", 0, None, None, progress_age_s=0.4),
+    TaskSnapshot("probe", "backoff", 2, "RuntimeError", T0, progress_age_s=95.25, stalled=True),
+    TaskSnapshot("http", "running", 0, None, None),
 )
 
 
@@ -146,7 +147,10 @@ def test_a_ready_gateway_is_reported_with_every_contract_field() -> None:
         "restarts": 2,
         "last_error": "RuntimeError",
         "last_crash_at": "2026-11-12T15:00:00.000Z",
+        "progress_age_s": 95.2,
+        "stalled": True,
     }
+    assert document["tasks"][2]["progress_age_s"] is None  # reports no progress
 
 
 def test_unmeasured_values_are_null_never_zero_or_ok() -> None:
@@ -294,6 +298,11 @@ def test_the_frozen_metric_names_are_exposed_with_measured_values() -> None:
         "ibgw_notify_undelivered_alerts": 1,
         'ibgw_sidecar_task_restarts_total{task="follow"}': 0,
         'ibgw_sidecar_task_restarts_total{task="probe"}': 2,
+        'ibgw_sidecar_task_restarts_total{task="http"}': 0,
+        'ibgw_sidecar_task_progress_age_seconds{task="follow"}': 0.4,
+        'ibgw_sidecar_task_progress_age_seconds{task="probe"}': 95.25,
+        'ibgw_sidecar_task_stalled{task="follow"}': 0,
+        'ibgw_sidecar_task_stalled{task="probe"}': 1,
     }
 
 

@@ -93,7 +93,7 @@ def test_every_exported_metric_is_listed_in_the_readme() -> None:
         gateway=gateway_snapshot(last_metrics=sample),
         probe=probe_snapshot(),
         notifier=notifier,
-        tasks=(TaskSnapshot("probe", "running", 0, None, None),),
+        tasks=(TaskSnapshot("probe", "running", 0, None, None, progress_age_s=1.0),),
     )
     exported = set(re.findall(r"^# TYPE (\S+) ", text, flags=re.MULTILINE))
     assert len(exported) >= 19
