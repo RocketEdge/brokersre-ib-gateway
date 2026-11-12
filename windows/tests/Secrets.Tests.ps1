@@ -176,6 +176,27 @@ Describe 'Protect-GwSecretFolder' {
         Get-AccessSummary -Path $directory | Should -Be $before
         (Get-Acl -LiteralPath $directory).AreAccessRulesProtected | Should -BeFalse
     }
+
+    It 'adds SYSTEM and Administrators, and nobody else, with -IncludeSystem' {
+        $directory = Join-Path $TestDrive 'acl-system'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        Protect-GwSecretFolder -Path $directory -IncludeSystem -Confirm:$false
+        (Get-Acl -LiteralPath $directory).AreAccessRulesProtected | Should -BeTrue
+        $expected = @(
+            ('{0}|FullControl|Allow' -f $script:currentSid)
+            'S-1-5-18|FullControl|Allow'
+            'S-1-5-32-544|FullControl|Allow'
+        ) | Sort-Object
+        Get-AccessSummary -Path $directory | Sort-Object | Should -Be $expected
+    }
+
+    It 'can tighten a folder again after the fallback' {
+        $directory = Join-Path $TestDrive 'acl-tighten'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        Protect-GwSecretFolder -Path $directory -IncludeSystem -Confirm:$false
+        Protect-GwSecretFolder -Path $directory -Confirm:$false
+        Get-AccessSummary -Path $directory | Should -Be @(('{0}|FullControl|Allow' -f $script:currentSid))
+    }
 }
 
 Describe 'Get-GwAclOtherIdentity' {

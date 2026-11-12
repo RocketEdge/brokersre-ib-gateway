@@ -48,8 +48,11 @@ function Get-TestTreeSnapshot {
     Returns a sorted list describing every file and directory under a path.
     .DESCRIPTION
     Used by the -WhatIf tests: the snapshot taken before a run must equal the one taken after
-    it. Each entry is "<relative path>|<length>|<last write ticks>" (directories have length -1),
-    so a created, deleted, resized or rewritten file changes the snapshot.
+    it. A file entry is "<relative path>|file|<length>|<SHA-256>|<last write ticks>|<SDDL>", so a
+    created, deleted, rewritten (even with the same content) or re-permissioned file changes
+    the snapshot. A directory entry is "<relative path>|dir|<SDDL>": its timestamp is left out
+    because NTFS refreshes the copy kept in the parent's index lazily, which made an untouched
+    folder look changed. File times are read from the file itself, not from the listing.
     .PARAMETER Path
     Directory to describe. A missing directory yields an empty list.
     .OUTPUTS
@@ -63,9 +66,14 @@ function Get-TestTreeSnapshot {
     $entries = New-Object System.Collections.Generic.List[string]
     foreach ($item in (Get-ChildItem -LiteralPath $root -Recurse -Force)) {
         $relative = $item.FullName.Substring($root.Length).TrimStart('\')
-        $length = -1
-        if (-not $item.PSIsContainer) { $length = $item.Length }
-        $entries.Add(('{0}|{1}|{2}' -f $relative, $length, $item.LastWriteTimeUtc.Ticks))
+        $sddl = (Get-Acl -LiteralPath $item.FullName).Sddl
+        if ($item.PSIsContainer) {
+            $entries.Add(('{0}|dir|{1}' -f $relative, $sddl))
+            continue
+        }
+        $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+        $ticks = [System.IO.File]::GetLastWriteTimeUtc($item.FullName).Ticks
+        $entries.Add(('{0}|file|{1}|{2}|{3}|{4}' -f $relative, $item.Length, $hash, $ticks, $sddl))
     }
     $sorted = [string[]]($entries | Sort-Object)
     if ($null -eq $sorted) { return [string[]]@() }

@@ -108,7 +108,7 @@ function Resolve-GwFullPath {
     .SYNOPSIS
     Turns a PowerShell path into an absolute file-system path without requiring it to exist.
     .DESCRIPTION
-    .NET file APIs resolve relative paths against the process directory, which is not the
+    The file APIs of .NET resolve relative paths against the process directory, which is not the
     PowerShell location. Every path handed to System.IO goes through this function first.
     .PARAMETER Path
     Relative or absolute path; it may not exist yet.
@@ -255,8 +255,8 @@ function Find-GwIniKey {
     Locates a section and a key inside INI lines.
     .DESCRIPTION
     Shared by the read, set and remove helpers so they agree on what a section header, a key
-    line and a comment are. Section and key names compare case-insensitively (the documented
-    .wslconfig example itself mixes 'localhostForwarding' and 'localhostforwarding'). Lines
+    line and a comment are. Section and key names compare case-insensitively (the example in the
+    documentation of .wslconfig itself mixes 'localhostForwarding' and 'localhostforwarding'). Lines
     starting with '#' or ';' are comments.
     .PARAMETER Line
     Lines from Split-GwIniLine.

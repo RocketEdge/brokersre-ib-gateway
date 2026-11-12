@@ -45,12 +45,7 @@ function Write-GwSecretFile {
             throw (New-Object System.ArgumentException('The value contains a line break or a NUL character; nothing was written.'))
         }
         [System.IO.File]::WriteAllText($temporary, $text, (New-Object System.Text.UTF8Encoding($false)))
-        if ([System.IO.File]::Exists($target)) {
-            [System.IO.File]::Replace($temporary, $target, [NullString]::Value)
-        }
-        else {
-            [System.IO.File]::Move($temporary, $target)
-        }
+        Move-GwFileOverwrite -Source $temporary -Destination $target
     }
     finally {
         $text = $null
@@ -74,28 +69,52 @@ function Protect-GwSecretFolder {
     protected this way is still readable inside a container through a read-only bind mount,
     because Docker Desktop accesses Windows files as the signed-in user. Docker Engine inside a
     WSL distribution reaches the file through the same user's session (not verified here).
+    With -IncludeSystem the list also names SYSTEM and the Administrators group. That is the
+    fallback for a Docker installation whose file sharing runs under another account: still no
+    inheritance and no ordinary users, but not owner-only. setup.ps1 uses it only after the
+    owner-only list was shown not to work, and says so.
     .PARAMETER Path
     Existing folder, normally <gateway folder>\secrets.
+    .PARAMETER IncludeSystem
+    Also allow SYSTEM (S-1-5-18) and BUILTIN\Administrators (S-1-5-32-544).
     .OUTPUTS
     None. Side effect: the folder's access list.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$IncludeSystem
+    )
     $target = Resolve-GwFullPath -Path $Path
     $user = Get-GwCurrentUser
-    if (-not $PSCmdlet.ShouldProcess($target, ('Restrict access to {0} only (disable inheritance, remove other entries)' -f $user.Name))) { return }
-    $sid = New-Object System.Security.Principal.SecurityIdentifier($user.Sid)
+    $who = '{0} only' -f $user.Name
+    if ($IncludeSystem) { $who = '{0}, SYSTEM and Administrators' -f $user.Name }
+    if (-not $PSCmdlet.ShouldProcess($target, ('Restrict access to {0} (disable inheritance, remove other entries)' -f $who))) { return }
+    $sids = New-Object System.Collections.Generic.List[string]
+    $sids.Add($user.Sid)
+    if ($IncludeSystem) {
+        $sids.Add('S-1-5-18')
+        $sids.Add('S-1-5-32-544')
+    }
     $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $sid,
-        [System.Security.AccessControl.FileSystemRights]::FullControl,
-        $inheritance,
-        [System.Security.AccessControl.PropagationFlags]::None,
-        [System.Security.AccessControl.AccessControlType]::Allow)
     $security = New-Object System.Security.AccessControl.DirectorySecurity
     $security.SetAccessRuleProtection($true, $false)
-    $security.AddAccessRule($rule)
-    Set-Acl -LiteralPath $target -AclObject $security
+    foreach ($sidText in $sids) {
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($sidText)),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        $security.AddAccessRule($rule)
+    }
+    # Not Set-Acl: on an already protected folder it failed with "the process does not possess
+    # the SeSecurityPrivilege privilege" (it also tries to write the audit section). The .NET
+    # call writes only the section that changed, the access rules. The method lives on
+    # DirectoryInfo in .NET Framework and in FileSystemAclExtensions in .NET.
+    $info = New-Object System.IO.DirectoryInfo($target)
+    if ($PSVersionTable.PSEdition -eq 'Core') { [System.IO.FileSystemAclExtensions]::SetAccessControl($info, $security) }
+    else { $info.SetAccessControl($security) }
 }
 
 function Get-GwAclOtherIdentity {
