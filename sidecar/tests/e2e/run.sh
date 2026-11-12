@@ -128,7 +128,9 @@ if status_check "d['boot_id'] == '${boot}' and d['instance'] == 'e2e' and d['sta
 else
   fail "status" "$(get /status | head -c 500)"
 fi
-if status_check 'd["gateway_feed"]["feeds_seen"] and d["close_wait_sockets"] == 0 and all(not t["stalled"] for t in d["tasks"])'; then
+# The gateway samples every 3 s here and the sidecar picks the socket count up every 5 s:
+# the value appears a few seconds after the phase does.
+if wait_for 30 status_check 'd["gateway_feed"]["feeds_seen"] and d["close_wait_sockets"] == 0 and all(not t["stalled"] for t in d["tasks"])'; then
   pass "the feeds are followed, the gateway's own socket sample is reported, no task is stalled"
 else
   fail "feeds" "$(get /status | head -c 500)"
@@ -172,6 +174,13 @@ fi
 stopped="$(docker logs "${RC}" 2>&1 | grep '"class":"gateway_stopped"' | head -1)"
 if [[ "${stopped}" == *'"kind":"firing"'* && "${stopped}" == *'"severity":"info"'* ]]; then pass "a requested stop is information (the gateway logged shutdown_requested)"; else fail "stop severity" "${stopped:0:300}"; fi
 if [ "$(count_received '"class":"gateway_exited"')" = "0" ]; then pass "a requested stop is not reported as an unexpected exit"; else fail "false exit" "gateway_exited was sent for a requested stop"; fi
+# The login was still stalled when the gateway was stopped: that alert did not recover.
+closing="$(docker logs "${RC}" 2>&1 | grep '"class":"login_stalled"' | grep '"kind":"resolved"' | head -1)"
+if [[ "${closing}" == *'"title":"Superseded: '* && "${closing}" == *'Follow the gateway_stopped alert'* ]]; then
+  pass "the stalled-login alert is closed as superseded by gateway_stopped, not as recovered"
+else
+  fail "hand-over" "${closing:0:400}"
+fi
 state="$(docker inspect -f '{{.State.Status}} restarts={{.RestartCount}}' "${SC}")"
 if [ "${state}" = "running restarts=0" ] && livez_ok && status_check 'd["phase"] == "stopped"'; then
   pass "the sidecar keeps running and answering with the gateway gone (phase stopped)"
