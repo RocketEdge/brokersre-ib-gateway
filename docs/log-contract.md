@@ -51,6 +51,13 @@ reader must ignore keys and events it does not know.
 `ibc_starting`, `ibc_not_launched`, `ibc_exited`, `needs_human`, `shutdown_requested`,
 `shutdown_complete`.
 
+Screenshots (opt-in, `SCREENSHOTS=yes`; source `xvfb`): `screenshot_saved` (info; data:
+`file` relative to the log volume, `reason`, `bytes`) for every picture of the Gateway's
+screen saved to `screens/`, taken after `unknown_window`, after `login_stalled` and on
+request; `screenshot_failed` (warn) when the copy could not be written;
+`screenshots_unavailable` (warn) when the framebuffer file could not be set up at start. No
+event ever carries the picture or a window title.
+
 Rejected-login latch ([ADR 0016](adr/0016-rejected-login-latch.md)):
 
 | Event | Level | Source | When |
@@ -156,6 +163,7 @@ fires. Decide "a person is needed" from the events: a `twofa_initiated` without 
 | `state/login-rejected` | classifier; removed by the entrypoint or the classifier | present while a rejected login is on record: one line `v1 <fingerprint> <UTC time>`. The fingerprint is `files:<16 hex>` (from the modification times of the secret files), `env`, `none` or `unknown`; it holds no part of a credential |
 | `events/events.jsonl` | every component, through `log.sh` | the events, identical to stdout |
 | `metrics/metrics.jsonl` | `sampler.sh` | one resource sample per line (below) |
+| `screens/<UTC time>-<reason>.xwd` | `screenshot.sh`, only with `SCREENSHOTS=yes` | pictures of the Gateway's virtual screen in XWD format, mode 0600, the newest `SCREENSHOT_KEEP` kept. They can show the username and account information: a consumer must not ship or publish them |
 | `ibc/ibc.log` | `rotating-append.sh` behind IBC's stdout | raw IBC log, appended across restarts |
 | `jts/ibgateway.current.log`, `jts/launcher.log` | `tail-gateway-logs.sh` | mirror of the Gateway's own logs from the settings volume (`launcher.log` seen with 10.50.1g; the `ibgateway.*.log` source name is unverified, L03) |
 | `events/.seq`, `events/.lock`, `jts/.mirror/` | internal | not part of the contract |

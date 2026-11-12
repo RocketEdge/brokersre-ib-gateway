@@ -122,6 +122,37 @@ if in_container 'p=$(pgrep -f "[s]ampler.sh" | head -1); test -n "${p}" && ! tr 
 else
   fail "sampler environment" "sampler not running or a credential is in its environment"
 fi
+# Screenshots are opt-in: by default Xvfb keeps no framebuffer file and nothing can be saved.
+if in_container 'test ! -e /run/brokersre/xvfb && ! /usr/local/lib/brokersre/screenshot.sh >/dev/null 2>&1 && test ! -e /var/log/ibgateway/screens'; then
+  pass "screenshots are off by default: no framebuffer file, nothing saved"
+else
+  fail "screenshots default" "a framebuffer file or a screenshot exists without SCREENSHOTS=yes"
+fi
+
+echo "== screenshots (SCREENSHOTS=yes, the image's real Xvfb) =="
+# The image has no screenshot tool: Xvfb keeps its framebuffer in a file and a screenshot is a
+# copy of it. This proves it with the real Xvfb of the image, without IBC.
+run_container -e IBC_LAUNCH=no -e SCREENSHOTS=yes
+wait_for 30 port_open 4004 || true
+if in_container 'test -s /run/brokersre/xvfb/Xvfb_screen0 && test "$(stat -c %a /run/brokersre/xvfb)" = 700'; then
+  pass "Xvfb keeps its framebuffer in a private directory on the run tmpfs"
+else
+  fail "framebuffer" "no framebuffer file under /run/brokersre/xvfb"
+  docker logs ibgw-test 2>&1 | tail -5
+fi
+if in_container '/usr/local/lib/brokersre/screenshot.sh container_test >/dev/null'; then pass "screenshot.sh takes a screenshot on request"; else fail "screenshot" "screenshot.sh failed"; fi
+# An XWD file starts with its header size and the format version 7, both big-endian 32-bit;
+# a 1024x768 screen at 16 bits per pixel is about 1.5 MB.
+if in_container 'f="$(ls /var/log/ibgateway/screens/*-container_test.xwd | head -1)"; test "$(od -A n -t x1 -j 4 -N 4 "$f" | tr -d " ")" = 00000007 && test "$(stat -c %s "$f")" -gt 1000000 && test "$(stat -c %a "$f")" = 600'; then
+  pass "the screenshot is an XWD image of the whole screen, readable by its owner only"
+else
+  fail "screenshot file" "$(in_container 'ls -la /var/log/ibgateway/screens 2>&1 | tail -3')"
+fi
+if in_container 'jq -e -s "map(select(.event == \"screenshot_saved\")) | length == 1 and (.[0].data.reason == \"container_test\") and (.[0].data.file | startswith(\"screens/\"))" /var/log/ibgateway/events/events.jsonl >/dev/null'; then
+  pass "the screenshot is announced on the events file (screenshot_saved)"
+else
+  fail "screenshot event" "no screenshot_saved event"
+fi
 
 echo "== preflight (doctor) =="
 # `doctor` as a command: the entrypoint runs it instead of the gateway and passes its exit code.

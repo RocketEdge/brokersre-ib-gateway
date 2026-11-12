@@ -5,6 +5,48 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — `screenshot.sh` was not executable on Linux; the execute bit is now checked
+
+- **What changed:** `screenshot.sh` and `login-latch.sh` are recorded as executable in git,
+  like the other scripts of the image. `scripts/check-file-modes.sh` reads `git ls-files -s`
+  and fails when a tracked `*.sh` file lacks the bit; the lint job runs it, and a test of the
+  CI-script suite runs it against the checkout when git is there.
+- **Result:** the two unit tests that run `screenshot.sh` as a command failed on the first
+  Linux run of the screenshot branch ("Permission denied") and pass with the bit set. The
+  check names 55 shell scripts, all executable.
+- **What did NOT work / root cause:** *every local run was green and proved nothing about the
+  mode.* The development host is Windows: git records a new file as `100644`, while Git Bash,
+  the Docker Desktop share and a tree streamed with `tar` all present it as executable, and
+  the fast local runner even ran `chmod -R a+rx`. The image is unaffected (the Dockerfile sets
+  0755 on its scripts), which is why the container suite passed too; only scripts run from the
+  tree were hit. `login-latch.sh` had the same mode for two pull requests without a failure,
+  because it is only sourced. A check of the file system would repeat the mistake, so the
+  check reads the index, which is the same on every host.
+- **Next step:** none for the mode. The general rule stands: a green run on the Windows host
+  says nothing about POSIX behaviour; look at the first Linux run before building on a branch.
+
+### 2026-11-12 — Opt-in screenshot of the Gateway's screen when a window blocks the login
+
+- **What changed:** with `SCREENSHOTS=yes` Xvfb keeps its framebuffer in a file on the run
+  tmpfs, and `screenshot.sh` copies it to `screens/` on the log volume when a window that IBC
+  does not handle opens (`unknown_window`), when the login stalls (`login_stalled`) and on
+  request. At most one automatic picture per `SCREENSHOT_MIN_INTERVAL_S`, the newest
+  `SCREENSHOT_KEEP` kept. Events `screenshot_saved`, `screenshot_failed`,
+  `screenshots_unavailable`. Off by default; unset, Xvfb is started exactly as before.
+- **Result:** unit and container suites green (counts in the pull request). The container
+  suite takes a screenshot with the image's real Xvfb: an XWD image of the whole screen,
+  about 1.5 MB, readable by its owner only.
+- **What did NOT work / root cause:** (1) *"A screenshot needs a new package" was wrong.* The
+  roadmap status first recorded this item as not buildable without a tool such as `xwd`,
+  against the rule that every package needs a reason. Xvfb's own `-fbdir` option writes the
+  framebuffer as an XWD file; checked in the image before believing either statement. (2) The
+  image has no converter, so the file is XWD, not PNG; that is accepted rather than adding a
+  package. (3) The classifier must never wait for the log volume (IBC's output pipe is behind
+  it), so its screenshot is taken beside the loop, not in it. (4) Opt-in, not default: the
+  screen shows the username in the login window (L25).
+- **Next step:** open a screenshot of a real login window and of a real blocking dialog and
+  check that it shows what an operator needs (L25).
+
 ### 2026-11-12 — Windows host kit (`windows/`), with two review rounds fixed before the pull request
 
 - **What changed:** new `windows/` directory: `setup.ps1`, `doctor.ps1`, `harden.ps1`,

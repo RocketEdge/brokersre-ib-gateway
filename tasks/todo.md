@@ -85,3 +85,8 @@
 - [x] `windows/`: `setup.ps1`, `doctor.ps1`, `harden.ps1` (reversible), `start.ps1`, `uninstall.ps1`; both PowerShell editions; ADR 0011; two independent reviews fixed before the pull request
 - [ ] Validate on a second computer: Docker Engine in WSL end to end, the boot task without sign-in, a real login, the clock fix after a real resume (`windows/README.md`, "To validate on your computer")
 - [ ] First run of `windows-kit.yml` on a GitHub runner
+
+## Roadmap P1: screenshot of a blocking window (2026-11-12, branch `feat/p1-screenshot`)
+
+- [x] `SCREENSHOTS=yes`: Xvfb keeps its framebuffer in a file; `screenshot.sh` saves it to `screens/` after `unknown_window`, after `login_stalled` and on request; bounded by count and interval
+- [ ] Look at a screenshot of a real login window and of a real blocking dialog (L25)

@@ -27,6 +27,7 @@ sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev       
 pwsh -NoProfile -Command "Invoke-Pester windows/tests" ; powershell -NoProfile -Command "Invoke-Pester windows/tests"   # Windows kit, Pester 6.2.0, under BOTH PowerShell 7 and Windows PowerShell 5.1
 pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # PSScriptAnalyzer 1.25.0, 0 findings
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
+git ls-files -s | scripts/check-file-modes.sh                                            # every tracked *.sh is 100755 in git (a Windows host does not record the bit)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
 ```
@@ -50,6 +51,9 @@ All of these must be green before claiming a change done; run them fresh.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
+   The opt-in screenshots (`SCREENSHOTS=yes`, `screenshot.sh`) are pictures of the screen and
+   can show the username: they are private files under `screens/` on the log volume, off by
+   default, and no event, log line or shipper of this repository may carry one.
 3. **Events follow log contract v2** (`schemas/log-event.v2.schema.json`, `docs/log-contract.md`):
    every event goes through `log_event` (stdout and `events/events.jsonl`, identical lines,
    with `boot_id` and a gap-free `seq`); nothing else writes to stdout. Raw IBC and Gateway
@@ -103,7 +107,7 @@ Dockerfile                 two-stage build; ARGs come from docker-bake.hcl <- ve
 docker-bake.hcl            targets stable/latest, tags, labels; scripts/bake-env.sh exports variables
 scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first)
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
-rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
+rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), screenshot (opt-in picture of the screen, a copy of Xvfb's framebuffer file), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
 scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
 scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-report-arch.sh, promote-tags.sh   decisions of publish.yml as tested scripts (channel list, no tag in both channels, platform manifests, platform of a scan report, tags -> the scanned digest)
@@ -187,6 +191,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
   tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
   processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.
+- A Windows host records a new script as `100644` and still shows and runs it as executable
+  (Git Bash, the Docker Desktop share, a tree streamed with `tar`), so a missing execute bit
+  passes every local run and fails on the Linux runner with "Permission denied" (it did, on
+  `screenshot.sh`). Add new scripts with `git add --chmod=+x <path>`; before pushing run
+  `git ls-files -s | scripts/check-file-modes.sh`, which the lint job runs too.
 - `scripts/migrate-from-gnzsnz.sh` carries its own copy of the doctor's known names (it must run
   outside the image); `tests/bats/ci/migrate-from-gnzsnz.bats` fails when the two differ, so a
   new variable goes into `doctor.sh`, `docs/env-vars.md` and the converter together.
@@ -265,3 +274,6 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   (`Get-GwJournalEntryProblem`). A new kind of host change needs its allow-list entry and a test.
   A new folder under `C:\` is writable by every local user: the kit closes its gateway folder
   before writing anything into it.
+- A screenshot needs no tool: `Xvfb -fbdir <dir>` keeps the framebuffer in `<dir>/Xvfb_screen0`
+  (XWD), and `screenshot.sh` copies it. Do not add `xwd`, `import` or a converter to the image
+  for this (invariant 4). The option stays opt-in while a picture can show the username.

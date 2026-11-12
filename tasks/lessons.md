@@ -28,3 +28,13 @@ reported only "relay never listened".
 **Rule:** every tmpfs the gateway writes to carries `uid=1000,gid=1000,mode=0750` (reference
 compose and test harness); the entrypoint verifies writability first and reports
 `dirs_not_writable` on stdout; the harness has a negative test for the root-owned case.
+
+## 2026-11-12 — A Windows host does not record the execute bit, and hides that it is missing
+
+**Pattern:** `screenshot.sh` was added from the Windows host as `100644`. Git Bash, the Docker
+Desktop share and the fast local runner all ran it anyway, the image sets 0755 itself, so unit
+and container suites were green locally; the first Linux run failed with "Permission denied".
+
+**Rule:** add scripts with `git add --chmod=+x`; `scripts/check-file-modes.sh` reads the index
+(`git ls-files -s`) and fails on a tracked `*.sh` without the bit, in the lint job and before a
+push. Check the index, never the file system, for anything the host presents differently.

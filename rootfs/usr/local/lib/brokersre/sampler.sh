@@ -76,6 +76,9 @@
 
 # shellcheck source=/dev/null
 source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+# For screenshot_save: a stalled login is the moment a picture of the screen explains most.
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/screenshot.sh"
 
 : "${LOG_DIR:=/var/log/ibgateway}" "${TWS_SETTINGS_PATH:=/home/ibgateway/Jts/settings}"
 
@@ -525,6 +528,8 @@ evaluate_login() {
     if [ "${SAMPLER_LOGIN_STALLED}" -eq 0 ] && [ "${elapsed}" -gt "${stall_s}" ]; then
       SAMPLER_LOGIN_STALLED=1
       log_event metrics warn login_stalled "phase has been login for ${elapsed} s; a window that IBC does not handle may be blocking the login (see ibc/ibc.log)"
+      # With SCREENSHOTS=yes: the screen at this moment shows what the login is waiting for.
+      screenshot_save login_stalled
     fi
     return 0
   fi
