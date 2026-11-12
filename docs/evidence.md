@@ -15,18 +15,23 @@ Every command below was run on 2026-11-12 and its result seen, unless it is mark
   2026-11-11 predates the `data` fields of C5 and C9 and the files of C19 and C20;
 - **[N]** not run here; the reason is given.
 
-Tools used: cosign v3.1.4 and Trivy 0.76.2 from their container images, GitHub CLI 2.81.0,
-jq 1.8.1 (the image ships jq: `docker run --rm -i --entrypoint jq <image>`). Trivy ran with
-the vulnerability database of 2026-11-12 already downloaded, so its commands also carried
+Tools used: cosign v3.1.4, Trivy 0.76.2 (the version every scanner step of the workflows
+pins) and syft 1.54.0 from their container images, GitHub CLI 2.81.0, jq 1.8.1 (the image
+ships jq: `docker run --rm -i --entrypoint jq <image>`). Trivy ran with the vulnerability
+database of 2026-11-12 already downloaded, so its commands also carried
 `--skip-db-update --skip-java-db-update --scanners vuln`. In the commands, `IMAGE` is the
 image by digest and `C` is the container name:
 
 ```bash
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest from digests-<channel>.json>
 C=<name of the running gateway container>
-IDENTITY='^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'
+IDENTITY='^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
 ISSUER=https://token.actions.githubusercontent.com
 ```
+
+The identity ends in `@refs/heads/main$` on purpose: without the branch, a signature made by
+the same workflow file on any other branch of the repository would verify too. With
+`@refs/heads/other$` the same command fails (checked).
 
 ## Which exact software is running?
 
@@ -34,7 +39,7 @@ ISSUER=https://token.actions.githubusercontent.com
 |---|---|---|
 | One digest per build; tags are discovery aids, consumers pin the digest | `.github/workflows/publish.yml`, release asset `digests-<channel>.json` | C1 |
 | A signature that only this repository's publish workflow can make (Sigstore keyless) | `publish.yml`, step "Sign and attest" | C2 |
-| A CycloneDX SBOM attested to the digest (9,776 components in the image checked) | `publish.yml`, step "SBOM (CycloneDX)" | C3 |
+| One CycloneDX SBOM per platform, each attested to the manifest of the platform it describes (the two platforms differ: arm64 carries Ubuntu's `openjdk-25-jre`). **The image published on 2026-11-11 has one SBOM, attested to the index, and it describes linux/amd64 only** | `publish.yml`, steps "SBOM of the linux/amd64 image" and "SBOM of the linux/arm64 image", `scripts/platform-digests.sh` | C3, C3a, C3b |
 | Build provenance: which workflow, on which runner, built the digest | `publish.yml`, `actions/attest-build-provenance` | C4 |
 | The running container states its Gateway version, IBKR channel, IBC version and release, trading mode and instance in its first event | `rootfs/usr/local/bin/entrypoint.sh` (`container_start`) | C5 |
 | Image labels with version, source revision and base image digest | `Dockerfile`, `docker-bake.hcl` | C6 |
@@ -45,9 +50,19 @@ ISSUER=https://token.actions.githubusercontent.com
 docker buildx imagetools inspect ghcr.io/rocketedge/brokersre-ib-gateway:stable --format '{{json .Manifest}}' | jq -r .digest
 # C2 [P] exit 0, "The code-signing certificate was verified using trusted certificate authority certificates"
 cosign verify "$IMAGE" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY"
-# C3 [P] exit 0; the payload is the SBOM (CycloneDX 1.7)
+# C3 [P] exit 0; the payload is the SBOM (CycloneDX 1.7) of the image published on 2026-11-11:
+#        9776 components. It describes linux/amd64 only: syft on the linux/amd64 manifest gives
+#        9776 components, on the linux/arm64 manifest 9946 (with openjdk-25-jre)
 cosign verify-attestation --type cyclonedx "$IMAGE" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY" \
   | jq -r .payload | base64 -d | jq '.predicate.components | length'
+# C3a [P] the manifest of each platform inside the index (also in digests-<channel>.json, key
+#         "platforms", from the first publish after this change)
+docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' \
+  | jq -r '.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture) \(.digest)"'
+# C3b [N] the SBOM of one platform, attested to that platform's manifest: no published image
+#         carries per-platform SBOMs yet (they start with the first publish after this change)
+cosign verify-attestation --type cyclonedx "ghcr.io/rocketedge/brokersre-ib-gateway@<platform manifest digest>" \
+  --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY"
 # C4 [P] exit 0; SLSA provenance v1 from publish.yml@refs/heads/main on a GitHub-hosted runner (needs `gh auth login`)
 gh attestation verify "oci://$IMAGE" --repo RocketEdge/brokersre-ib-gateway
 # C5 [L] {"gateway_version":"10.50.1g","channel":"stable","ibc_version":"3.24.2","ibc_release":"3.24.2-rocketedge.1","trading_mode":"paper","instance":"default"}
@@ -187,8 +202,9 @@ seen in a real log of this image ([limitations](limitations.md), L01).
 
 | What the image provides | Where it comes from | Command |
 |---|---|---|
-| A gate before any tag moves: both platforms of the digest about to be tagged must have no CRITICAL or HIGH finding in OS packages that has a fixed package | `publish.yml`, `scripts/promote-tags.sh` (`tests/bats/ci/promote-tags.bats`) | C22 |
-| A daily scan of the published images; a fixable finding requests a rebuild of that channel and opens one tracking issue. A target, not a guarantee: no number of hours is promised | `.github/workflows/rebuild.yml`, `scripts/rebuild-decision.sh`, `scripts/rebuild-issue.sh` and their tests in `tests/bats/ci/`; [upgrade policy](upgrade-policy.md) | C22 is the scan it runs |
+| A gate before any tag moves: both platforms of the digest about to be tagged must have no CRITICAL or HIGH finding in OS packages that has a fixed package, each report must name the platform it was asked to read, and the index must hold exactly one image per platform | `publish.yml`, `scripts/check-report-arch.sh`, `scripts/platform-digests.sh`, `scripts/promote-tags.sh` and their tests in `tests/bats/ci/` | C22 |
+| A scheduled scan of the published images (daily when GitHub runs the schedule; it can be late, and GitHub disables schedules after 60 days without repository activity). A fixable finding opens one tracking issue and requests a rebuild of that channel on the first 3 days; while the published image stays the same, one comment a day says so, and after 3 days a person must decide. A target, not a guarantee: no number of hours is promised | `.github/workflows/rebuild.yml`, `scripts/rebuild-decision.sh`, `scripts/rebuild-issue.sh`, `scripts/rebuild-channels.sh` and their tests in `tests/bats/ci/`; [upgrade policy](upgrade-policy.md) | C22 is the scan it runs |
+| Scanner and actions pinned like every other input: one Trivy version (v0.76.2) on every scanner step, every action of the publish and rebuild workflows by commit | `publish.yml`, `rebuild.yml`, `tests/bats/ci/workflows.bats` | read the workflow files |
 | A machine-readable statement about each CVE in IBKR's bundled jars, which this image cannot patch: every one is `under_investigation` and says what is unknown | [`security/vex/ibgateway-vendor-jars.openvex.json`](../security/vex/ibgateway-vendor-jars.openvex.json) (OpenVEX v0.2.0), [limitations](limitations.md) L08 | C23 |
 | A check that the statement list and the scanner agree, in every CI and publish run (a warning, not a gate) | `scripts/check-vex.sh` (`tests/bats/ci/check-vex.bats`), `ci.yml`, `publish.yml` | C24 |
 
@@ -204,17 +220,22 @@ scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json jars.json
 cosign verify-attestation --type openvex "$IMAGE" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY"
 ```
 
-State on 2026-11-12, to be read with the table: the two-platform gate, the daily scan, the
-tag promotion and the VEX attestation are in the workflow files and their decisions are
-covered by tests, but **no workflow run has executed them yet**. The published images were
-gated on linux/amd64 only; C22 is a manual scan of both platforms of those digests. The
-first publish after this change produces the first image that C25 can verify.
+State on 2026-11-12, to be read with the table: the two-platform gate, the scheduled scan,
+the per-platform SBOMs, the tag promotion and the VEX attestation are in the workflow files
+and their decisions are covered by tests, but **no workflow run has executed them yet**. The
+published images were gated on linux/amd64 only and carry one SBOM that describes
+linux/amd64; C22 is a manual scan of both platforms of those digests. The first publish
+after this change produces the first image that C3b and C25 can verify. A change to the VEX
+document reaches the attestation only with the next publish; the file in the repository and
+in the newest release is the current one.
 
 Also known and not hidden: Trivy reports one more finding outside OS packages and outside
-the jars, in the Go standard library of `/usr/bin/pebble`, a binary of the Ubuntu base image
-that belongs to no package (severity not yet assigned on 2026-11-12). The gate does not
-cover it, the VEX document does not cover it (`check-vex.sh` prints it as a note), and an OS
-rebuild replaces it only when the pinned base image digest moves.
+the jars, in the Go standard library of `/usr/bin/pebble` (severity not yet assigned on
+2026-11-12). The binary comes with the Ubuntu base image and belongs to no package, so the
+OS gate does not cover it and `apt-get upgrade` cannot replace it: only a move of the pinned
+base image digest does. The VEX document for the jars does not cover it either;
+`check-vex.sh` prints it as a note. It is left in place: nothing in the image starts it, and
+removing a file of the base layer is a change of its own.
 
 ## What is not covered?
 
