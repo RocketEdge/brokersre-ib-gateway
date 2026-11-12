@@ -5,6 +5,34 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Pattern table corrected from IBC's source; phase writes serialised and held while the gateway ends
+
+- **What changed:** (1) three rows of `ibc-patterns.tsv`: `login_completed` is anchored at the
+  end of the line, `daily_restart` matches the start script's real line
+  (`autorestart file found at <path>: authentication will not be required`), and
+  `relogin_required` matches the dialog only. (2) `phase_write` in `log.sh` is now the only
+  writer of `state/phase`: writes are serialised by a lock, each uses a temporary file of its
+  own, and the classifier's writes are held back while the phase is `stopping`, `stopped` or
+  `exited`. (3) Two timing-sensitive tests wait longer or for their own processes only.
+- **Result:** unit suite green (counts in the pull request). A stop of a logged-in Gateway can
+  no longer flip the phase back to `logged-in`, so the gated relay stays closed while the
+  Gateway exits.
+- **What did NOT work / root cause:** the first v2 table was written from single lines of
+  IBC's source without searching for every place that writes similar text. (a) `StopTask.java`
+  logs `Login has completed: exiting via [File, Close] menu` when it stops a logged-in
+  Gateway; the unanchored row read that as a login and set `logged-in` during shutdown, which
+  would have reopened the relay. (b) The autorestart line is an `echo` of `ibcstart.sh` with
+  no `IBC:` prefix, so the `daily_restart` row could never match. (c) IBC logs the Re-login
+  dialog and its own `Re-login to session`, so one re-login was two events. All three were
+  found by the paired change in the BrokerSRE agent, which re-read the source; none could show
+  in the tests here, because the synthetic fixture had been written from the same wrong
+  assumptions. Separately, the entrypoint and the classifier wrote the phase through the same
+  temporary file name without a lock: a rename of one writer could publish the half-written
+  file of the other. Also learned: a unit run through the Windows file share took an hour
+  (listing 500 files: 42 s), and one relay test missed its 5 s budget under that load.
+- **Next step:** real lines for these rows from a successful session (L01, L09); the agent's
+  vendored copy of the table is refreshed after this merges.
+
 ### 2026-11-12 — Log contract v2: events on the volume, `needs-human`, gated relay, preflight, resource samples
 
 - **What changed:** (1) every event is written to stdout and, as the identical line, to

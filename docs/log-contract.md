@@ -54,12 +54,12 @@ reader must ignore keys and events it does not know.
 | `twofa_initiated` | warn | `2fa-pending` | `IBC: Second Factor Authentication initiated` | IBC source |
 | `twofa_dialog` | warn | `2fa-pending` | `detected dialog entitled: Second Factor Authentication; event=Opened\|Activated` | IBC source |
 | `twofa_timeout` | warn | `login` | `IBC: Re-login after second factor authentication timeout in` | IBC source |
-| `login_completed` | info | `logged-in` | `IBC: Login has completed` | IBC source |
+| `login_completed` | info | `logged-in` | `IBC: Login has completed` at the end of the line (IBC's stop message `Login has completed: exiting via ...` is not a login) | IBC source |
 | `login_failed` | error | `login` | `IBC: Login failed` | IBC source |
 | `login_failed_dialog` | error | `needs-human` | `detected dialog entitled: Unrecognized Username or Password; event=Opened` | real log, 10.50.1g |
 | `existing_session` | warn | `existing-session` | `detected dialog entitled: Existing session detected; event=Opened` | IBC source |
-| `relogin_required` | warn | `login` | `detected dialog entitled: Re-login is required; event=Opened`, or `IBC: Re-login to session` | IBC source |
-| `daily_restart` | info | `restarting` | `IBC: autorestart file found` | IBC source |
+| `relogin_required` | warn | `login` | `detected dialog entitled: Re-login is required; event=Opened` (IBC's own `Re-login to session` for the same dialog is not a second event) | IBC source |
+| `daily_restart` | info | `restarting` | `autorestart file found at <path>: authentication will not be required`, a line of IBC's start script without timestamp or `IBC:` prefix | IBC source |
 | `login_dialog` | info | `login` | `IBC: Login dialog WINDOW_OPENED` | real log, 10.50.1g |
 | `ibc_version` | info | `login` | `IBC: version` | real log, 10.50.1g |
 | `unknown_window` | warn | (none) | a window opened whose title is in neither this table nor `known-windows.txt` | real mechanism; list from IBC source |
@@ -70,6 +70,9 @@ reader must ignore keys and events it does not know.
 logs, not yet confirmed by a real log: no login has succeeded on this image yet
 ([limitations](limitations.md), L01). IBC reports every window as `event=Opened`, then
 `Activated`, then `Focused`; dialog rows match `Opened` only, so one dialog is one event.
+`twofa_dialog` may never appear with Gateway 10.16 and later: according to IBC's source the
+login frame itself turns into the prompt there and only `twofa_initiated` is logged. Count
+prompts by `twofa_initiated`.
 
 ### Events of the preflight (`src` = `doctor`)
 
@@ -103,7 +106,11 @@ Each is emitted once when its condition starts and once when it ends.
 
 ## Phase file `state/phase`
 
-One token and a newline, written atomically (temporary file and rename).
+One token and a newline, written atomically (temporary file and rename). It has two writers,
+the entrypoint and the IBC classifier; their writes are serialised (`phase_write` in
+`log.sh`, lock file `state/.phase.lock`), so a reader never sees an empty or mixed file.
+Once the phase is `stopping`, `stopped` or `exited` only the entrypoint changes it: a late
+line of IBC's output still becomes an event but no longer moves the phase.
 
 | Phase | Meaning |
 |---|---|
@@ -131,7 +138,7 @@ fires. Decide "a person is needed" from the events: a `twofa_initiated` without 
 
 | Path | Writer | Content |
 |---|---|---|
-| `state/phase`, `state/boot_id` | entrypoint, classifier | see above |
+| `state/phase`, `state/boot_id` | entrypoint, classifier | see above (`state/.phase.lock` is the writers' lock; it carries no information) |
 | `events/events.jsonl` | every component, through `log.sh` | the events, identical to stdout |
 | `metrics/metrics.jsonl` | `sampler.sh` | one resource sample per line (below) |
 | `ibc/ibc.log` | `rotating-append.sh` behind IBC's stdout | raw IBC log, appended across restarts |

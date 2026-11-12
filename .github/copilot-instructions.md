@@ -114,3 +114,15 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   tests while it runs. Remove test containers by name, never by image.
 - A temporary image for local iteration (the published image plus `COPY rootfs/ /`) is enough
   for the unit and container suites; the full build from the Dockerfile is what CI proves.
+- A pattern row must be checked against every place IBC writes similar text, in its Java
+  source and in `ibcstart.sh` (whose `echo` lines carry no timestamp and no `IBC:` prefix).
+  `Login has completed: exiting via ...` is IBC's stop message, not a login; anchor rows with
+  `$` where IBC continues the sentence elsewhere.
+- The phase file is written only through `phase_write` (`set_phase` for the entrypoint,
+  `write_phase` for the classifier). Never write `state/phase` directly: the lock and the
+  rule that the classifier cannot leave `stopping`, `stopped` or `exited` live there.
+- On Windows the Docker Desktop file share can be very slow (listing 500 files took 42 s on
+  2026-11-12), which makes `run-in-image.sh` take an hour. To iterate, start the image with
+  `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
+  tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
+  processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.
