@@ -159,3 +159,35 @@ refused() {
   [ "$status" -ne 0 ]
   echo "$output" | tail -1 | jq -e '.event == "config_conflict"' >/dev/null
 }
+
+# --- boot id and the needs-human hold (log contract v2) -------------------------------------
+
+@test "new_boot_id exports a 16-hex id and records it for processes started later" {
+  export LOG_DIR="$(mktemp -d)"
+  mkdir -p "${LOG_DIR}/state"
+  run bash -c "source '${BROKERSRE_LIB}/common.sh'; new_boot_id; printf '%s' \"\${BOOT_ID}\"; bash -c 'printf \" %s\" \"\${BOOT_ID}\"'"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[0-9a-f]{16}\ [0-9a-f]{16}$ ]]
+  [ "$(cat "${LOG_DIR}/state/boot_id")" == "${output%% *}" ]
+  rm -rf "${LOG_DIR}"
+}
+
+@test "two starts get different boot ids" {
+  export LOG_DIR="$(mktemp -d)"
+  mkdir -p "${LOG_DIR}/state"
+  a="$(bash -c "source '${BROKERSRE_LIB}/common.sh'; new_boot_id; printf '%s' \"\${BOOT_ID}\"")"
+  b="$(bash -c "source '${BROKERSRE_LIB}/common.sh'; new_boot_id; printf '%s' \"\${BOOT_ID}\"")"
+  [ "${a}" != "${b}" ]
+  rm -rf "${LOG_DIR}"
+}
+
+@test "current_phase reads the phase file and reports unknown when it is missing" {
+  export LOG_DIR="$(mktemp -d)"
+  mkdir -p "${LOG_DIR}/state"
+  run bash -c "source '${BROKERSRE_LIB}/common.sh'; current_phase"
+  [ "$output" == "unknown" ]
+  echo needs-human >"${LOG_DIR}/state/phase"
+  run bash -c "source '${BROKERSRE_LIB}/common.sh'; current_phase"
+  [ "$output" == "needs-human" ]
+  rm -rf "${LOG_DIR}"
+}

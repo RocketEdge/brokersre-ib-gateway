@@ -1,0 +1,40 @@
+# Window titles that are part of a normal Gateway life cycle. One extended regular expression
+# per line, matched against the WHOLE title that IBC logs in
+#   "IBC: detected (dialog|frame) entitled: <title>; event=Opened".
+# A window whose title matches none of these lines (and no row of ibc-patterns.tsv) raises the
+# `unknown_window` event: IBC has no handler for it, so it may block the login or the daily
+# restart until a person looks at it.
+#
+# Sources: REAL = seen in this image's IBC output (IB Gateway 10.50.1g); IBC = a title IBC's
+# source code looks for (IBC 3.24.2), so IBC handles the window itself.
+#
+# REAL: the Gateway window (login and main window share the title) and start-up progress
+IBKR Gateway
+\*\* no title \*\*
+
+Connecting to server.*
+Attempt [0-9]+: connection error.*
+# IBC: Gateway and TWS frames under their other names
+IB Gateway
+Interactive Brokers Gateway
+IBKR Trader Workstation
+.*Gateway
+Starting application\.\.\.
+# IBC: login and session dialogs it drives itself
+Login
+New Login
+Login Error
+Second Factor Authentication
+Security Code Card Authentication
+Existing session detected
+Re-login is required
+Password Notice
+Unrecognized Username or Password
+# IBC: configuration and confirmation dialogs it opens or dismisses
+.*Configuration.*
+Tip of the Day
+Shutdown progress
+NSE Compliance
+Order Preview
+Trades
+Cryptocurrency order confirmation

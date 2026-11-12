@@ -32,3 +32,12 @@
 - [ ] Repeat the paper login with working credentials: record a successful session, second-factor prompt, daily restart and competing session; extend the real fixtures; close L01 to L03
 - [ ] Paired change in the BrokerSRE agent: its copy of the IBC patterns carries the same two wrong assumptions (login window title, three log lines per dialog)
 - [ ] Next: log contract v2 (events and metrics on the log volume, `needs-human` phase), preflight `doctor`, relay gated on login, runtime heap
+
+## Roadmap P1 (2026-11-12, branch `feat/p1-contract-v2`, stacked on P0)
+
+- [x] Log contract v2: events on the volume with `boot_id`, `seq` and `data`; schema v2; ADR 0013; `docs/log-contract.md` rewritten
+- [x] Phase `needs-human` (rejected login; optional `TWOFA_MAX_PROMPTS`), `unknown_window`, entrypoint hold
+- [x] Relay gated on the login (`RELAY_MODE`); runtime heap (`JAVA_HEAP_MB`); exit on OutOfMemoryError
+- [x] Preflight `doctor` (command and at start); resource sampler (`metrics/metrics.jsonl`, last sample at shutdown)
+- [ ] Needs a real session: L09 to L13 in `docs/limitations.md` (second-factor wording, relay across a daily restart, JVM figures, memory under load)
+- [ ] The BrokerSRE agent must learn phase `needs-human` and the v2 events (paired change in its repository)

@@ -1,23 +1,40 @@
-# IBC log classification (log contract v1). Tab-separated: event<TAB>extended-regex<TAB>phase<TAB>level
+# IBC log classification (log contract v2). Tab-separated: event<TAB>extended-regex<TAB>phase<TAB>level
 # Lines starting with # are comments. The regex is matched against the whole IBC log line with
 # bash's [[ =~ ]] (POSIX ERE). An empty phase means "no phase change".
 #
 # Evidence per pattern (docs/limitations.md L01):
-#   REAL  = seen in this image's IBC output (IBC 3.24.2, IB Gateway 10.50.1g, 2026-11-11;
-#           tests/fixtures/ibc-real-failed-login.log): ibc_version, login_dialog,
-#           login_failed_dialog.
-#   DOCS  = wording from IBC 3.24.x sources, not yet seen in a real log: every other row.
+#   REAL   = seen in this image's IBC output (IBC 3.24.2, IB Gateway 10.50.1g, 2026-11-11;
+#            tests/fixtures/ibc-real-failed-login.log): ibc_version, login_dialog,
+#            login_failed_dialog.
+#   SOURCE = the exact text IBC 3.24.2's source code logs, not yet seen in a real log: every
+#            other row.
 # IBC reports each dialog three times (event=Opened, Activated, Focused); dialog patterns match
 # only event=Opened so that one dialog is one event. The login window and the Gateway main
 # window share the title "IBKR Gateway", so the login dialog is recognised by IBC's own
 # "Login dialog WINDOW_OPENED" line, never by the frame title.
+# IBC leaves the "Unrecognized Username or Password" dialog open and does not retry, so that
+# row sets the phase needs-human: nothing will change until a person corrects the credentials.
+#
+# Rows that were wrong at first and why (found by reading the source, 2026-11-12):
+#   login_completed is anchored at the end of the line: while it stops a logged-in Gateway IBC
+#     logs "Login has completed: exiting via [File, Close] menu" (StopTask.java), which is the
+#     opposite of a login.
+#   daily_restart is not an "IBC:" line: "autorestart file found at <path>: authentication will
+#     not be required" is an echo of ibcstart.sh, without a timestamp, when it relaunches the
+#     Gateway from its autorestart file.
+#   relogin_required matches the dialog only: IBC also logs "Re-login to session" for the same
+#     dialog (ReloginDialogHandler.java), and one re-login must be one event.
+#   twofa_dialog may never fire on Gateway 10.16 and later: there the login frame itself turns
+#     into the prompt and IBC logs only "Second Factor Authentication initiated"
+#     (AbstractLoginHandler.java). The prompt cap counts twofa_initiated only.
 twofa_initiated	IBC: Second Factor Authentication initiated	2fa-pending	warn
 twofa_dialog	detected (dialog|frame) entitled: Second Factor Authentication; event=(Opened|Activated)	2fa-pending	warn
-login_completed	IBC: Login has completed	logged-in	info
+twofa_timeout	IBC: Re-login after second factor authentication timeout in	login	warn
+login_completed	IBC: Login has completed$	logged-in	info
 login_failed	IBC: Login failed	login	error
-login_failed_dialog	detected dialog entitled: Unrecognized Username or Password; event=Opened	login	error
+login_failed_dialog	detected dialog entitled: Unrecognized Username or Password; event=Opened	needs-human	error
 existing_session	detected dialog entitled: Existing session detected; event=Opened	existing-session	warn
-relogin_required	detected dialog entitled: Re-login (is required|to session)[^;]*; event=Opened	login	warn
-daily_restart	IBC: autorestart file found	restarting	info
+relogin_required	detected dialog entitled: Re-login is required; event=Opened	login	warn
+daily_restart	^autorestart file found at .*: authentication will not be required$	restarting	info
 login_dialog	IBC: Login dialog WINDOW_OPENED	login	info
 ibc_version	IBC: version	login	info

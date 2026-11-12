@@ -66,7 +66,7 @@ labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencon
 if [[ "${labels}" == MIT\ 3.* ]]; then pass "OCI labels present (${labels})"; else fail "labels" "${labels}"; fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="
-run_container -e IBC_LAUNCH=no
+run_container -e IBC_LAUNCH=no -e SAMPLE_INTERVAL_S=2
 if wait_for 30 port_open 4004; then pass "socat relay listening on 4004"; else
   fail "relay" "4004 not listening"
   docker logs ibgw-test | tail -20
@@ -85,6 +85,96 @@ else
   docker logs ibgw-test 2>&1 | head -20
 fi
 if in_container 'grep -rq "dummypassword-not-real" /var/log/ibgateway'; then fail "log leak" "password found under the log volume"; else pass "password absent from the log volume"; fi
+# Log contract v2: the events file on the volume holds exactly the lines of the container's
+# stdout, each with this start's boot id and a gap-free sequence number.
+if [ "$(docker logs ibgw-test 2>&1)" = "$(in_container 'cat /var/log/ibgateway/events/events.jsonl')" ]; then
+  pass "events/events.jsonl on the volume is identical to the container's stdout"
+else
+  fail "events file" "differs from stdout"
+fi
+if in_container 'b=$(cat /var/log/ibgateway/state/boot_id); [[ "${b}" =~ ^[0-9a-f]{16}$ ]] && jq -es --arg b "${b}" "all(.boot_id == \$b) and ([.[].seq] == [range(1; length + 1)])" /var/log/ibgateway/events/events.jsonl >/dev/null'; then
+  pass "every event carries the boot id and the sequence 1..n without a gap"
+else
+  fail "boot id / seq" "missing boot id or a gap in seq"
+fi
+# The resource sampler reads this container's own cgroup and /proc (no Docker socket): a real
+# kernel must give it plausible numbers, and the sample carries this start's boot id.
+if wait_for 20 in_container 'b=$(cat /var/log/ibgateway/state/boot_id); tail -1 /var/log/ibgateway/metrics/metrics.jsonl | jq -e --arg b "${b}" ".src == \"metrics\" and .boot_id == \$b and .seq >= 1 and .phase == \"test-mode\" and .mem_working_set_bytes > 0 and .pids > 0" >/dev/null'; then
+  pass "metrics/metrics.jsonl has a sample with real memory and process numbers"
+else
+  fail "sampler" "no valid sample: $(in_container 'tail -1 /var/log/ibgateway/metrics/metrics.jsonl 2>/dev/null | cut -c1-200')"
+fi
+if in_container 'p=$(pgrep -f sampler.sh | head -1); test -n "${p}" && ! tr "\0" "\n" <"/proc/${p}/environ" | grep -q -e "^TWS_PASSWORD=" -e "^TWS_USERID="'; then
+  pass "the sampler runs without any credential in its environment"
+else
+  fail "sampler environment" "sampler not running or a credential is in its environment"
+fi
+
+echo "== preflight (doctor) =="
+# `doctor` as a command: the entrypoint runs it instead of the gateway and passes its exit code.
+doctor_run() { # extra-docker-args... ; prints stdout, returns doctor's exit code
+  docker run --rm -v "${host_secrets}:/run/secrets:ro" -e TWS_USERID_FILE=/run/secrets/ib-username \
+    -e TWS_PASSWORD_FILE=/run/secrets/ib-password -e TRADING_MODE=paper "$@" "${IMAGE}" doctor --json 2>/dev/null
+}
+doctor_json="$(doctor_run -e AUTO_RESTART_TIME='11:45 PM' -e TIME_ZONE=America/New_York)"
+doctor_rc=$?
+if [ "${doctor_rc}" -eq 0 ] && printf '%s' "${doctor_json}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e '.schema == "brokersre.doctor.v1" and (.result == "pass" or .result == "warn") and (.checks | length >= 10) and (.checks | all(has("name") and has("status") and has("detail") and has("fix")))' >/dev/null 2>&1; then
+  pass "doctor: a sound configuration passes and prints one valid JSON document"
+else
+  fail "doctor ok" "exit ${doctor_rc}: $(printf '%s' "${doctor_json}" | head -c 300)"
+fi
+doctor_json="$(doctor_run -e AUTO_RESTART_TIME='9:30 PM')"
+doctor_rc=$?
+if [ "${doctor_rc}" -eq 1 ] && printf '%s' "${doctor_json}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e '.result == "fail" and ([.checks[] | select(.name == "auto_restart_time" and .status == "fail")] | length == 1)' >/dev/null 2>&1; then
+  pass "doctor: a restart time IBC would not apply fails the preflight (exit 1) and names the check"
+else
+  fail "doctor restart time" "exit ${doctor_rc}: $(printf '%s' "${doctor_json}" | head -c 300)"
+fi
+if printf '%s' "${doctor_json}" | grep -q -e 'dummyuser' -e 'dummypassword-not-real'; then fail "doctor leak" "a credential appears in doctor's output"; else pass "doctor: no credential in its output"; fi
+# At container start a failed preflight stops everything before IBC, with an event that names
+# the problem; a wrong restart time must not lead to a login that then runs without restarts.
+run_container -e AUTO_RESTART_TIME='9:30 PM'
+if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
+  && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" = "1" ] \
+  && docker logs ibgw-test 2>&1 | grep -q '"event":"doctor_failed"' \
+  && ! docker logs ibgw-test 2>&1 | grep -q '"event":"ibc_starting"'; then
+  pass "a failed preflight stops the container before IBC starts (doctor_failed, exit 1)"
+else
+  fail "preflight stop" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
+run_container -e IBC_LAUNCH=no -e AUTO_RESTART_TIME='9:30 PM' -e DOCTOR_STRICT=no -e JAVA_HEAP_SIZE=1024
+if wait_for 30 port_open 4004 \
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_failed"' | grep -q '"level":"warn"' \
+  && docker logs ibgw-test 2>&1 | grep '"event":"config_deprecated"' | grep -q 'JAVA_HEAP_SIZE'; then
+  pass "DOCTOR_STRICT=no starts anyway; an ignored gnzsnz variable is reported by name (config_deprecated)"
+else
+  fail "preflight non-strict" "$(docker logs ibgw-test 2>&1 | tail -4 | cut -c1-300)"
+fi
+
+# A defect of the preflight itself must never stop a gateway. A stand-in doctor that ends with
+# status 1 but leaves no verdict (as an aborted script would) is mounted over the real one: the
+# container must start anyway and say that the preflight ended abnormally.
+fake_doctor="$(mktemp -d)"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"${fake_doctor}/doctor.sh"
+chmod 0755 "${fake_doctor}" "${fake_doctor}/doctor.sh"
+host_fake_doctor="${fake_doctor}"
+if command -v cygpath >/dev/null 2>&1; then host_fake_doctor="$(cygpath -m "${fake_doctor}")"; fi
+run_container -e IBC_LAUNCH=no -v "${host_fake_doctor}/doctor.sh:/usr/local/lib/brokersre/doctor.sh:ro"
+if wait_for 30 port_open 4004 \
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_warning"' | grep -q 'ended abnormally (exit status 1)'; then
+  pass "a preflight that aborts (status 1, no verdict) does not stop the start; it is reported"
+else
+  fail "preflight abort" "exit=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
+docker rm -f ibgw-test >/dev/null 2>&1 || true
+rm -rf "${fake_doctor}"
+# The real preflight leaves its verdict where the entrypoint looks for it.
+run_container -e IBC_LAUNCH=no -e AUTO_RESTART_TIME='11:45 PM'
+if wait_for 30 port_open 4004 && in_container 'v=$(cat /run/brokersre/doctor.result); test "${v}" = pass || test "${v}" = warn'; then
+  pass "the preflight's verdict file holds pass or warn after a start that went ahead"
+else
+  fail "verdict file" "$(in_container 'cat /run/brokersre/doctor.result' 2>&1 | head -c 200)"
+fi
 
 echo "== read-only root filesystem =="
 # A tmpfs is root-owned 0755 unless the mount says otherwise, and the gateway runs as uid 1000;
@@ -112,7 +202,7 @@ echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabi
 # The reference compose runs read-only with every capability dropped, so the smoke test does
 # too: IBC and the Gateway JVM must start in exactly that configuration.
 docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
-run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true -e JAVA_HEAP_MB=1024 \
   --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
 if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
   fail "ibc smoke" "7462 never listened"
@@ -121,11 +211,21 @@ fi
 if in_container 'pgrep -f ibcalpha.ibc >/dev/null'; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
 # A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
 # Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
-if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -qx "_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home"'; then
+if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -q "^_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home "'; then
   pass "Gateway JVM gets a user.home on the settings volume"
 else
   fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
 fi
+# JAVA_HEAP_MB=1024 above: the Gateway reports its real maximum heap in launcher.log a few
+# seconds after start. 1,048,576 KB proves the run-time value won over the image's 768 MB.
+if wait_for 60 in_container 'grep -q "HeapUsage: Max=1,048,576KB" /home/ibgateway/Jts/settings/launcher.log'; then
+  pass "JAVA_HEAP_MB sets the Gateway heap at run time (1024 MB in effect)"
+else
+  fail "runtime heap" "launcher.log does not show a 1024 MB heap: $(in_container 'grep -o "HeapUsage: Max=[0-9,]*KB" /home/ibgateway/Jts/settings/launcher.log | tail -1' 2>/dev/null)"
+fi
+# The relay follows the login: before a login it must refuse connections instead of accepting
+# and dropping them.
+if port_open 4004; then fail "relay gate" "relay listens on 4004 before any login"; else pass "relay closed while the Gateway is not logged in"; fi
 if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
   pass "Java home exists, is writable and private (0700) under a read-only root"
 else

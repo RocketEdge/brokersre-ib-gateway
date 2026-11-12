@@ -138,3 +138,15 @@ lines_in() { wc -l <"$1"; }
   wait_until 10 bash -c "[ \"\$(wc -l <'${WORK}/logs/jts/launcher.log')\" = 3 ]"
   [ "$(cat "${WORK}/logs/jts/launcher.log")" == $'old1\nold2\nnew1' ]
 }
+
+@test "a tail that dies is replaced, so the mirror does not stop silently" {
+  mkdir -p "${WORK}/settings" "${WORK}/logs"
+  printf 'l1\n' >"${WORK}/settings/launcher.log"
+  start_mirror
+  wait_until 10 bash -c "[ \"\$(wc -l <'${WORK}/logs/jts/launcher.log')\" = 1 ]"
+  pkill -f "follow=descriptor ${WORK}/settings/launcher.log"
+  sleep 0.5
+  printf 'l2\n' >>"${WORK}/settings/launcher.log"
+  wait_until 10 bash -c "[ \"\$(wc -l <'${WORK}/logs/jts/launcher.log')\" = 2 ]"
+  [ "$(cat "${WORK}/logs/jts/launcher.log")" == $'l1\nl2' ]
+}

@@ -29,15 +29,20 @@ All of these must be green before claiming a change done; run them fresh.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
-3. **Stdout is the JSON log contract v1** (`schemas/log-event.v1.schema.json`); raw IBC and
-   Gateway output goes to `/var/log/ibgateway/{ibc,jts}`; the phase file is
-   `/var/log/ibgateway/state/phase`. Changing any of these is a contract version bump
-   coordinated with the BrokerSRE agent (`docs/log-contract.md`).
+3. **Events follow log contract v2** (`schemas/log-event.v2.schema.json`, `docs/log-contract.md`):
+   every event goes through `log_event` (stdout and `events/events.jsonl`, identical lines,
+   with `boot_id` and a gap-free `seq`); nothing else writes to stdout. Raw IBC and Gateway
+   output goes to `/var/log/ibgateway/{ibc,jts}`; the phase file is
+   `/var/log/ibgateway/state/phase`; resource samples go to `metrics/metrics.jsonl`. Changing a
+   key, a phase, an event name or a path is a contract version bump coordinated with every
+   consumer (the sidecar, the Azure pack, the BrokerSRE agent).
 4. **No sudo, no SSH/telnet, uid 1000, read-only root filesystem supported.** Adding a package
    needs a reason in the ADR log.
 5. **One brokerage session per container** (`TRADING_MODE` is `live` or `paper`, never `both`).
 6. **Honest health**: unhealthy while not logged in, including during a pending 2FA; nothing in
-   this image restarts the Gateway on its own.
+   this image restarts the Gateway on its own. The second-factor cap (`TWOFA_MAX_PROMPTS`)
+   stops IBC and holds the container in phase `needs-human`; it never restarts, answers or
+   bypasses anything.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
@@ -53,10 +58,10 @@ Dockerfile                 two-stage build; ARGs come from docker-bake.hcl <- ve
 docker-bake.hcl            targets stable/latest, tags, labels; scripts/bake-env.sh exports variables
 scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first)
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
-rootfs/usr/local/lib/brokersre/*.sh           common, log, render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, rotating-append, tail-gateway-logs, ibc-cmd, healthcheck
+rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
-rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification)
-schemas/log-event.v1.schema.json
+rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
+schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
 tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
 compose/docker-compose.example.yml
 .github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release (CodeQL comes from GitHub default setup, enabled by the organisation)
@@ -92,3 +97,32 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   as the character it names; assemble such test strings from parts (see `render.bats`).
 - The host that develops this repository may lack `jq`: run `tests/bats/ci` inside the image
   (`docker run --rm -v "$PWD:/code:ro" -w /code --entrypoint bash <image> -c 'tests/.bats-core/bin/bats tests/bats/ci'`).
+- Events: always `log_event` / `log_event_data` (never `echo` to stdout). The sequence number
+  is handed out under `flock` on the log volume, so every process of the container shares one
+  gap-free series; a function that may end the entrypoint must not be called inside `$(...)`
+  or with its stdout redirected, or its error event is captured instead of printed.
+- The preflight (`doctor --startup`) may stop a start only for a condition under which the
+  gateway cannot work or would send IBKR a wrong login. Anything the image cannot verify (a
+  time zone without a zone database, a likely-but-uncertain memory problem) is a warning. A new
+  variable documented in `docs/env-vars.md` must be added to the doctor's known names (a test
+  compares the two).
+- IBC parses `AutoRestartTime` with `hh:mm a`: a two-digit hour is required (`01:05 AM`).
+  Verify such rules by running IBC's own classes from the image's `IBC.jar`, not from memory.
+- A supervised child in bash: poll a counter or a file in tests (`wait_until`), never read it
+  once; and `pgrep -f <path>` inside `bash -c "..."` matches that very shell.
+- The unit suite reads the worktree live through a read-only mount: do not edit scripts or
+  tests while it runs. Remove test containers by name, never by image.
+- A temporary image for local iteration (the published image plus `COPY rootfs/ /`) is enough
+  for the unit and container suites; the full build from the Dockerfile is what CI proves.
+- A pattern row must be checked against every place IBC writes similar text, in its Java
+  source and in `ibcstart.sh` (whose `echo` lines carry no timestamp and no `IBC:` prefix).
+  `Login has completed: exiting via ...` is IBC's stop message, not a login; anchor rows with
+  `$` where IBC continues the sentence elsewhere.
+- The phase file is written only through `phase_write` (`set_phase` for the entrypoint,
+  `write_phase` for the classifier). Never write `state/phase` directly: the lock and the
+  rule that the classifier cannot leave `stopping`, `stopped` or `exited` live there.
+- On Windows the Docker Desktop file share can be very slow (listing 500 files took 42 s on
+  2026-11-12), which makes `run-in-image.sh` take an hour. To iterate, start the image with
+  `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
+  tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
+  processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.

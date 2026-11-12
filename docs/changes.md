@@ -5,6 +5,77 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Pattern table corrected from IBC's source; phase writes serialised and held while the gateway ends
+
+- **What changed:** (1) three rows of `ibc-patterns.tsv`: `login_completed` is anchored at the
+  end of the line, `daily_restart` matches the start script's real line
+  (`autorestart file found at <path>: authentication will not be required`), and
+  `relogin_required` matches the dialog only. (2) `phase_write` in `log.sh` is now the only
+  writer of `state/phase`: writes are serialised by a lock, each uses a temporary file of its
+  own, and the classifier's writes are held back while the phase is `stopping`, `stopped` or
+  `exited`. (3) Two timing-sensitive tests wait longer or for their own processes only.
+- **Result:** unit suite green (counts in the pull request). A stop of a logged-in Gateway can
+  no longer flip the phase back to `logged-in`, so the gated relay stays closed while the
+  Gateway exits.
+- **What did NOT work / root cause:** the first v2 table was written from single lines of
+  IBC's source without searching for every place that writes similar text. (a) `StopTask.java`
+  logs `Login has completed: exiting via [File, Close] menu` when it stops a logged-in
+  Gateway; the unanchored row read that as a login and set `logged-in` during shutdown, which
+  would have reopened the relay. (b) The autorestart line is an `echo` of `ibcstart.sh` with
+  no `IBC:` prefix, so the `daily_restart` row could never match. (c) IBC logs the Re-login
+  dialog and its own `Re-login to session`, so one re-login was two events. All three were
+  found by the paired change in the BrokerSRE agent, which re-read the source; none could show
+  in the tests here, because the synthetic fixture had been written from the same wrong
+  assumptions. Separately, the entrypoint and the classifier wrote the phase through the same
+  temporary file name without a lock: a rename of one writer could publish the half-written
+  file of the other. Also learned: a unit run through the Windows file share took an hour
+  (listing 500 files: 42 s), and one relay test missed its 5 s budget under that load.
+- **Next step:** real lines for these rows from a successful session (L01, L09); the agent's
+  vendored copy of the table is refreshed after this merges.
+
+### 2026-11-12 — Log contract v2: events on the volume, `needs-human`, gated relay, preflight, resource samples
+
+- **What changed:** (1) every event is written to stdout and, as the identical line, to
+  `events/events.jsonl`, with a per-start `boot_id` and a gap-free `seq`; `container_start` and
+  `config_rendered` carry structured `data` (versions; a fingerprint of the non-secret
+  configuration). (2) New phase `needs-human` for a rejected login and for the optional
+  second-factor cap `TWOFA_MAX_PROMPTS`; the entrypoint holds the container up in that phase.
+  (3) `unknown_window` for a window that neither the pattern table nor the list of titles IBC
+  handles knows. (4) The relay listens only while the phase is `logged-in`
+  (`RELAY_MODE=gated`). (5) `JAVA_HEAP_MB` sets the heap at run time (number or `auto`); the
+  JVM exits on OutOfMemoryError. (6) `doctor`: a preflight as a command and at every start.
+  (7) `sampler.sh`: `metrics/metrics.jsonl` from the container's own cgroup and `/proc`, with
+  the events `oom_kill`, `memory_high`, `disk_low`, `login_stalled`. ADR 0013, schema
+  `log-event.v2.schema.json`, `docs/log-contract.md` rewritten for v2.
+- **Result:** unit suite and container suite green (counts in the pull request); in a real
+  offline run the events are numbered 1..13 without a gap across the entrypoint, the preflight,
+  the classifier and the relay, the Gateway itself reports the 1024 MB heap that
+  `JAVA_HEAP_MB=1024` asked for, the relay refuses connections before a login, and the last
+  resource sample is written at shutdown.
+- **What did NOT work / root cause:**
+  - *The first heap resolver printed its result and was called with a redirect*, so its error
+    event would have gone into a temporary file instead of stdout; it now sets a variable.
+  - *The time-format rule first given to the preflight was wrong.* IBC parses the restart time
+    with the pattern `hh:mm a`: `1:05 AM` is rejected and `00:15 AM` accepted, the opposite of
+    the lenient pattern in the brief. Found by running IBC's own parser from the image's
+    `IBC.jar` instead of trusting the documentation.
+  - *A preflight that can stop a working gateway is worse than none.* Three checks (an
+    unverifiable time zone, a percentage-only disk rule, a crashed check) could have stopped a
+    container that runs today; they are warnings now, and a failure is reserved for conditions
+    under which the gateway cannot work or would send IBKR a wrong login.
+  - *An out-of-memory kill of the Gateway would not have been reported*: IBC exits, the
+    container ends and its cgroup is gone before the next 30 s sample. The sampler now takes a
+    last sample when it is stopped, and the entrypoint waits for it (bounded, then SIGKILL).
+  - *A suspected "zombie child" bug in the relay supervisor was not real.* The failing test had
+    a race of its own (it read a counter once instead of polling); both liveness checks passed
+    every time once the test was fixed, so the extra helper was removed again.
+  - *A fingerprint of the configuration that included the credentials* would let a reader of the
+    events test password guesses offline; the fingerprint leaves them out, and a test proves it.
+  - Not established: everything that needs a successful login (see `docs/limitations.md` L09
+    to L13).
+- **Next step:** the qualification script and workflow (ADR 0014), then the sidecar, which reads
+  exactly this contract.
+
 ### 2026-11-12 — First real login attempt: read-only login hang fixed, Windows-written secrets, real log patterns
 
 - **What changed:** the image met IBKR's login servers for the first time (IB Gateway 10.50.1g,

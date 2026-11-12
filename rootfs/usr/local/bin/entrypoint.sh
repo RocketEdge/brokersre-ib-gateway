@@ -3,12 +3,18 @@
 # VNC, the socat relay, the Gateway log mirror and IBC itself; on SIGTERM asks IBC to STOP the
 # Gateway tidily through the command server before stopping the helpers.
 #
-# Stdout carries only structured JSON events (log contract v1); raw IBC/Gateway output goes to
+# Stdout carries only structured JSON events (log contract v2); raw IBC/Gateway output goes to
 # ${LOG_DIR}. With IBC_LAUNCH=no everything except IBC starts, which is how the offline tests
 # prove rendering, secrets handling, the relay and the read-only filesystem without a login.
 set -euo pipefail
 
 BROKERSRE_LIB="${BROKERSRE_LIB:-/usr/local/lib/brokersre}"
+# `docker compose run --rm ib-gateway doctor [--json] [--online]`: run the preflight instead of
+# the gateway and exit with its status (0 no check failed, 1 a check failed, 2 usage error).
+if [ "${1:-}" = "doctor" ]; then
+  shift
+  exec "${BROKERSRE_LIB}/doctor.sh" "$@"
+fi
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/common.sh"
 # shellcheck source=/dev/null
@@ -24,7 +30,25 @@ source "${BROKERSRE_LIB}/java-env.sh"
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/start-ibc.sh"
 
-IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID=""
+IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID="" SAMPLER_PID=""
+
+# stop_sampler: ask the sampler for its last sample and wait for it, at most 6 s.
+#
+# The last sample is what reports an OOM kill of the Gateway: the 30 s loop would be too late,
+# because the container ends right after IBC and the counter lives in this container's cgroup.
+# The wait is bounded and ends with SIGKILL, so a sampler held up by a volume that hangs cannot
+# delay the container's exit. Safe to call twice and without a sampler.
+stop_sampler() {
+  local waited=0
+  if [ -z "${SAMPLER_PID}" ]; then return 0; fi
+  kill -TERM "${SAMPLER_PID}" 2>/dev/null || true
+  while kill -0 "${SAMPLER_PID}" 2>/dev/null && [ "${waited}" -lt 60 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL "${SAMPLER_PID}" 2>/dev/null || true
+  SAMPLER_PID=""
+}
 
 # shellcheck disable=SC2317,SC2329  # invoked through the TERM/INT trap, which shellcheck cannot follow
 shutdown() {
@@ -43,6 +67,7 @@ shutdown() {
     done
     if kill -0 "${IBC_PID}" 2>/dev/null; then kill -KILL "${IBC_PID}" 2>/dev/null || true; fi
   fi
+  stop_sampler
   for p in "${TAIL_PID}" "${SOCAT_PID}" "${VNC_PID}" "${XVFB_PID}"; do
     if [ -n "${p}" ]; then kill "${p}" 2>/dev/null || true; fi
   done
@@ -61,9 +86,33 @@ for dir in "${LOG_DIR}" "${RUN_DIR}" "${TWS_SETTINGS_PATH}"; do
     exit 1
   fi
 done
-mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state"
+mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state" "${LOG_DIR}/events" "${LOG_DIR}/metrics"
+# From here on every event carries this start's boot id and a sequence number (log.sh).
+new_boot_id
 set_phase starting
-log_event entrypoint info container_start "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
+log_event_data entrypoint info container_start \
+  "$(json_object gateway_version "${IB_GATEWAY_VERSION}" channel "${IB_GATEWAY_CHANNEL}" ibc_version "${IBC_VERSION}" ibc_release "${IBC_RELEASE_TAG:-}" trading_mode "${TRADING_MODE:-}" instance "${IBGW_INSTANCE:-default}")" \
+  "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
+
+# Preflight (doctor.sh): name every configuration problem and its fix before anything starts.
+# A start is stopped only on positive evidence that a check failed: exit status 1 AND the
+# verdict `fail` in the result file this run wrote (DOCTOR_STRICT=no turns a failure into a
+# warning and the verdict into `warn`). Any other non-zero end is a defect of the preflight
+# itself, which must never stop a gateway: it is logged and the start continues, with the
+# checks further down (dirs, credentials, Java home) still behind it.
+# It runs before render_config because it inspects the secret files.
+doctor_result_file="${DOCTOR_RESULT_FILE:-${RUN_DIR}/doctor.result}"
+doctor_status=0
+doctor_verdict=""
+rm -f "${doctor_result_file}" 2>/dev/null || true
+"${BROKERSRE_LIB}/doctor.sh" --startup || doctor_status=$?
+if [ -r "${doctor_result_file}" ]; then read -r doctor_verdict <"${doctor_result_file}" || true; fi
+if [ "${doctor_status}" -eq 1 ] && [ "${doctor_verdict}" = "fail" ]; then
+  set_phase exited
+  exit 1
+elif [ "${doctor_status}" -ne 0 ]; then
+  log_event doctor warn doctor_warning "the preflight could not run or ended abnormally (exit status ${doctor_status}); the start continues"
+fi
 
 set_ports
 render_config
@@ -75,6 +124,10 @@ start_vnc
 start_socat
 "${BROKERSRE_LIB}/tail-gateway-logs.sh" &
 TAIL_PID=$!
+# Resource sampler: metrics/metrics.jsonl plus the oom_kill, disk_low, login_stalled and
+# memory_high events. Started after render_config, so no secret is left in its environment.
+"${BROKERSRE_LIB}/sampler.sh" &
+SAMPLER_PID=$!
 
 if [ "${IBC_LAUNCH}" = "no" ]; then
   log_event entrypoint warn ibc_not_launched "IBC_LAUNCH=no: IBC and IB Gateway are NOT started (test mode)"
@@ -87,5 +140,18 @@ start_ibc
 rc=0
 wait "${IBC_PID}" || rc=$?
 log_event ibc warn ibc_exited "IBC process exited with status ${rc}"
+if [ "$(current_phase)" = "needs-human" ]; then
+  # IBC was stopped on purpose because only a person can go on (for example: the second factor
+  # was not approved after TWOFA_MAX_PROMPTS prompts). Exiting here would let a restart policy
+  # start the next login at once, and the next, defeating the cap. The container stays up,
+  # unhealthy, with the phase needs-human, until a person restarts it; SIGTERM still runs the
+  # normal shutdown through the trap.
+  log_event entrypoint error needs_human "IBC has stopped and the gateway waits for a person; restart the container to log in again"
+  while true; do
+    sleep 3600 &
+    wait $! 2>/dev/null || true
+  done
+fi
+stop_sampler
 set_phase exited
 exit "${rc}"

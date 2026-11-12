@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RocketEdge/brokersre-ib-gateway/schemas/log-event.v2.schema.json",
+  "title": "brokersre-ib-gateway event (log contract v2): one line of the container's stdout and of events/events.jsonl",
+  "description": "Backward compatible with v1 for a reader that ignores unknown keys: the five v1 keys are unchanged; boot_id and seq are added. A reader must ignore keys it does not know.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["ts", "src", "level", "event", "msg"],
+  "properties": {
+    "ts": { "type": "string", "description": "UTC timestamp, ISO-8601 with milliseconds and Z suffix", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+    "src": { "type": "string", "description": "Component that emitted the event.", "enum": ["entrypoint", "ibc", "xvfb", "vnc", "socat", "healthcheck", "doctor", "metrics"] },
+    "level": { "type": "string", "enum": ["info", "warn", "error"] },
+    "event": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "msg": { "type": "string", "description": "Human-readable text. Never a raw IBC or Gateway log line and never a credential." },
+    "data": { "type": "object", "description": "Optional facts of this event as a flat object of strings, so a reader does not parse msg. Never a credential, a username or a full account id. container_start: gateway_version, channel, ibc_version, ibc_release, trading_mode, instance. config_rendered and config_custom: config_hash (16 hex, fingerprint of the non-secret configuration), trading_mode, read_only_api, auto_restart_time, time_zone.", "additionalProperties": { "type": "string" } },
+    "boot_id": { "type": "string", "description": "Identity of one container start: 16 lowercase hex characters. Absent only when no boot id is known (an event emitted before the log volume was usable).", "pattern": "^[0-9a-f]{16}$" },
+    "seq": { "type": "integer", "minimum": 1, "description": "Position of this event among the events of its boot_id, counted across every process of the container without gaps. Absent when the event could not be written to the log volume." }
+  }
+}

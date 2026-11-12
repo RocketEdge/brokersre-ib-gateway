@@ -1,21 +1,42 @@
 #!/usr/bin/env bash
-# Structured stdout for the container (log contract v1, schemas/log-event.v1.schema.json).
+# Structured events for the container (log contract v2, schemas/log-event.v2.schema.json).
 #
-# Every line the container writes to stdout is one JSON object:
-#   {"ts": "<UTC ISO-8601>", "src": "<component>", "level": "info|warn|error", "event": "<snake_case>", "msg": "<text>"}
-# Raw IBC and Gateway output never reaches stdout; it goes to files under LOG_DIR, so a
-# credential echoed by a dialog can never leak through container logging.
+# Every event is one JSON object on one line:
+#   {"ts": "<UTC ISO-8601>", "src": "<component>", "level": "info|warn|error",
+#    "event": "<snake_case>", "msg": "<text>", "boot_id": "<16 hex>", "seq": <n>}
+# and it is written twice, as the identical line: to stdout (container logging) and to
+# ${LOG_DIR}/events/events.jsonl (the shared log volume), so a sidecar that mounts only the
+# volume sees exactly what `docker logs` shows. `seq` counts events per `boot_id` across every
+# process of the container without gaps, which lets a reader prove that it lost nothing.
+# Raw IBC and Gateway output never becomes an event; it goes to files under LOG_DIR, so a
+# credential echoed by a dialog cannot leak through an event.
 #
 # Usage: log_event <src> <level> <event> <msg...>
 
+# json_escape STRING: print STRING escaped for use inside a JSON string value (backslash,
+# double quote, and every control character below U+0020).
 json_escape() {
-  # Escape backslashes, double quotes and control characters for a JSON string value.
-  local s="$1"
+  local s="$1" out="" ch esc
+  local -i i code
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
   s="${s//$'\t'/\\t}"
+  # Rare path: any other control character is escaped one character at a time.
+  if [[ "${s}" == *[$'\001'-$'\037']* ]]; then
+    for ((i = 0; i < ${#s}; i++)); do
+      ch="${s:i:1}"
+      printf -v code '%d' "'${ch}"
+      if ((code > 0 && code < 32)); then
+        printf -v esc '\\u%04x' "${code}"
+        out+="${esc}"
+      else
+        out+="${ch}"
+      fi
+    done
+    s="${out}"
+  fi
   printf '%s' "${s}"
 }
 
@@ -27,11 +48,141 @@ ts_now() {
   TZ=UTC printf '%(%Y-%m-%dT%H:%M:%S)T.%sZ' "${secs}" "${micros:0:3}"
 }
 
+# phase_write_now PHASE MODE DIR: the write itself; call it through phase_write only.
+# Returns 0 when written, 3 when MODE is --unless-ending and the gateway is ending, 1 when
+# the file could not be written (the temporary file is removed).
+phase_write_now() {
+  local phase="$1" mode="$2" dir="$3" current="" tmp="$3/phase.tmp.${BASHPID}"
+  if [ "${mode}" = "--unless-ending" ] && [ -r "${dir}/phase" ]; then
+    read -r current <"${dir}/phase" || true
+    case "${current}" in
+      stopping | stopped | exited) return 3 ;;
+    esac
+  fi
+  if printf '%s\n' "${phase}" >"${tmp}" 2>/dev/null && mv -f "${tmp}" "${dir}/phase" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "${tmp}" 2>/dev/null
+  return 1
+}
+
+# phase_write PHASE [--unless-ending]: publish the gateway's lifecycle phase.
+#
+# The phase file (${LOG_DIR}/state/phase, one token and a newline) has two writers, the
+# entrypoint and the IBC classifier, and readers that act on it: the health check, the relay
+# gate, the sampler, the sidecar and every consumer outside the container. Contract:
+#   - a reader never sees an empty or half-written file: each write goes to a temporary file
+#     of its own (named after the writing process) and is renamed over the phase file;
+#   - writers are serialised by a lock on ${LOG_DIR}/state/.phase.lock, so "read the current
+#     phase, then write" is one step;
+#   - with --unless-ending (the classifier's mode) nothing is written while the phase is
+#     stopping, stopped or exited: once the entrypoint has begun to end the gateway, a late
+#     line of IBC's output must not move the phase back. IBC itself logs "Login has completed:
+#     exiting via ..." while it stops, and a phase that went back to logged-in would open the
+#     relay again on a gateway that is going away;
+#   - the phase is never lost to the lock: when the lock file cannot be opened, or the lock is
+#     not obtained within 2 s, the write goes ahead without it.
+# Returns 0 when written, 3 when held back by --unless-ending, 1 when the file could not be
+# written.
+phase_write() {
+  local phase="$1" mode="${2:-}" dir="${LOG_DIR:-/var/log/ibgateway}/state" status=0
+  local lock="${LOG_DIR:-/var/log/ibgateway}/state/.phase.lock"
+  mkdir -p "${dir}" 2>/dev/null || true
+  if { : 9>>"${lock}"; } 2>/dev/null; then
+    (
+      flock -w 2 9 2>/dev/null || true
+      phase_write_now "${phase}" "${mode}" "${dir}"
+    ) 9>>"${lock}" || status=$?
+  else
+    phase_write_now "${phase}" "${mode}" "${dir}" || status=$?
+  fi
+  return "${status}"
+}
+
+# log_event_persist DIR BOOT BODY: under an exclusive lock, give the event the next sequence
+# number of this boot, append it to DIR/events.jsonl (rotating the file by size first) and
+# print the same line to stdout.
+#
+# Contract: returns 0 after the line was written to both places; returns 1 without printing
+# when the lock, the append or the counter write failed, so the caller can still print the
+# event. The lock makes the counter and the file order agree across processes (the entrypoint,
+# the IBC classifier, the sampler and `doctor` all emit events). The timestamp is taken inside
+# the lock, so sequence order is also time order.
+# Rotation: LOG_MAX_BYTES (default 10485760) and LOG_KEEP (default 3), as for the other logs.
+log_event_persist() {
+  local dir="$1" boot="$2" body="$3" file="$1/events.jsonl"
+  local seq_boot="" seq=0 line max="${LOG_MAX_BYTES:-10485760}" keep="${LOG_KEEP:-3}" size=0 i
+  local LC_ALL=C
+  [[ "${max}" =~ ^[1-9][0-9]*$ ]] || max=10485760
+  [[ "${keep}" =~ ^[0-9]+$ ]] || keep=3
+  {
+    flock -w 5 9 || return 1
+    if [ -r "${dir}/.seq" ]; then read -r seq_boot seq <"${dir}/.seq" || true; fi
+    if [ "${seq_boot}" != "${boot}" ] || ! [[ "${seq}" =~ ^[0-9]+$ ]]; then seq=0; fi
+    seq=$((seq + 1))
+    line="{\"ts\":\"$(ts_now)\",${body},\"boot_id\":\"${boot}\",\"seq\":${seq}}"
+    if [ -f "${file}" ]; then size="$(stat -c %s "${file}" 2>/dev/null || echo 0)"; fi
+    if [ "${size}" -gt 0 ] && [ $((size + ${#line} + 1)) -gt "${max}" ]; then
+      if [ "${keep}" -eq 0 ]; then
+        rm -f "${file}"
+      else
+        rm -f "${file}.${keep}"
+        for ((i = keep - 1; i >= 1; i--)); do
+          if [ -f "${file}.${i}" ]; then mv -f "${file}.${i}" "${file}.$((i + 1))"; fi
+        done
+        mv -f "${file}" "${file}.1"
+      fi
+    fi
+    printf '%s\n' "${line}" >>"${file}" 2>/dev/null || return 1
+    printf '%s %s\n' "${boot}" "${seq}" >"${dir}/.seq" 2>/dev/null || return 1
+    printf '%s\n' "${line}"
+  } 9>"${dir}/.lock"
+}
+
+# json_object KEY VALUE [KEY VALUE ...]: print a flat JSON object whose values are strings.
+# For the `data` of an event: facts a reader would otherwise have to parse out of `msg`
+# (versions, a configuration fingerprint). Never pass a secret: events leave the host.
+json_object() {
+  local out="" sep=""
+  while [ "$#" -ge 2 ]; do
+    out+="${sep}\"$(json_escape "$1")\":\"$(json_escape "$2")\""
+    sep=","
+    shift 2
+  done
+  printf '{%s}' "${out}"
+}
+
+# log_event SRC LEVEL EVENT MSG...: emit one event.
+#
+# The stdout line is never lost: when the log volume cannot be written (not mounted, not
+# writable, lock timeout) the event is printed without `seq`, and without `boot_id` when no boot
+# id is known. The boot id comes from BOOT_ID (exported by the entrypoint) or, for a process
+# started with `docker exec`, from ${LOG_DIR}/state/boot_id.
 log_event() {
   local src="$1" level="$2" event="$3"
   shift 3
-  local msg="$*"
-  printf '{"ts":"%s","src":"%s","level":"%s","event":"%s","msg":"%s"}\n' \
-    "$(ts_now)" \
-    "$(json_escape "${src}")" "$(json_escape "${level}")" "$(json_escape "${event}")" "$(json_escape "${msg}")"
+  log_event_data "${src}" "${level}" "${event}" "" "$@"
+}
+
+# log_event_data SRC LEVEL EVENT DATA MSG...: emit one event that also carries a `data` object.
+#
+# DATA is the text of a JSON object (build it with json_object) or empty. Text that does not
+# look like an object is dropped and the event is emitted without `data`: a formatting mistake
+# in optional detail must never cost the event or produce an invalid line.
+log_event_data() {
+  local src="$1" level="$2" event="$3" data="$4"
+  shift 4
+  local msg="$*" body boot="${BOOT_ID:-}" dir
+  body="\"src\":\"$(json_escape "${src}")\",\"level\":\"$(json_escape "${level}")\",\"event\":\"$(json_escape "${event}")\",\"msg\":\"$(json_escape "${msg}")\""
+  if [[ "${data}" == \{*\} ]]; then body+=",\"data\":${data}"; fi
+  if [ -n "${LOG_DIR:-}" ]; then
+    dir="${LOG_DIR}/events"
+    if [ -z "${boot}" ] && [ -r "${LOG_DIR}/state/boot_id" ]; then
+      read -r boot <"${LOG_DIR}/state/boot_id" || true
+    fi
+    if [ -n "${boot}" ] && mkdir -p "${dir}" 2>/dev/null && [ -w "${dir}" ]; then
+      if log_event_persist "${dir}" "${boot}" "${body}"; then return 0; fi
+    fi
+  fi
+  printf '{"ts":"%s",%s%s}\n' "$(ts_now)" "${body}" "${boot:+,\"boot_id\":\"${boot}\"}"
 }
