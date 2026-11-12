@@ -1,0 +1,61 @@
+# Compose override that adds the optional sidecar to the reference gateway.
+#
+#   docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml up -d
+#
+# The sidecar shares the gateway's network namespace, so its port 9810 is PUBLISHED ON THE
+# ib-gateway SERVICE (compose appends this entry to the gateway's ports). Pin the image by
+# DIGEST in production (the publish workflow prints it); the tag is for local evaluation.
+# Channel credentials are files (Docker secrets); never put a webhook URL or token in here.
+services:
+  ib-gateway:
+    ports:
+      # Sidecar endpoints (/livez /readyz /status /metrics). Bind to loopback or a private
+      # NIC; they are unauthenticated and meant for a local monitor or a reverse proxy.
+      - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
+
+  sidecar:
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0
+    # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
+    # this policy starts it again inside the gateway's new network namespace.
+    restart: unless-stopped
+    network_mode: "service:ib-gateway"
+    depends_on:
+      ib-gateway:
+        condition: service_started
+        restart: true            # compose restarts the sidecar when it restarts the gateway
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 256m
+    pids_limit: 128
+    environment:
+      TRADING_MODE: ${TRADING_MODE:-paper}           # the gateway's value: selects API port 4002/4001
+      IBGW_INSTANCE: ${IBGW_INSTANCE:-default}       # label shown in every notification
+      TIME_ZONE: ${TIME_ZONE:-America/New_York}      # local time in notifications, HEARTBEAT_TIME zone
+      # PROBE_ENABLED: "no"                          # status endpoints and alerts without the API probe
+      # HEALTH_CLIENT_ID: "999"                      # API client id reserved for the probe
+      # HEARTBEAT_TIME: "08:30"                      # daily "sidecar alive, nothing active" message
+      # NOTIFY_RUNBOOK_BASE: https://wiki.example.com/runbooks/ibgw
+      # One or more channels; each is enabled by its *_FILE variable and a secret below.
+      NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url
+      # NOTIFY_SLACK_URL_FILE: /run/secrets/notify-slack-url
+      # NOTIFY_PAGERDUTY_KEY_FILE: /run/secrets/notify-pagerduty-key
+      # NOTIFY_ESCALATION_CHANNELS: pagerduty        # who hears about a 2FA prompt after 10 and 30 minutes
+    secrets:
+      - notify-teams-url
+    volumes:
+      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      - sidecar-state:/var/lib/sidecar     # notifier state, so a restart neither repeats nor forgets
+    # The image's HEALTHCHECK calls /livez: it reports the sidecar's own health, not the gateway's.
+
+secrets:
+  notify-teams-url:
+    file: ./secrets/notify-teams-url
+
+volumes:
+  sidecar-state:
