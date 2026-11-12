@@ -79,7 +79,7 @@ doc() {
 # only_asked: every recorded docker call is one of the three read-only questions.
 only_asked() {
   [ -f "${CALLS}" ] || return 0
-  ! grep -v -E '^(inspect --type container |image inspect |buildx imagetools inspect )' "${CALLS}"
+  ! grep -v -E '^(inspect --type container |image inspect |buildx imagetools inspect )' "${CALLS}" || false
 }
 
 @test "a container on the channel's current digest is up to date (exit 0)" {
@@ -193,7 +193,7 @@ only_asked() {
   run --separate-stderr "$SCRIPT" --container oddlabel
   [ "$status" -eq 2 ]
   doc '.up_to_date == null'
-  ! grep -q reboot <<<"$output"
+  ! grep -q reboot <<<"$output" || false
 }
 
 @test "--repository asks another repository's tag and still compares the digest the container runs" {
@@ -202,7 +202,7 @@ only_asked() {
   [ "$status" -eq 0 ]
   doc --arg r "${REPO}" '.repository == $r and .up_to_date == true'
   grep -q -F "${REPO}:stable" "${CALLS}"
-  ! grep -q -F "mirror.example/gateway:stable" "${CALLS}"
+  ! grep -q -F "mirror.example/gateway:stable" "${CALLS}" || false
 }
 
 @test "a registry that cannot be reached is 'could not be determined', never 'up to date' (exit 2)" {
@@ -225,7 +225,7 @@ only_asked() {
     run --separate-stderr "$SCRIPT" --container gw
     [ "$status" -eq 2 ]
     doc '.up_to_date == null and .registry_digest == null'
-    ! grep -q -F 'proxy login' <<<"$output"
+    ! grep -q -F 'proxy login' <<<"$output" || false
   done
 }
 
@@ -233,7 +233,7 @@ only_asked() {
   run --separate-stderr "$SCRIPT" --container missing
   [ "$status" -eq 2 ]
   doc '.up_to_date == null and .result == "undetermined" and (.error | test("missing"))'
-  ! grep -q 'buildx' "${CALLS}"
+  ! grep -q 'buildx' "${CALLS}" || false
 }
 
 @test "hostile names and references are refused before docker is called" {
@@ -288,7 +288,7 @@ only_asked() {
   "$SCRIPT" --image "${REPO}@${OLD}" >/dev/null 2>&1 || true
   [ "$(wc -l <"${CALLS}")" -ge 5 ]
   only_asked
-  ! grep -q -E '(^| )(pull|run|start|stop|restart|rm|kill|exec|compose|tag|push|update|create)( |$)' "${CALLS}"
+  ! grep -q -E '(^| )(pull|run|start|stop|restart|rm|kill|exec|compose|tag|push|update|create)( |$)' "${CALLS}" || false
 }
 
 @test "text from docker or the registry never reaches the document unescaped" {

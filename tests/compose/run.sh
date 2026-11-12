@@ -350,7 +350,7 @@ up_console() { compose_console -f "$(host_path "${work_dir}/console-test-ports.y
 console_container="${console_project}-ib-gateway-1"
 console_logs() { docker logs "${console_container}" 2>&1; }
 # shellcheck disable=SC2329  # invoked through wait_for
-console_has_event() { console_logs | grep -q "\"event\":\"$1\""; }
+console_has_event() { console_logs | quiet_grep "\"event\":\"$1\""; }
 bridge_open() { in_container "${console_container}" 'timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/5901" 2>/dev/null'; }
 bridge_closed() { [ "$(docker inspect -f '{{.State.Running}}' "${console_container}" 2>/dev/null)" = "true" ] && ! bridge_open; }
 up_console down -v --remove-orphans >/dev/null 2>&1 || true
@@ -376,7 +376,7 @@ if [ "${viewer_rc}" -eq 0 ] && wait_for 15 console_has_event vnc_client_disconne
 else
   fail "console viewer" "exit ${viewer_rc} (${viewer_out}); logs: $(console_logs | tail -2 | cut -c1-300)"
 fi
-if console_logs | grep -qF -- "$(cat "${secrets_dir}/vnc-password")"; then
+if console_logs | quiet_grep -F -- "$(cat "${secrets_dir}/vnc-password")"; then
   fail "console leak" "the VNC password appears in the container's output"
 else
   pass "console: the VNC password is not in the container's output"

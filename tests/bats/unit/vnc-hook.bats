@@ -135,7 +135,7 @@ silent() {
   [[ "$output" != *"mallory"* ]]
   [[ "$output" != *"CERT-TEXT"* ]]
   [[ "$output" != *"${SECRET}"* ]]
-  ! grep -rq -e mallory -e CERT-TEXT -e "${SECRET}" "${LOG_DIR}"
+  ! grep -rq -e mallory -e CERT-TEXT -e "${SECRET}" "${LOG_DIR}" || false
 }
 
 @test "the hook always ends with status 0, also when the log volume cannot be written" {

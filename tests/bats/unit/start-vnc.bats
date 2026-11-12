@@ -137,7 +137,7 @@ has_arg() {
   export VNC_SERVER_PASSWORD="${SECRET}" VNC_VIEW_ONLY=no
   run vnc 'true'
   [ "$status" -eq 0 ]
-  ! has_arg -viewonly
+  ! has_arg -viewonly || false
   event vnc_enabled | jq -e '.level == "warn" and .data.view_only == "no" and (.msg | contains("input allowed"))' >/dev/null
 }
 
@@ -232,10 +232,10 @@ has_arg() {
   run vnc 'true'
   [ "$status" -eq 0 ]
   [[ "$output" != *"${SECRET}"* ]]
-  ! grep -q "${SECRET}" "${ARGS_FILE}"
-  ! grep -q "${SECRET}" "${ENV_FILE}"
-  ! grep -rq "${SECRET}" "${LOG_DIR}"
-  ! grep -q '^VNC_SERVER_PASSWORD' "${ENV_FILE}"
+  ! grep -q "${SECRET}" "${ARGS_FILE}" || false
+  ! grep -q "${SECRET}" "${ENV_FILE}" || false
+  ! grep -rq "${SECRET}" "${LOG_DIR}" || false
+  ! grep -q '^VNC_SERVER_PASSWORD' "${ENV_FILE}" || false
 }
 
 @test "a password from a secret file is handled the same way and its path leaves the environment" {
@@ -246,6 +246,6 @@ has_arg() {
   grep -q -x "CONTENT: ${SECRET}" "${ARGV_LOG}"
   [[ "$output" == *"F=unset"* ]]
   [[ "$output" != *"${SECRET}"* ]]
-  ! grep -q "${SECRET}" "${ARGS_FILE}" "${ENV_FILE}"
-  ! grep -q '^VNC_SERVER_PASSWORD' "${ENV_FILE}"
+  ! grep -q "${SECRET}" "${ARGS_FILE}" "${ENV_FILE}" || false
+  ! grep -q '^VNC_SERVER_PASSWORD' "${ENV_FILE}" || false
 }

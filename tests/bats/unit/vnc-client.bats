@@ -136,5 +136,5 @@ printf "%s\n" "after $(timeout 2 dd bs=1 count=6 2>/dev/null | od -An -v -tx1 | 
   run bash "${CLIENT}" --password-file "${WORK}/pw" --port "${PORT}" --hold 0
   [ "$status" -eq 3 ]
   [ "$output" == "rejected: the server refused the password" ]
-  ! grep -q '^init ' "${WORK}/seen"
+  ! grep -q '^init ' "${WORK}/seen" || false
 }

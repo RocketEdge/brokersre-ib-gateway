@@ -318,7 +318,7 @@ if in_container 'p="$(cat /run/secrets/vnc-password)"; x="$(pgrep -x x11vnc | he
     if tr "\0" "\n" </proc/1/environ | grep -q -e "^VNC_SERVER_PASSWORD=" -e "${p}"; then exit 1; fi
     if tr "\0" "\n" <"/proc/${x}/environ" | grep -q -e "^VNC_SERVER_PASSWORD" -e "${p}"; then exit 1; fi
     test ! -e /run/brokersre/vncpasswd && ! grep -rqF -- "${p}" /var/log/ibgateway /run/brokersre' \
-  && ! docker logs ibgw-test 2>&1 | grep -qF -- "$(cat "${secrets_dir}/vnc-password")"; then
+  && ! docker logs ibgw-test 2>&1 | quiet_grep -F -- "$(cat "${secrets_dir}/vnc-password")"; then
   pass "console: the VNC password is in no argument list, environment, file or event"
 else
   fail "console password hygiene" "the VNC password, its variable or its file is still visible"
@@ -345,8 +345,8 @@ fi
 run_container --network none -e VNC_SERVER_PASSWORD_FILE=/run/secrets/vnc-password -e VNC_VIEW_ONLY=true
 if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
   && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" = "1" ] \
-  && docker logs ibgw-test 2>&1 | grep '"event":"config_invalid"' | grep -q 'VNC_VIEW_ONLY must be yes or no' \
-  && ! docker logs ibgw-test 2>&1 | grep -q -e '"event":"ibc_starting"' -e '"event":"vnc_enabled"'; then
+  && docker logs ibgw-test 2>&1 | grep '"event":"config_invalid"' | quiet_grep 'VNC_VIEW_ONLY must be yes or no' \
+  && ! docker logs ibgw-test 2>&1 | quiet_grep -e '"event":"ibc_starting"' -e '"event":"vnc_enabled"'; then
   pass "console: any other VNC_VIEW_ONLY stops the start before IBC (config_invalid, exit 1)"
 else
   fail "console bad setting" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"

@@ -34,6 +34,13 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1
 PREFIX="${RECIPES_TEST_PREFIX:-recipes-test}"
 failures=0
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a credential is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
+
 pass() { echo "PASS  $1"; }
 fail() {
   echo "FAIL  $1: $2"
@@ -122,6 +129,15 @@ if [ "${mentions}" = "${image}" ]; then
 else
   fail "one pin" "found: $(tr '\n' ' ' <<<"${mentions}")"
 fi
+# The Azure pack ships the same shipper (compose/docker-compose.azure.yml). Two different
+# Vector versions in one repository would be bumped, scanned and trusted separately, and one
+# of them would be forgotten: the two pins must be the same image.
+azure_image="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(timberio\/vector[^[:space:]]*\).*$/\1/p' "${repo_root}/compose/docker-compose.azure.yml" | head -n 1)"
+if [ -n "${azure_image}" ] && [ "${azure_image}" = "${image}" ]; then
+  pass "the recipes and the Azure pack pin the same Vector image"
+else
+  fail "same pin as the Azure pack" "recipes '${image}', compose/docker-compose.azure.yml '${azure_image:-none found}'"
+fi
 
 # validate RECIPE [docker-create-options...]: run `vector validate` on the recipe in a fresh
 # container without a network; the recipe and the fake secrets are copied in. Prints Vector's
@@ -152,7 +168,7 @@ for recipe in "${recipes[@]}"; do
   fi
   # This Vector version does not expand ${VAR} unless it is started with
   # --dangerously-allow-env-var-interpolation: a variable in a recipe would be sent as text.
-  if grep -v -E '^[[:space:]]*#' "${recipes_dir}/vector-${recipe}.yaml" | grep -q -F '${'; then
+  if grep -v -E '^[[:space:]]*#' "${recipes_dir}/vector-${recipe}.yaml" | quiet_grep -F '${'; then
     fail "${recipe}: no environment variables" "the recipe uses \${...}, which this Vector version does not expand"
   else
     pass "${recipe}: reads no environment variable (settings are edited in the file, secrets come from files)"
@@ -160,7 +176,7 @@ for recipe in "${recipes[@]}"; do
   # The raw logs can hold the IBKR username: a recipe reads the two contract files only.
   includes="$(grep -E '^[[:space:]]*-[[:space:]]*/var/log/ibgateway/' "${recipes_dir}/vector-${recipe}.yaml" | sed -E 's/^[[:space:]]*-[[:space:]]*//' | sort | tr '\n' ' ')"
   if [ "${includes}" = "/var/log/ibgateway/events/events.jsonl* /var/log/ibgateway/metrics/metrics.jsonl* " ] \
-    && ! grep -v -E '^[[:space:]]*#' "${recipes_dir}/vector-${recipe}.yaml" | grep -q -E '/(ibc|jts)/|\*\*'; then
+    && ! grep -v -E '^[[:space:]]*#' "${recipes_dir}/vector-${recipe}.yaml" | quiet_grep -E '/(ibc|jts)/|\*\*'; then
     pass "${recipe}: reads events.jsonl and metrics.jsonl (and their rotated generations) only"
   else
     fail "${recipe}: files read" "include list is '${includes}'"
@@ -183,7 +199,7 @@ compose_says "read-only root filesystem" '^    read_only: true$'
 compose_says "every capability dropped" '^      - ALL$'
 compose_says "no-new-privileges" 'no-new-privileges:true'
 # A mount is rendered as a block: its target, then `read_only: true` when it is read-only.
-mount_read_only() { grep -A 1 -F "target: $1" <<<"${rendered}" | grep -q -E '^[[:space:]]+read_only: true$'; }
+mount_read_only() { grep -A 1 -F "target: $1" <<<"${rendered}" | quiet_grep -E '^[[:space:]]+read_only: true$'; }
 if [ "${rendered_status}" -eq 0 ] && mount_read_only /var/log/ibgateway && mount_read_only /run/secrets && mount_read_only /etc/vector/vector.yaml \
   && ! mount_read_only /var/tmp; then
   pass "compose: the log volume, the secrets and the recipe are mounted read-only; only the data volume is writable"
@@ -328,7 +344,7 @@ for recipe in "${recipes[@]}"; do
   else
     fail "${recipe}: recreate" "stand-in has $(received "${recipe}") lines, expected $((before + 10))"
   fi
-  if docker logs "${shipper}" 2>&1 | grep -q -F -e "${loki_password}" -e "${otlp_token}" -e "${datadog_credential}"; then
+  if docker logs "${shipper}" 2>&1 | quiet_grep -F -e "${loki_password}" -e "${otlp_token}" -e "${datadog_credential}"; then
     fail "${recipe}: secret in the log" "a credential appears in the shipper's output"
   else
     pass "${recipe}: no credential in the shipper's output"
