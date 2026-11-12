@@ -42,6 +42,7 @@
 | `LOGIN_STALL_S` | `300` | seconds | `login_stalled` when the phase has been `login` without interruption for longer than this; `login_resumed` when it then leaves `login`. |
 | `MEM_HIGH_PCT` | `85` | 0-100 | `memory_high` threshold: working set as a share of the container memory limit. Never fires without a limit. |
 | `MEM_HIGH_FOR_S` | `600` | seconds | How long the working set must stay above `MEM_HIGH_PCT` before `memory_high`; `memory_ok` when it is no longer above. |
+| `HEALTHCHECK_API` | `port` | `port`, `handshake` | What the Docker health check requires of the API: an open port (default), or also an answer to the TWS API handshake (`api-handshake.sh`), which catches a Gateway that still accepts connections but no longer responds. The handshake takes no client id and makes no request. Opt-in until its effect on a logged-in Gateway has been observed over a real session. |
 
 `JAVA_HEAP_MB` is also a build argument of the Dockerfile (the heap written into the image,
 768 by default); the run-time variable wins.

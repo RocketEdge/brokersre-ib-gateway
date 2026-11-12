@@ -25,6 +25,7 @@ by or endorsed by Interactive Brokers.
 - [Health, phases and logs](#health-phases-and-logs)
 - [Security posture](#security-posture)
 - [Verifying an image](#verifying-an-image)
+- [Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login)
 - [Get notified of new images](#get-notified-of-new-images)
 - [Building and testing](#building-and-testing)
 - [Upgrade policy](#upgrade-policy)
@@ -270,6 +271,32 @@ cosign verify "$IMAGE" \
 cosign verify-attestation --type cyclonedx "$IMAGE" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/' | jq .
 ```
+
+## Qualifying an image with a real paper login
+
+Nothing started by a push or a pull request logs in to IBKR. To prove that an image can
+really log in, run the qualification against a **paper** account of your own:
+
+```bash
+# two files, written as in the quick start: <dir>/ib-username and <dir>/ib-password
+scripts/qualify-paper.sh --image ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest> --secrets-dir <dir>
+```
+
+It starts the image in the hardened reference configuration, makes **one** login attempt in
+paper mode with the read-only API, and checks: the phase reaches `logged-in`, the health check
+agrees, the API answers its handshake, the relay opens, the events are complete and numbered
+without a gap, no window was left unhandled, and a stop logs out inside the grace period. The
+result is written to `qualify-out/result.json` (`brokersre.qualification.v1`); it holds no
+username, password or account id. Exit 0 means qualified.
+
+It never answers a second factor: if IBKR asks for one, it prints that a person must approve
+it and waits. It never retries, so a wrong password costs one failed login. Do not run it with
+a username that another session is using.
+
+In this repository the same script runs in the workflow `Qualify (paper login)`, which is
+dispatched by hand, only from `main`, only for an image given by digest, behind a required
+reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). No image has passed it yet
+([limitations](docs/limitations.md), L16).
 
 ## Get notified of new images
 

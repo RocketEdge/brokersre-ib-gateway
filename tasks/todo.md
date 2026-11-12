@@ -41,3 +41,11 @@
 - [x] Preflight `doctor` (command and at start); resource sampler (`metrics/metrics.jsonl`, last sample at shutdown)
 - [ ] Needs a real session: L09 to L13 in `docs/limitations.md` (second-factor wording, relay across a daily restart, JVM figures, memory under load)
 - [ ] The BrokerSRE agent must learn phase `needs-human` and the v2 events (paired change in its repository)
+
+## Roadmap P1: qualification (2026-11-12, branch `feat/p1-canary`, stacked on `feat/p1-contract-v2`)
+
+- [x] `api-handshake.sh`: read-only proof that the API answers; `HEALTHCHECK_API=handshake` (opt-in)
+- [x] `scripts/qualify-paper.sh`: one real paper login with checks and a result document; offline test in the container suite
+- [x] Workflow `qualify-paper.yml` (manual, by digest, from `main`), ADR 0014; GitHub environment `paper-qualification` created (required reviewer, `main` only, secrets `PAPER_USERID` and `PAPER_PASSWORD`)
+- [ ] First qualified run: needs paper credentials that IBKR accepts (the first attempt on 2026-11-12 was rejected); then update the environment secrets and dispatch the workflow
+- [ ] After three recorded passes: move `stable` only after a `qualified-paper` attestation exists

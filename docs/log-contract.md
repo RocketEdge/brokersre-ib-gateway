@@ -199,3 +199,9 @@ terminated; `EXIT` closes the session. `ibc-cmd <COMMAND>` wraps this inside the
 `HEALTHCHECK` exit 0 iff the IBC/Gateway process is alive and `127.0.0.1:<API_PORT>` accepts a
 TCP connection (4001 live, 4002 paper). `--start-period=300s`. With `IBC_LAUNCH=no` health means
 the relay listens. Nothing in the image restarts the Gateway on an unhealthy result.
+
+`HEALTHCHECK_API=handshake` (opt-in) adds a third condition: the API answers the TWS API
+handshake. `api-handshake.sh [host] [port] [timeout_s]` is that probe as a command: it sends
+`API\0` and the length-prefixed version range `v157..178`, reads the server's length-prefixed
+`<serverVersion>\0<connection time>\0`, and stops. It takes no client id and makes no request.
+Exit 0 `ok: ...`, 1 `fail: ...`, 2 usage error.

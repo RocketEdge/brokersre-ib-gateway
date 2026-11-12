@@ -5,6 +5,34 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Qualification: one real paper login per image, and an API-level health check
+
+- **What changed:** (1) `api-handshake.sh` sends the TWS API version handshake to the loopback
+  API port and reads the server version; it sends nothing else (no `startApi`, no client id, no
+  request). (2) `HEALTHCHECK_API=handshake` makes the container health check use it; the
+  default stays `port`. (3) `scripts/qualify-paper.sh` starts one image with paper credentials
+  from secret files, waits for phase `logged-in`, checks health, the handshake through the
+  relay, the event file, the resource samples and a graceful stop, and writes
+  `qualify-out/result.json` (`brokersre.qualification.v1`). It makes one login attempt and
+  never answers a second factor. (4) Workflow `qualify-paper.yml`: dispatched by hand, from
+  `main`, for an image digest, in the environment `paper-qualification` (required reviewer);
+  it can attach the result to the image as an attestation. ADR 0014; invariant 9 now names
+  this one sanctioned login.
+- **Result:** unit and container suites green (counts in the pull request). The script's
+  failure path is proven offline (`--network none`: result `fail`, reason recorded, container
+  removed, exit 1). The handshake is proven against stand-in servers (answer, silence, garbage,
+  closed port). The success path is **not** proven: no login has succeeded on this image yet.
+- **What did NOT work / root cause:** (1) the first real paper login was rejected by IBKR
+  ("Unrecognized Username or Password"); the image passed the credentials through unaltered
+  (compared byte for byte with the rendered configuration), so the attempt was not repeated: a
+  second wrong attempt only moves the account towards a lockout. (2) A health check on the
+  open port alone reports healthy for a Gateway whose API thread hangs; the handshake closes
+  that gap, but it stays opt-in until a real session shows it is free of side effects (L15).
+  (3) `qualify-paper.sh` was first written before its test ran; the test was then run with the
+  script's checks removed and failed for the right reason before the checks went back in.
+- **Next step:** a first qualified run with credentials IBKR accepts (L16); after three
+  recorded passes, move `stable` only when a `qualified-paper` attestation exists (L04).
+
 ### 2026-11-12 — Pattern table corrected from IBC's source; phase writes serialised and held while the gateway ends
 
 - **What changed:** (1) three rows of `ibc-patterns.tsv`: `login_completed` is anchored at the

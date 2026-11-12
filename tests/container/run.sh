@@ -273,6 +273,48 @@ s_start=${SECONDS}
 compose_ref down -v >/dev/null 2>&1 || true
 if [ $((SECONDS - s_start)) -lt 60 ]; then pass "compose: down completes inside the grace period"; else fail "compose down" "took $((SECONDS - s_start)) s"; fi
 
+echo "== qualification script (offline: the login cannot complete, the script must say so) =="
+# scripts/qualify-paper.sh is what a person or the reviewer-gated workflow runs against a real
+# paper account. Here it runs without a network, so no login server is contacted: it must make
+# its one attempt, report "not qualified" with a valid result document, and leave nothing behind.
+qualify="${repo_root}/scripts/qualify-paper.sh"
+qualify_out="$(mktemp -d)"
+if "${qualify}" --image "${IMAGE}" >/dev/null 2>&1; then fail "qualify usage" "accepted a call without --secrets-dir"; else
+  if [ $? -eq 2 ]; then pass "qualify: a call without the secrets directory is a usage error"; else fail "qualify usage" "wrong exit code"; fi
+fi
+empty_secrets="$(mktemp -d)"
+: >"${empty_secrets}/ib-username"
+: >"${empty_secrets}/ib-password"
+"${qualify}" --image "${IMAGE}" --secrets-dir "${empty_secrets}" --out "${qualify_out}" >/dev/null 2>&1
+if [ $? -eq 2 ] && [ -z "$(docker ps -aq --filter name=ibgw-qualify-)" ]; then pass "qualify: empty secret files are refused before any container starts"; else fail "qualify secrets" "empty secrets were not refused"; fi
+rm -rf "${empty_secrets}"
+QUALIFY_DOCKER_ARGS="--network none" "${qualify}" --image "${IMAGE}" --secrets-dir "${secrets_dir}" --out "${qualify_out}" --login-timeout 40 >"${qualify_out}/stdout.txt" 2>&1
+qualify_rc=$?
+if [ "${qualify_rc}" -eq 1 ]; then pass "qualify: a login that cannot complete is 'not qualified' (exit 1)"; else
+  fail "qualify exit" "exit ${qualify_rc}: $(tail -3 "${qualify_out}/stdout.txt")"
+fi
+if docker run --rm -i --entrypoint jq "${IMAGE}" -e '.schema == "brokersre.qualification.v1" and .result == "fail" and (.reason | type == "string" and length > 0) and .trading_mode == "paper" and .second_factor_prompted == false and .login_seconds == null and (.checks | type == "array" and length >= 1) and (.checks | all(has("status") and has("name") and has("detail")))' <"${qualify_out}/result.json" >/dev/null 2>&1; then
+  pass "qualify: result.json is a complete, valid record of the failure"
+else
+  fail "qualify result" "$(cat "${qualify_out}/result.json" 2>/dev/null | head -c 400)"
+fi
+if grep -q -e 'dummyuser' -e 'dummypassword-not-real' "${qualify_out}/result.json" "${qualify_out}/stdout.txt" "${qualify_out}/events.jsonl" 2>/dev/null; then
+  fail "qualify leak" "a credential appears in the qualification output"
+else
+  pass "qualify: no credential in the result, the output or the collected events"
+fi
+if [ -z "$(docker ps -aq --filter name=ibgw-qualify-)" ] && [ -z "$(docker volume ls -q --filter name=ibgw-qualify-)" ]; then
+  pass "qualify: the container and its volumes are removed afterwards"
+else
+  fail "qualify cleanup" "left behind: $(docker ps -aq --filter name=ibgw-qualify- | tr '\n' ' ') $(docker volume ls -q --filter name=ibgw-qualify- | tr '\n' ' ')"
+fi
+if [ "$(grep -c '"event":"ibc_starting"' "${qualify_out}/events.jsonl" 2>/dev/null)" = "1" ]; then
+  pass "qualify: exactly one login attempt was started"
+else
+  fail "qualify attempts" "expected one ibc_starting event"
+fi
+rm -rf "${qualify_out}"
+
 echo "== command server disabled =="
 run_container --network none -e IBC_COMMAND_SERVER_PORT=0
 sleep 45
