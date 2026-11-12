@@ -168,9 +168,18 @@ def _check_config(env: Mapping[str, str], out: TextIO, err: TextIO) -> int:
         return EXIT_USAGE
     out.write("configuration ok\n")
     out.write(f"instance: {settings.instance} ({settings.trading_mode})\n")
+    if settings.shared_namespace():
+        orphan = (
+            "exits with 75 when orphaned"
+            if settings.exit_when_orphaned
+            else "EXIT_WHEN_ORPHANED=no"
+        )
+        out.write(f"network mode: shared with the gateway ({orphan})\n")
+    else:
+        out.write("network mode: own network namespace\n")
     if settings.probe_enabled:
         out.write(
-            f"probe: enabled, 127.0.0.1:{settings.api_port}, client id "
+            f"probe: enabled, {settings.gateway_endpoint()}, client id "
             f"{settings.health_client_id}, every {settings.probe_interval_s:g} s\n"
         )
     else:

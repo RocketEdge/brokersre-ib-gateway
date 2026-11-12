@@ -151,6 +151,10 @@ class StatusDocument(_Model):
     generated_at: Timestamp
     instance: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
     trading_mode: Literal["paper", "live"]
+    network_mode: Literal["own_network", "shared_namespace"] = Field(
+        description="own_network: the sidecar reaches the gateway over the container "
+        "network; shared_namespace: it runs inside the gateway's network namespace"
+    )
     phase: PhaseToken | None = Field(description="null: the phase file is absent")
     phase_since: Timestamp | None
     status: StatusValue
@@ -194,6 +198,7 @@ def build_status(
     *,
     instance: str,
     trading_mode: Literal["paper", "live"],
+    network_mode: Literal["own_network", "shared_namespace"],
     gateway: GatewaySnapshot,
     probe: ProbeSnapshot,
     notifier: NotifierSnapshot,
@@ -205,6 +210,7 @@ def build_status(
     Args:
         instance: The operator's instance label.
         trading_mode: ``paper`` or ``live``.
+        network_mode: ``own_network`` or ``shared_namespace`` (see ``Settings``).
         gateway: What the feeds and the phase file say.
         probe: What the API probe says.
         notifier: Notifier state (``enabled=False`` when no channel is configured).
@@ -221,6 +227,7 @@ def build_status(
             "generated_at": format_utc(now),
             "instance": instance,
             "trading_mode": trading_mode,
+            "network_mode": network_mode,
             "phase": gateway.phase,
             "phase_since": _ts(gateway.phase_since),
             "status": probe.status.value,

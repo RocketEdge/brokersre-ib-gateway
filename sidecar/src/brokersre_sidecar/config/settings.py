@@ -40,9 +40,17 @@ from brokersre_sidecar.vocab import AlertClass, ChannelName
 
 DEFAULT_LOG_DIR = "/var/log/ibgateway"
 DEFAULT_STATE_DIR = "/var/lib/sidecar"
-# All interfaces of the SHARED network namespace: the sidecar has no port mapping of its own,
-# so the endpoints are reachable from outside only where the gateway service publishes 9810.
+# All interfaces of the sidecar's network namespace. What can reach the endpoints from
+# outside is decided by the compose file, which publishes the port on the host's loopback.
 DEFAULT_BIND = "0.0.0.0"  # noqa: S104
+# The compose service name of the gateway: resolvable on the compose network.
+DEFAULT_GATEWAY_HOST = "ib-gateway"
+# The gateway's relay ports: the only API ports another container can reach, because the
+# Gateway itself listens on loopback inside its container. The relay listens only while
+# the gateway is logged in.
+PAPER_RELAY_PORT = 4004
+LIVE_RELAY_PORT = 4003
+# The Gateway's own API ports: reachable only from inside its network namespace.
 PAPER_API_PORT = 4002
 LIVE_API_PORT = 4001
 
@@ -61,6 +69,8 @@ _REFUSED_PLAIN = (
 )
 
 _INSTANCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+# A DNS name as Docker accepts it for a service or container (underscores included).
+_HOST_NAME_RE = re.compile(r"^(?!-)[A-Za-z0-9_-]{1,63}(?:\.[A-Za-z0-9_-]{1,63})*$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _TELEGRAM_CHAT_RE = re.compile(r"^(-?\d{1,20}|@[A-Za-z0-9_]{5,32})$")
@@ -94,6 +104,7 @@ class Settings(BaseModel):
 
     instance: str
     trading_mode: Literal["paper", "live"]
+    gateway_host: str
     api_port: int
     time_zone: str
     log_dir: Path
@@ -130,6 +141,19 @@ class Settings(BaseModel):
     smtp_url_file: Path | None
     smtp_from: str | None
     smtp_to: tuple[str, ...]
+
+    def shared_namespace(self) -> bool:
+        """Report whether the sidecar is configured to share the gateway's network namespace.
+
+        True exactly when ``GATEWAY_HOST`` is a loopback address: the gateway is then
+        reached inside the sidecar's own namespace (``network_mode: "service:ib-gateway"``).
+        With any other host the sidecar has a network namespace of its own (the default).
+        """
+        return is_loopback_host(self.gateway_host)
+
+    def gateway_endpoint(self) -> str:
+        """Return ``host:port`` of the probed API endpoint, for messages."""
+        return endpoint_text(self.gateway_host, self.api_port)
 
     def configured_channels(self) -> tuple[str, ...]:
         """Return the names of the channels that have their secret file set, in fixed order."""
@@ -292,6 +316,34 @@ def _check_bind(value: str) -> str | None:
     return None
 
 
+def is_loopback_host(host: str) -> bool:
+    """Report whether ``host`` is ``localhost`` or a loopback address literal."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def endpoint_text(host: str, port: int) -> str:
+    """Return ``host:port`` for messages, with an IPv6 literal in brackets."""
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
+def _check_gateway_host(value: str) -> str | None:
+    """Accept a host name or an IP address literal: no scheme, port, path or blank."""
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        if len(value) > 253 or not _HOST_NAME_RE.fullmatch(value):
+            return (
+                "must be a host name or an IP address without scheme or port, such as "
+                "ib-gateway or 127.0.0.1"
+            )
+    return None
+
+
 def _check_runbook(value: str) -> str | None:
     """Accept an http(s) URL without credentials, query or fragment."""
     try:
@@ -334,9 +386,18 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     trading_mode: Literal["paper", "live"] = (
         "live" if (mode_text or "paper").lower() == "live" else "paper"
     )
-    api_port = reader.integer(
-        "API_PORT", LIVE_API_PORT if trading_mode == "live" else PAPER_API_PORT, 1, 65535
+    gateway_host = (
+        reader.text("GATEWAY_HOST", DEFAULT_GATEWAY_HOST, _check_gateway_host)
+        or DEFAULT_GATEWAY_HOST
     )
+    shared = is_loopback_host(gateway_host)
+    # Another container reaches the API through the relay only; inside the gateway's own
+    # network namespace the Gateway's loopback port is used directly.
+    if trading_mode == "live":
+        default_port = LIVE_API_PORT if shared else LIVE_RELAY_PORT
+    else:
+        default_port = PAPER_API_PORT if shared else PAPER_RELAY_PORT
+    api_port = reader.integer("API_PORT", default_port, 1, 65535)
     time_zone = reader.text("TIME_ZONE", "Etc/UTC", _check_time_zone) or "Etc/UTC"
     log_level = (
         reader.text(
@@ -426,6 +487,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     settings = Settings(
         instance=instance,
         trading_mode=trading_mode,
+        gateway_host=gateway_host,
         api_port=api_port,
         time_zone=time_zone,
         log_dir=Path(reader.raw("GATEWAY_LOG_DIR") or DEFAULT_LOG_DIR),
@@ -439,7 +501,9 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         probe_timeout_s=reader.seconds("PROBE_TIMEOUT_S", 10.0, 1.0, 60.0),
         bind=reader.text("SIDECAR_BIND", DEFAULT_BIND, _check_bind) or DEFAULT_BIND,
         port=reader.integer("SIDECAR_PORT", 9810, 1, 65535),
-        exit_when_orphaned=reader.flag("EXIT_WHEN_ORPHANED", True),
+        # Only a sidecar inside the gateway's network namespace can be orphaned by a
+        # restart of the gateway container; with its own namespace the flag means nothing.
+        exit_when_orphaned=reader.flag("EXIT_WHEN_ORPHANED", True) and shared,
         escalate_after_s=escalate_after_s,
         escalate_again_after_s=escalate_again_after_s,
         heartbeat_time=heartbeat_time,

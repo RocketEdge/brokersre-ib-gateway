@@ -23,7 +23,9 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     settings = load_settings({})
     assert settings.instance == "default"
     assert settings.trading_mode == "paper"
-    assert settings.api_port == 4002
+    assert settings.gateway_host == "ib-gateway"
+    assert settings.shared_namespace() is False
+    assert settings.api_port == 4004  # the relay port: reachable from another container
     assert settings.time_zone == "Etc/UTC"
     assert settings.log_dir == Path("/var/log/ibgateway")
     assert settings.state_dir == Path("/var/lib/sidecar")
@@ -36,13 +38,13 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     assert settings.escalate_again_after_s == 1800.0
     assert settings.heartbeat_time is None
     assert settings.runbook_base is None
-    assert settings.exit_when_orphaned is True
+    assert settings.exit_when_orphaned is False
     assert settings.configured_channels() == ()
 
 
 def test_live_mode_selects_port_4001_and_empty_values_count_as_unset() -> None:
     settings = load_settings({"TRADING_MODE": "live", "API_PORT": "", "IBGW_INSTANCE": ""})
-    assert settings.api_port == 4001
+    assert settings.api_port == 4003
     assert settings.instance == "default"
 
 
@@ -88,6 +90,8 @@ def test_explicit_values_are_parsed() -> None:
         ({"IBGW_INSTANCE": "has space"}, "IBGW_INSTANCE"),
         ({"IBGW_INSTANCE": "DU1234567"}, "IBGW_INSTANCE"),
         ({"PROBE_ENABLED": "maybe"}, "PROBE_ENABLED"),
+        ({"GATEWAY_HOST": "has space"}, "GATEWAY_HOST"),
+        ({"GATEWAY_HOST": "https://ib-gateway"}, "GATEWAY_HOST"),
         ({"EXIT_WHEN_ORPHANED": "maybe"}, "EXIT_WHEN_ORPHANED"),
         ({"HEALTH_CLIENT_ID": "0"}, "HEALTH_CLIENT_ID"),
         ({"PROBE_INTERVAL_S": "1"}, "PROBE_INTERVAL_S"),
@@ -324,3 +328,21 @@ def test_smtp_without_tls_scheme_defaults_and_starttls_port(tmp_path: Path) -> N
         False,
         None,
     )
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_a_loopback_gateway_host_means_the_shared_network_namespace(host: str) -> None:
+    settings = load_settings({"GATEWAY_HOST": host})
+    assert settings.shared_namespace() is True
+    assert settings.api_port == 4002  # the gateway's own API port, not the relay
+    assert settings.exit_when_orphaned is True
+    assert load_settings({"GATEWAY_HOST": host, "TRADING_MODE": "live"}).api_port == 4001
+    off = load_settings({"GATEWAY_HOST": host, "EXIT_WHEN_ORPHANED": "no"})
+    assert off.exit_when_orphaned is False
+
+
+def test_exit_when_orphaned_means_nothing_with_an_own_network_namespace() -> None:
+    settings = load_settings({"GATEWAY_HOST": "gw.internal", "EXIT_WHEN_ORPHANED": "yes"})
+    assert settings.shared_namespace() is False
+    assert settings.exit_when_orphaned is False
+    assert load_settings({"GATEWAY_HOST": "10.0.0.7", "API_PORT": "4012"}).api_port == 4012

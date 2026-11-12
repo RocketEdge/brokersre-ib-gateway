@@ -166,7 +166,14 @@ async def evaluate_scenario(
         ib.connect_behaviour = "hang"
     ib.skew_s = 45.0
     engine = ProbeEngine(
-        ProbeConfig(enabled=True, port=4002, client_id=999, interval_s=60.0, timeout_s=10.0),
+        ProbeConfig(
+            enabled=True,
+            host="ib-gateway",
+            port=4004,
+            client_id=999,
+            interval_s=60.0,
+            timeout_s=10.0,
+        ),
         ib,
         clock,
         phase=lambda: state.snapshot().phase,

@@ -39,7 +39,7 @@ class Volume:
         temporary.write_bytes(f"{token}\n".encode())
         replace_file(temporary, self.root / "state" / "phase")
 
-    def event(self, name: str) -> None:
+    def event(self, name: str, boot: str = "00000000000000aa") -> None:
         self._seq += 1
         line = {
             "ts": iso(T0),
@@ -47,7 +47,7 @@ class Volume:
             "level": "info",
             "event": name,
             "msg": "CANARY_USERNAME DU7654321",
-            "boot_id": "00000000000000aa",
+            "boot_id": boot,
             "seq": self._seq,
         }
         with open(self.root / "events" / "events.jsonl", "a", encoding="utf-8", newline="\n") as f:
@@ -134,8 +134,10 @@ class Harness:
 
 
 @contextlib.asynccontextmanager
-async def running(tmp_path: Path, *, webhook: bool = True, **env: str) -> AsyncIterator[Harness]:
-    harness = Harness(tmp_path, env, webhook=webhook)
+async def running(
+    tmp_path: Path, *, webhook: bool = True, proc_root: Path | None = None, **env: str
+) -> AsyncIterator[Harness]:
+    harness = Harness(tmp_path, env, webhook=webhook, proc_root=proc_root)
     try:
         # Inside the try: a start that fails must not leave the application running.
         await harness.start()
@@ -209,7 +211,7 @@ async def test_two_factor_pending_reaches_the_webhook_and_login_resolves_it(
         assert document["status"] == "ready"
         assert document["last_login"] == iso(T0)
         assert document["notifier"]["channels"][0]["sent_total"] == 2
-        assert h.ib.connect_args == ("127.0.0.1", 4002, 999, 10.0)
+        assert h.ib.connect_args == ("ib-gateway", 4004, 999, 10.0)
         text = (await h.get("/metrics"))[2].decode()
         assert "ibgw_api_ready 1" in text
         assert 'ibgw_notify_failures_total{channel="webhook"} 0' in text
@@ -285,7 +287,7 @@ async def test_live_mode_probes_port_4001_with_the_configured_client_id(tmp_path
     async with running(tmp_path, TRADING_MODE="live", HEALTH_CLIENT_ID="998") as h:
         h.volume.phase("logged-in")
         await until(lambda: h.ib.connect_calls >= 1)
-        assert h.ib.connect_args == ("127.0.0.1", 4001, 998, 10.0)
+        assert h.ib.connect_args == ("ib-gateway", 4003, 998, 10.0)
         assert (await h.status())["trading_mode"] == "live"
 
 
@@ -341,59 +343,129 @@ def write_socket_table(proc_root: Path, ports: list[int]) -> None:
     replace_file(temporary, proc_root / "net" / "tcp")
 
 
+LOOPBACK = "127.0.0.1"  # GATEWAY_HOST of the shared-namespace mode
+
+
+async def let_time_pass(harness: Harness, seconds: int) -> None:
+    """Advance the fake clock second by second while the application keeps running."""
+    for _ in range(seconds):
+        harness.clock.advance(1.0)
+        await asyncio.sleep(0.01)
+
+
+async def test_in_the_shared_namespace_the_probe_uses_loopback_and_the_api_port(
+    tmp_path: Path,
+) -> None:
+    async with running(tmp_path, GATEWAY_HOST=LOOPBACK) as h:
+        h.volume.phase("logged-in")
+        await until(lambda: h.ib.connect_calls >= 1)
+        assert h.ib.connect_args == ("127.0.0.1", 4002, 999, 10.0)
+        assert (await h.status())["network_mode"] == "shared_namespace"
+
+
+async def test_with_its_own_network_the_mode_is_reported_and_proc_is_not_consulted(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    write_socket_table(proc_root, [4004])
+    async with running(tmp_path, proc_root=proc_root) as h:
+        h.volume.phase("logged-in")
+        h.volume.event("container_start")
+        h.volume.metrics(api_close_wait_sockets=7)
+        await until(lambda: h.app.gateway_snapshot().last_metrics is not None)
+        await let_time_pass(h, 6)
+        assert h.app.probe_snapshot().close_wait_sockets == 7
+        document = await h.status()
+        assert document["network_mode"] == "own_network"
+        assert document["close_wait_sockets"] == 7  # the gateway's own measurement
+        # A gateway restart seen on the volume, no listener in this namespace: irrelevant.
+        write_socket_table(proc_root, [])
+        h.volume.event("container_start", boot="00000000000000bb")
+        await let_time_pass(h, 70)
+        assert h.task is not None
+        assert not h.task.done()
+        assert h.app.shares_network_namespace is False
+
+
 async def test_a_sidecar_left_in_a_dead_network_namespace_exits_so_it_is_restarted(
     tmp_path: Path,
 ) -> None:
     proc_root = tmp_path / "proc"
-    harness = Harness(tmp_path, {}, webhook=False, proc_root=proc_root)
-    write_socket_table(proc_root, [harness.port, 4004, 7462])  # the gateway's listeners
-    await harness.start()
-    harness.volume.phase("logged-in")
-    await until(lambda: harness.app.shares_network_namespace)
-    assert harness.app.exit_code == 0
+    write_socket_table(proc_root, [4004, 7462])  # the gateway's listeners
+    async with running(tmp_path, proc_root=proc_root, GATEWAY_HOST=LOOPBACK) as h:
+        h.volume.event("container_start")
+        h.volume.phase("logged-in")
+        await until(lambda: h.app.shares_network_namespace)
+        await let_time_pass(h, 6)
+        assert h.app.exit_code == 0
+        sent_before = len(h.received)
 
-    # The gateway container restarts: its sockets are gone from this namespace for good,
-    # while its log volume keeps showing a live gateway.
-    write_socket_table(proc_root, [harness.port])
-    for _ in range(70):
-        harness.clock.advance(1.0)
-        await asyncio.sleep(0.01)
-    assert harness.task is not None
-    await asyncio.wait_for(harness.task, 5)  # the application stopped by itself
-    assert harness.app.exit_code == 75
-    assert harness.app.http_listening is False
+        # The gateway container restarts: a new boot id on the volume, and its sockets are
+        # gone from this namespace for good.
+        write_socket_table(proc_root, [])
+        h.volume.event("container_start", boot="00000000000000bb")
+        await let_time_pass(h, 6)
+        await until(lambda: h.app.namespace_suspect)
+        # What happens now cannot be announced from here; it is announced after the rejoin.
+        h.volume.phase("2fa-pending")
+        await let_time_pass(h, 70)
+        assert h.task is not None
+        await asyncio.wait_for(h.task, 5)  # the application stopped by itself
+        assert h.app.exit_code == 75
+        assert h.app.http_listening is False
+        # Nothing was announced from the dead namespace: nobody could have received it.
+        assert len(h.received) == sent_before
+
+
+async def test_no_listener_without_a_gateway_restart_does_not_make_the_sidecar_exit(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    write_socket_table(proc_root, [4004])
+    async with running(tmp_path, webhook=False, proc_root=proc_root, GATEWAY_HOST=LOOPBACK) as h:
+        h.volume.event("container_start")
+        h.volume.phase("login")
+        await until(lambda: h.app.shares_network_namespace)
+        await let_time_pass(h, 6)
+        # needs-human with the command server off: the gateway listens on nothing.
+        write_socket_table(proc_root, [])
+        h.volume.phase("needs-human")
+        await let_time_pass(h, 90)
+        assert h.task is not None
+        assert not h.task.done()
+        assert h.app.exit_code == 0
 
 
 async def test_a_stopped_gateway_does_not_make_the_sidecar_exit(tmp_path: Path) -> None:
     proc_root = tmp_path / "proc"
-    harness = Harness(tmp_path, {}, webhook=False, proc_root=proc_root)
-    write_socket_table(proc_root, [harness.port, 4004])
-    await harness.start()
-    harness.volume.phase("logged-in")
-    await until(lambda: harness.app.shares_network_namespace)
-    harness.volume.phase("stopped")
-    await until(lambda: harness.app.gateway_snapshot().phase == "stopped")
-    write_socket_table(proc_root, [harness.port])
-    for _ in range(70):
-        harness.clock.advance(1.0)
-        await asyncio.sleep(0.01)
-    assert harness.task is not None
-    assert not harness.task.done()
-    await harness.shutdown()
-    assert harness.app.exit_code == 0
+    write_socket_table(proc_root, [4004])
+    async with running(tmp_path, webhook=False, proc_root=proc_root, GATEWAY_HOST=LOOPBACK) as h:
+        h.volume.event("container_start")
+        h.volume.phase("logged-in")
+        await until(lambda: h.app.shares_network_namespace)
+        await let_time_pass(h, 6)
+        write_socket_table(proc_root, [])
+        h.volume.event("container_start", boot="00000000000000bb")
+        h.volume.phase("stopped")
+        await until(lambda: h.app.gateway_snapshot().phase == "stopped")
+        await let_time_pass(h, 70)
+        assert h.task is not None
+        assert not h.task.done()
+        assert h.app.exit_code == 0
 
 
 async def test_exiting_when_orphaned_can_be_switched_off(tmp_path: Path) -> None:
     proc_root = tmp_path / "proc"
-    harness = Harness(tmp_path, {"EXIT_WHEN_ORPHANED": "no"}, webhook=False, proc_root=proc_root)
-    write_socket_table(proc_root, [harness.port, 4004])
-    await harness.start()
-    harness.volume.phase("logged-in")
-    await until(lambda: harness.app.gateway_snapshot().phase == "logged-in")
-    write_socket_table(proc_root, [harness.port])
-    for _ in range(70):
-        harness.clock.advance(1.0)
-        await asyncio.sleep(0.01)
-    assert harness.task is not None
-    assert not harness.task.done()
-    await harness.shutdown()
+    write_socket_table(proc_root, [4004])
+    async with running(
+        tmp_path, webhook=False, proc_root=proc_root, GATEWAY_HOST=LOOPBACK, EXIT_WHEN_ORPHANED="no"
+    ) as h:
+        h.volume.event("container_start")
+        h.volume.phase("logged-in")
+        await until(lambda: h.app.gateway_snapshot().phase == "logged-in")
+        await let_time_pass(h, 6)
+        write_socket_table(proc_root, [])
+        h.volume.event("container_start", boot="00000000000000bb")
+        await let_time_pass(h, 70)
+        assert h.task is not None
+        assert not h.task.done()

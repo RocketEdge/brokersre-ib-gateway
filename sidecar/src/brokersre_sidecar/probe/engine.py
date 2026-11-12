@@ -5,6 +5,10 @@ whether anything is due and does at most one bounded network operation per call:
 
 * outside phase ``logged-in`` (or with the probe disabled) nothing is sent, an open
   connection is closed and the status is ``not_measured``;
+* right after the phase became ``logged-in`` the endpoint may not accept connections
+  yet (the gateway's relay starts a moment later): for ``login_grace_s`` a refused
+  connection is retried every few seconds and reported as ``not_measured``, after
+  that it is a failure like any other;
 * while ``logged-in`` it keeps ONE connection with the reserved client id and asks for the
   server time every ``interval_s``; a failed attempt closes the connection (a half-dead
   connection is never reused) and the next attempt backs off exponentially up to a cap;
@@ -26,6 +30,7 @@ from datetime import datetime
 
 from brokersre_sidecar.backoff import Backoff
 from brokersre_sidecar.clock import Clock
+from brokersre_sidecar.config import endpoint_text
 from brokersre_sidecar.model.health import ProbeError, ProbeSnapshot
 from brokersre_sidecar.probe.protocol import (
     IbClient,
@@ -39,6 +44,8 @@ from brokersre_sidecar.probe.windows import active_reset_window
 from brokersre_sidecar.vocab import Phase, ProbeStatus
 
 _CLOSE_WAIT_SAMPLE_S = 5.0
+# Delay between connection attempts while the endpoint has not opened after a login.
+_ENDPOINT_RETRY_S = 3.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,11 +55,15 @@ class ProbeConfig:
     Attributes:
         enabled: False turns the probe off (``PROBE_ENABLED=no``); the status is then
             ``not_measured`` and no socket is ever opened.
-        port: The gateway's API port inside the shared network namespace.
+        host: Where the gateway's API is reached: the gateway's service name (own network
+            namespace, the default) or loopback (shared network namespace).
+        port: The API port on ``host``: the relay port from another container, the
+            Gateway's own port inside its network namespace.
         client_id: Reserved API client id of the probe (``HEALTH_CLIENT_ID``).
         interval_s: Seconds between round trips while healthy.
         timeout_s: Bound of the handshake and of each round trip.
-        host: Always loopback: the sidecar shares the gateway's network namespace.
+        login_grace_s: For this long after the phase became ``logged-in``, a connection
+            that cannot be opened means "not open yet", not "down".
         backoff_cap_s: Longest delay between attempts while failing.
         zombie_after_s: Half-closed API sockets must persist this long (and the API must
             not answer) before the gateway is called a zombie.
@@ -60,11 +71,12 @@ class ProbeConfig:
     """
 
     enabled: bool
+    host: str
     port: int
     client_id: int
     interval_s: float
     timeout_s: float
-    host: str = "127.0.0.1"
+    login_grace_s: float = 20.0
     backoff_cap_s: float = 300.0
     zombie_after_s: float = 300.0
     client_id_retry_s: float = 300.0
@@ -110,7 +122,10 @@ class ProbeEngine:
             base_s=max(5.0, config.interval_s / 4),
             cap_s=max(config.interval_s, config.backoff_cap_s),
         )
+        self._endpoint = endpoint_text(config.host, config.port)
         self._next_due: float | None = None
+        self._logged_in_since: float | None = None
+        self._awaiting_endpoint = False
         self._expect_connected = False
         self._last_probe_at: datetime | None = None
         self._last_probe_ok: bool | None = None
@@ -138,6 +153,8 @@ class ProbeEngine:
             self._leave_logged_in()
             return
         now = self._clock.monotonic()
+        if self._logged_in_since is None:
+            self._logged_in_since = now
         dropped = self._expect_connected and not self._client.is_connected()
         if self._next_due is not None and now < self._next_due and not dropped:
             return
@@ -182,6 +199,8 @@ class ProbeEngine:
         self._expect_connected = False
         self._tracker.reset()
         self._next_due = None
+        self._logged_in_since = None
+        self._awaiting_endpoint = False
         self._failures = 0
         self._last_probe_ok = None
         self._last_error = None
@@ -209,6 +228,7 @@ class ProbeEngine:
         except IbError as error:
             self._record_failure(started, error)
             return
+        self._awaiting_endpoint = False
         self._last_probe_at = self._clock.now()
         self._last_probe_ok = True
         self._last_error = None
@@ -224,6 +244,11 @@ class ProbeEngine:
         """Record a failed attempt, drop the connection and schedule the next attempt."""
         self._client.disconnect()
         self._expect_connected = False
+        if self._endpoint_not_open_yet(started, error):
+            self._awaiting_endpoint = True
+            self._next_due = started + _ENDPOINT_RETRY_S
+            return
+        self._awaiting_endpoint = False
         self._failures += 1
         self._last_probe_at = self._clock.now()
         self._last_probe_ok = False
@@ -241,6 +266,23 @@ class ProbeEngine:
         else:
             self._last_error = "connect_failed"
         self._next_due = started + self._backoff.delay(self._failures, self._rand)
+
+    def _endpoint_not_open_yet(self, started: float, error: IbError) -> bool:
+        """Report whether a failed connect still falls into the grace after a login.
+
+        The phase file says ``logged-in`` a moment before the API endpoint accepts
+        connections (the relay is started by the gateway after the login). Calling
+        that ``down`` would be a false alarm at every login, and backing off would make
+        the first real answer late. The grace ends for good with the first result of
+        the session: once the API has answered, a refused connection is a failure.
+        """
+        return (
+            isinstance(error, IbConnectError)
+            and not self._tracker.client_id_in_use
+            and self._last_probe_ok is None
+            and self._logged_in_since is not None
+            and started - self._logged_in_since < self._config.login_grace_s
+        )
 
     def _sample_close_wait(self) -> None:
         """Sample the half-closed socket count every few seconds and track how long it is > 0."""
@@ -292,6 +334,12 @@ class ProbeEngine:
                 "(error 326); stop that client or set HEALTH_CLIENT_ID to a free id",
             )
         if self._last_probe_ok is None:
+            if self._awaiting_endpoint:
+                return (
+                    ProbeStatus.NOT_MEASURED,
+                    f"logged in; {self._endpoint} does not accept connections yet "
+                    f"(waiting up to {config.login_grace_s:g} s)",
+                )
             return ProbeStatus.NOT_MEASURED, "first probe pending"
         if not self._last_probe_ok:
             if self._is_zombie():
@@ -309,7 +357,7 @@ class ProbeEngine:
                 return ProbeStatus.DOWN, "the API connection dropped during the round trip"
             return (
                 ProbeStatus.DOWN,
-                f"no API handshake on {config.host}:{config.port} within {config.timeout_s:g} s",
+                f"no API handshake on {self._endpoint} within {config.timeout_s:g} s",
             )
         if self._tracker.connectivity == "lost":
             return (

@@ -19,7 +19,15 @@ TIMEOUT = 10.0
 class Harness:
     """A probe engine wired to a fake gateway, a fake clock and scriptable surroundings."""
 
-    def __init__(self, *, enabled: bool = True, start: datetime | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        start: datetime | None = None,
+        host: str = "127.0.0.1",
+        port: int = 4002,
+        grace: float = 0.0,
+    ) -> None:
         self.clock = FakeClock(start) if start is not None else FakeClock()
         self.ib = FakeIb(self.clock)
         self.phase: str | None = "logged-in"
@@ -27,10 +35,12 @@ class Harness:
         self.engine = ProbeEngine(
             ProbeConfig(
                 enabled=enabled,
-                port=4002,
+                host=host,
+                port=port,
                 client_id=999,
                 interval_s=INTERVAL,
                 timeout_s=TIMEOUT,
+                login_grace_s=grace,
             ),
             self.ib,
             self.clock,
@@ -314,3 +324,50 @@ async def test_farm_names_from_the_gateway_are_sanitised_and_bounded() -> None:
     assert "DU1234567" not in text
     assert "jdoe123" not in text
     assert "sec_def other" in snapshot.reason
+
+
+async def test_the_probe_connects_to_the_configured_gateway_host_and_relay_port() -> None:
+    h = Harness(host="ib-gateway", port=4004)
+    await h.run(5)
+    assert h.ib.connect_args == ("ib-gateway", 4004, 999, TIMEOUT)
+    assert h.status() is ProbeStatus.READY
+
+
+async def test_a_refused_connection_right_after_login_is_not_down_yet() -> None:
+    # The relay opens a moment after the phase becomes logged-in.
+    h = Harness(host="ib-gateway", port=4004, grace=20.0)
+    h.ib.connect_behaviour = "refuse"
+    await h.run(19)
+    snapshot = h.engine.snapshot()
+    assert snapshot.status is ProbeStatus.NOT_MEASURED
+    assert snapshot.reason == (
+        "logged in; ib-gateway:4004 does not accept connections yet (waiting up to 20 s)"
+    )
+    assert snapshot.consecutive_failures == 0
+    assert h.ib.connect_calls >= 5  # it keeps trying every few seconds, without back-off
+    await h.run(6)
+    snapshot = h.engine.snapshot()
+    assert snapshot.status is ProbeStatus.DOWN
+    assert snapshot.reason == "no API handshake on ib-gateway:4004 within 10 s"
+
+
+async def test_an_endpoint_that_opens_within_the_grace_is_ready_at_once() -> None:
+    h = Harness(host="ib-gateway", port=4004, grace=20.0)
+    h.ib.connect_behaviour = "refuse"
+    await h.run(7)
+    h.ib.connect_behaviour = "ok"
+    await h.run(4)
+    assert h.status() is ProbeStatus.READY
+    assert h.engine.snapshot().consecutive_failures == 0
+
+
+async def test_the_grace_applies_to_each_login_anew() -> None:
+    h = Harness(host="ib-gateway", port=4004, grace=20.0)
+    h.ib.connect_behaviour = "refuse"
+    await h.run(30)
+    assert h.status() is ProbeStatus.DOWN
+    h.phase = "restarting"
+    await h.run(2)
+    h.phase = "logged-in"
+    await h.run(10)
+    assert h.status() is ProbeStatus.NOT_MEASURED

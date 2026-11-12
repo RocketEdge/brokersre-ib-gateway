@@ -34,7 +34,7 @@ from brokersre_sidecar.clock import Clock, Sleep, SystemClock
 from brokersre_sidecar.config.settings import ChannelSecrets, Settings
 from brokersre_sidecar.http import HttpServer, Response
 from brokersre_sidecar.logsetup import log_event
-from brokersre_sidecar.metrics import CONTENT_TYPE, render_metrics
+from brokersre_sidecar.metrics import CONTENT_TYPE, SAMPLE_FRESH_FOR, render_metrics
 from brokersre_sidecar.model import (
     GatewayFeed,
     GatewaySnapshot,
@@ -168,7 +168,8 @@ class Application:
             sleep: Awaitable delay of the task loops and retries.
             ib_client: API client for the probe (the ib_async adapter by default).
             http_client: Outbound HTTP client of the notifier (created when needed).
-            proc_root: procfs mount point, for the CLOSE_WAIT count.
+            proc_root: procfs mount point. Read only in the shared-namespace mode (socket
+                table of the namespace the gateway lives in).
             tick_s: Period of the follow, probe and notify loops.
         """
         self._settings = settings
@@ -182,9 +183,11 @@ class Application:
         self._last_phase: str | None = None
         self._last_status: ProbeStatus | None = None
 
+        self._shared = settings.shared_namespace()
         self._engine = ProbeEngine(
             ProbeConfig(
                 enabled=settings.probe_enabled,
+                host=settings.gateway_host,
                 port=settings.api_port,
                 client_id=settings.health_client_id,
                 interval_s=settings.probe_interval_s,
@@ -193,7 +196,13 @@ class Application:
             ib_client if ib_client is not None else _default_ib_client(settings.probe_enabled),
             self._clock,
             phase=lambda: self._state.phase,
-            close_wait=lambda: count_close_wait(settings.api_port, proc_root),
+            # The gateway's sockets are visible in /proc only from inside its network
+            # namespace; from outside, the gateway's own sample is the measurement.
+            close_wait=(
+                (lambda: count_close_wait(settings.api_port, proc_root))
+                if self._shared
+                else self._sampled_close_wait
+            ),
         )
 
         self._watch = (
@@ -205,6 +214,7 @@ class Application:
             else None
         )
         self._watch_sampled_at: float | None = None
+        self._watch_boot: str | None = None
         self._orphaned = asyncio.Event()
         self.shares_network_namespace = False
         """True once another listener (the gateway's) was seen in this namespace."""
@@ -274,7 +284,9 @@ class Application:
             clock=self._clock,
             gateway=self._state.snapshot,
             probe=self._engine.snapshot,
-            ready=lambda: self._feed_ready,
+            # From a network namespace the gateway has left nothing can be delivered; the
+            # ladder waits, and the restarted sidecar announces from the replayed feed.
+            ready=lambda: self._feed_ready and not self.namespace_suspect,
         )
         self._supervisor.add("notify", self._notify)
         for name in self._dispatcher.channel_names():
@@ -295,6 +307,20 @@ class Application:
     def http_listening(self) -> bool:
         """True while the HTTP server is bound."""
         return self._server.listening
+
+    @property
+    def namespace_suspect(self) -> bool:
+        """True while the evidence says this network namespace is no longer the gateway's.
+
+        Always False with an own network namespace. In the shared mode a change of the
+        gateway's boot id is looked into at once (not at the next periodic sample), so
+        that nothing about the new boot is announced from a namespace it cannot leave.
+        """
+        if self._watch is None:
+            return False
+        if self._feed_ready and self._state.boot_id != self._watch_boot:
+            self._sample_namespace()
+        return self._watch.suspect
 
     def gateway_snapshot(self) -> GatewaySnapshot:
         """Return the current gateway snapshot."""
@@ -317,6 +343,7 @@ class Application:
         return build_status(
             instance=self._settings.instance,
             trading_mode=self._settings.trading_mode,
+            network_mode="shared_namespace" if self._shared else "own_network",
             gateway=self._state.snapshot(),
             probe=self._engine.snapshot(),
             notifier=self.notifier_snapshot(),
@@ -340,6 +367,8 @@ class Application:
             version=__version__,
             instance=self._settings.instance,
             trading_mode=self._settings.trading_mode,
+            network_mode="shared_namespace" if self._shared else "own_network",
+            gateway_endpoint=self._settings.gateway_endpoint(),
             probe_enabled=self._settings.probe_enabled,
             channels=list(self._settings.configured_channels()),
         )
@@ -379,15 +408,22 @@ class Application:
         quiet = (snapshot.taken_at - snapshot.last_activity_at).total_seconds()
         return quiet <= _FEED_FRESH_S
 
-    def _check_namespace(self) -> None:
-        """Stop the sidecar when its network namespace no longer contains the gateway.
+    def _sampled_close_wait(self) -> int | None:
+        """Return the half-closed API sockets from the gateway's last fresh metrics sample.
 
-        See ``probe.namespace``: after the gateway CONTAINER restarts, this sidecar sits
-        in the old namespace for good. It exits with ``EXIT_ORPHANED`` so that the
-        container's restart policy starts it again inside the gateway's new namespace.
-        The gateway itself is never touched.
+        None (not measured) when there is no sample, the sample is stale or the gateway
+        did not measure the value: never 0 for something nobody counted.
         """
-        if self._watch is None:
+        snapshot = self._state.snapshot()
+        sample = snapshot.last_metrics
+        if sample is None or snapshot.taken_at - sample.ts > SAMPLE_FRESH_FOR:
+            return None
+        value = sample.values.get("api_close_wait_sockets")
+        return int(value) if value is not None else None
+
+    def _check_namespace(self) -> None:
+        """Sample the network namespace every few seconds (shared-namespace mode only)."""
+        if self._watch is None or not self._feed_ready:
             return
         now = self._clock.monotonic()
         if (
@@ -395,8 +431,23 @@ class Application:
             and now - self._watch_sampled_at < _NAMESPACE_SAMPLE_S
         ):
             return
-        self._watch_sampled_at = now
-        orphaned = self._watch.observe(gateway_alive=self._gateway_alive())
+        self._sample_namespace()
+
+    def _sample_namespace(self) -> None:
+        """Stop the sidecar when its network namespace no longer contains the gateway.
+
+        See ``probe.namespace``: after the gateway CONTAINER restarts, a sidecar that
+        shares its network namespace sits in the old namespace for good. It exits with
+        ``EXIT_ORPHANED`` so that the container's restart policy starts it again inside
+        the gateway's new namespace. The gateway itself is never touched.
+        """
+        if self._watch is None:
+            return
+        self._watch_sampled_at = self._clock.monotonic()
+        self._watch_boot = self._state.boot_id
+        orphaned = self._watch.observe(
+            gateway_alive=self._gateway_alive(), boot_id=self._watch_boot
+        )
         self.shares_network_namespace = self._watch.seen_shared
         if orphaned and not self._orphaned.is_set():
             self.exit_code = EXIT_ORPHANED

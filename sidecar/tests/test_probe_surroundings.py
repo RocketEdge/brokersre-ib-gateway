@@ -127,29 +127,50 @@ class WatchHarness:
     def __init__(self) -> None:
         self.clock = FakeClock()
         self.listeners: int | None = 0
+        self.boot: str | None = "00000000000000aa"
         self.watch = NamespaceWatch(self.clock, listeners=lambda: self.listeners, grace_s=60.0)
 
     def observe(self, seconds: float, *, alive: bool = True) -> bool:
         """Observe once per second for ``seconds``; return the last verdict."""
         orphaned = False
         for _ in range(int(seconds)):
-            orphaned = self.watch.observe(gateway_alive=alive)
+            orphaned = self.watch.observe(gateway_alive=alive, boot_id=self.boot)
             self.clock.advance(1.0)
         return orphaned
 
 
 def test_a_namespace_that_never_had_a_foreign_listener_is_never_called_orphaned() -> None:
     # A sidecar that does not share the gateway's network namespace at all.
-    assert WatchHarness().observe(600) is False
+    h = WatchHarness()
+    assert h.observe(300) is False
+    h.boot = "00000000000000bb"
+    assert h.observe(300) is False
+    assert h.watch.suspect is False
 
 
-def test_listeners_that_vanish_while_the_gateway_is_alive_mean_the_namespace_is_orphaned() -> None:
+def test_listeners_gone_after_a_gateway_restart_mean_the_namespace_is_orphaned() -> None:
     h = WatchHarness()
     h.listeners = 2
     assert h.observe(30) is False
-    h.listeners = 0  # the gateway container restarted into a new namespace
+    # The gateway container restarted into a new namespace: a new boot id on the volume,
+    # and nothing listening here any more.
+    h.listeners = 0
+    h.boot = "00000000000000bb"
     assert h.observe(59) is False
+    assert h.watch.suspect is True
     assert h.observe(3) is True
+
+
+def test_listeners_gone_without_a_gateway_restart_are_not_an_orphan() -> None:
+    # needs-human with the command server off: the gateway listens on nothing, by design.
+    h = WatchHarness()
+    h.listeners = 2
+    h.observe(30)
+    h.listeners = 0
+    assert h.observe(600) is False
+    assert h.watch.suspect is False
+    h.boot = None  # a gateway that writes no boot ids gives no evidence either
+    assert h.observe(600) is False
 
 
 def test_a_stopped_gateway_or_a_short_gap_is_not_an_orphan() -> None:
@@ -157,12 +178,14 @@ def test_a_stopped_gateway_or_a_short_gap_is_not_an_orphan() -> None:
     h.listeners = 1
     h.observe(5)
     h.listeners = 0
+    h.boot = "00000000000000bb"
     assert h.observe(600, alive=False) is False  # the gateway is down: nothing to rejoin
     assert h.observe(30) is False
     h.listeners = 1  # listeners came back before the grace period ended
     assert h.observe(5) is False
-    h.listeners = 0
-    assert h.observe(59) is False
+    assert h.watch.suspect is False
+    h.listeners = 0  # same boot as when they were last seen: no evidence
+    assert h.observe(600) is False
 
 
 def test_an_unreadable_proc_never_triggers() -> None:
@@ -170,6 +193,7 @@ def test_an_unreadable_proc_never_triggers() -> None:
     h.listeners = 1
     h.observe(5)
     h.listeners = None
+    h.boot = "00000000000000bb"
     assert h.observe(600) is False
 
 

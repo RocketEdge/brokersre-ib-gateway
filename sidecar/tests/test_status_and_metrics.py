@@ -55,6 +55,7 @@ def status(**overrides: Any) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "instance": "desk-1",
         "trading_mode": "paper",
+        "network_mode": "own_network",
         "gateway": gateway_snapshot(),
         "probe": probe_snapshot(
             farms=(FarmState("market_data", "usfarm", "ok"),), clock_skew_s=-0.4
@@ -91,6 +92,7 @@ def test_a_ready_gateway_is_reported_with_every_contract_field() -> None:
     assert document["generated_at"] == "2026-11-12T15:00:00.000Z"
     assert document["instance"] == "desk-1"
     assert document["trading_mode"] == "paper"
+    assert document["network_mode"] == "own_network"
     assert document["phase"] == "logged-in"
     assert document["phase_since"] == "2026-11-12T14:00:00.000Z"
     assert document["status"] == "ready"

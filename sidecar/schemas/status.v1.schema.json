@@ -551,6 +551,15 @@
     "last_probe": {
       "$ref": "#/$defs/LastProbe"
     },
+    "network_mode": {
+      "description": "own_network: the sidecar reaches the gateway over the container network; shared_namespace: it runs inside the gateway's network namespace",
+      "enum": [
+        "own_network",
+        "shared_namespace"
+      ],
+      "title": "Network Mode",
+      "type": "string"
+    },
     "notifier": {
       "$ref": "#/$defs/Notifier"
     },
@@ -655,6 +664,7 @@
     "generated_at",
     "instance",
     "trading_mode",
+    "network_mode",
     "phase",
     "phase_since",
     "status",

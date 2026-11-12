@@ -130,20 +130,21 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 
 | Variable | Default | Values | Effect |
 |---|---|---|---|
-| `TRADING_MODE` | `paper` | `paper`, `live` | Selects the API port: 4002 paper, 4001 live. Pass the gateway's value. |
-| `API_PORT` | from `TRADING_MODE` | port | Overrides the API port (a gateway with a non-standard port). |
+| `TRADING_MODE` | `paper` | `paper`, `live` | Selects the API port (see `API_PORT`). Pass the gateway's value. |
+| `GATEWAY_HOST` | `ib-gateway` | host name or IP address | Where the probe reaches the gateway: its service name on the compose network. A loopback address (`127.0.0.1`) selects the [shared-namespace mode](#shared-network-namespace-optional). |
+| `API_PORT` | from `TRADING_MODE` and the mode | port | The probed port. Default: the gateway's relay port, 4004 paper or 4003 live; in the shared-namespace mode the Gateway's own port, 4002 paper or 4001 live. |
 | `IBGW_INSTANCE` | `default` | letters, digits, `.`, `_`, `-` | Label of this gateway in every notification and in `/status`. Must not be an account id. |
 | `TIME_ZONE` | `Etc/UTC` | IANA zone | Local time shown in notifications (next to UTC) and zone of `HEARTBEAT_TIME`. |
 | `GATEWAY_LOG_DIR` | `/var/log/ibgateway` | path | Where the gateway's log volume is mounted (read-only). |
 | `SIDECAR_STATE_DIR` | `/var/lib/sidecar` | path | Writable directory for the notifier's state file. When it is not writable the sidecar keeps the state in memory and says so in `/status`. |
-| `SIDECAR_BIND` | `0.0.0.0` | IP address | Address the endpoints bind to, inside the shared network namespace. |
+| `SIDECAR_BIND` | `0.0.0.0` | IP address | Address the endpoints bind to, inside the sidecar's network namespace. |
 | `SIDECAR_PORT` | `9810` | port | Port of the endpoints. Publish it on the `ib-gateway` service. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Verbosity of the JSON log on stdout. |
 | `PROBE_ENABLED` | `yes` | `yes`, `no` | `no` turns the API probe off; the status is then always `not_measured`. |
 | `HEALTH_CLIENT_ID` | `999` | 1 to 2147483647 | API client id reserved for the probe. No other API client may use it. |
 | `PROBE_INTERVAL_S` | `60` | 5 to 3600 | Seconds between time round trips while healthy. |
 | `PROBE_TIMEOUT_S` | `10` | 1 to 60 | Bound of the handshake and of each round trip. |
-| `EXIT_WHEN_ORPHANED` | `yes` | `yes`, `no` | Exit (code 75) when the gateway container restarted and left the sidecar in its old network namespace, so the restart policy rejoins it. See [Limitations](#limitations). |
+| `EXIT_WHEN_ORPHANED` | `yes` | `yes`, `no` | Shared-namespace mode only (ignored otherwise): exit with code 75 when the gateway container restarted and left the sidecar in its old network namespace, so the restart policy rejoins it. |
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
