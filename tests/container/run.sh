@@ -110,6 +110,47 @@ else
   fail "sampler environment" "sampler not running or a credential is in its environment"
 fi
 
+echo "== preflight (doctor) =="
+# `doctor` as a command: the entrypoint runs it instead of the gateway and passes its exit code.
+doctor_run() { # extra-docker-args... ; prints stdout, returns doctor's exit code
+  docker run --rm -v "${host_secrets}:/run/secrets:ro" -e TWS_USERID_FILE=/run/secrets/ib-username \
+    -e TWS_PASSWORD_FILE=/run/secrets/ib-password -e TRADING_MODE=paper "$@" "${IMAGE}" doctor --json 2>/dev/null
+}
+doctor_json="$(doctor_run -e AUTO_RESTART_TIME='11:45 PM' -e TIME_ZONE=America/New_York)"
+doctor_rc=$?
+if [ "${doctor_rc}" -eq 0 ] && printf '%s' "${doctor_json}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e '.schema == "brokersre.doctor.v1" and (.result == "pass" or .result == "warn") and (.checks | length >= 10) and (.checks | all(has("name") and has("status") and has("detail") and has("fix")))' >/dev/null 2>&1; then
+  pass "doctor: a sound configuration passes and prints one valid JSON document"
+else
+  fail "doctor ok" "exit ${doctor_rc}: $(printf '%s' "${doctor_json}" | head -c 300)"
+fi
+doctor_json="$(doctor_run -e AUTO_RESTART_TIME='9:30 PM')"
+doctor_rc=$?
+if [ "${doctor_rc}" -eq 1 ] && printf '%s' "${doctor_json}" | docker run --rm -i --entrypoint jq "${IMAGE}" -e '.result == "fail" and ([.checks[] | select(.name == "auto_restart_time" and .status == "fail")] | length == 1)' >/dev/null 2>&1; then
+  pass "doctor: a restart time IBC would not apply fails the preflight (exit 1) and names the check"
+else
+  fail "doctor restart time" "exit ${doctor_rc}: $(printf '%s' "${doctor_json}" | head -c 300)"
+fi
+if printf '%s' "${doctor_json}" | grep -q -e 'dummyuser' -e 'dummypassword-not-real'; then fail "doctor leak" "a credential appears in doctor's output"; else pass "doctor: no credential in its output"; fi
+# At container start a failed preflight stops everything before IBC, with an event that names
+# the problem; a wrong restart time must not lead to a login that then runs without restarts.
+run_container -e AUTO_RESTART_TIME='9:30 PM'
+if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
+  && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" = "1" ] \
+  && docker logs ibgw-test 2>&1 | grep -q '"event":"doctor_failed"' \
+  && ! docker logs ibgw-test 2>&1 | grep -q '"event":"ibc_starting"'; then
+  pass "a failed preflight stops the container before IBC starts (doctor_failed, exit 1)"
+else
+  fail "preflight stop" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
+run_container -e IBC_LAUNCH=no -e AUTO_RESTART_TIME='9:30 PM' -e DOCTOR_STRICT=no -e JAVA_HEAP_SIZE=1024
+if wait_for 30 port_open 4004 \
+  && docker logs ibgw-test 2>&1 | grep '"event":"doctor_failed"' | grep -q '"level":"warn"' \
+  && docker logs ibgw-test 2>&1 | grep '"event":"config_deprecated"' | grep -q 'JAVA_HEAP_SIZE'; then
+  pass "DOCTOR_STRICT=no starts anyway; an ignored gnzsnz variable is reported by name (config_deprecated)"
+else
+  fail "preflight non-strict" "$(docker logs ibgw-test 2>&1 | tail -4 | cut -c1-300)"
+fi
+
 echo "== read-only root filesystem =="
 # A tmpfs is root-owned 0755 unless the mount says otherwise, and the gateway runs as uid 1000;
 # the reference compose passes uid=1000,gid=1000 on every tmpfs and the harness does the same.

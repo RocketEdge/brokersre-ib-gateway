@@ -94,6 +94,7 @@ COPY --from=setup --chown=1000:1000 /opt/ibc /opt/ibc
 COPY rootfs/ /
 RUN chmod 0755 /usr/local/bin/*.sh /usr/local/lib/brokersre/*.sh \
  && ln -s /usr/local/lib/brokersre/ibc-cmd.sh /usr/local/bin/ibc-cmd \
+ && ln -s /usr/local/lib/brokersre/doctor.sh /usr/local/bin/doctor \
  && install -m 0644 /opt/ibc/LICENSE.txt /usr/share/doc/ibc/LICENSE.txt \
  && mkdir -p /home/ibgateway/Jts/settings \
  && chown -R 1000:1000 /home/ibgateway/Jts/settings \

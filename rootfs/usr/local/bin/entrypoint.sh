@@ -3,12 +3,18 @@
 # VNC, the socat relay, the Gateway log mirror and IBC itself; on SIGTERM asks IBC to STOP the
 # Gateway tidily through the command server before stopping the helpers.
 #
-# Stdout carries only structured JSON events (log contract v1); raw IBC/Gateway output goes to
+# Stdout carries only structured JSON events (log contract v2); raw IBC/Gateway output goes to
 # ${LOG_DIR}. With IBC_LAUNCH=no everything except IBC starts, which is how the offline tests
 # prove rendering, secrets handling, the relay and the read-only filesystem without a login.
 set -euo pipefail
 
 BROKERSRE_LIB="${BROKERSRE_LIB:-/usr/local/lib/brokersre}"
+# `docker compose run --rm ib-gateway doctor [--json] [--online]`: run the preflight instead of
+# the gateway and exit with its status (0 no check failed, 1 a check failed, 2 usage error).
+if [ "${1:-}" = "doctor" ]; then
+  shift
+  exec "${BROKERSRE_LIB}/doctor.sh" "$@"
+fi
 # shellcheck source=/dev/null
 source "${BROKERSRE_LIB}/common.sh"
 # shellcheck source=/dev/null
@@ -26,17 +32,21 @@ source "${BROKERSRE_LIB}/start-ibc.sh"
 
 IBC_PID="" XVFB_PID="" VNC_PID="" SOCAT_PID="" TAIL_PID="" SAMPLER_PID=""
 
-# stop_sampler: end the resource sampler and give it up to 8 s to write its last sample.
-# The last sample matters: when the kernel's OOM killer took the Gateway, the counter that
-# says so is only visible until this container's cgroup is gone.
+# stop_sampler: ask the sampler for its last sample and wait for it, at most 6 s.
+#
+# The last sample is what reports an OOM kill of the Gateway: the 30 s loop would be too late,
+# because the container ends right after IBC and the counter lives in this container's cgroup.
+# The wait is bounded and ends with SIGKILL, so a sampler held up by a volume that hangs cannot
+# delay the container's exit. Safe to call twice and without a sampler.
 stop_sampler() {
-  if [ -n "${SAMPLER_PID}" ] && kill -0 "${SAMPLER_PID}" 2>/dev/null; then
-    kill "${SAMPLER_PID}" 2>/dev/null || true
-    for _ in $(seq 1 80); do
-      kill -0 "${SAMPLER_PID}" 2>/dev/null || break
-      sleep 0.1
-    done
-  fi
+  local waited=0
+  if [ -z "${SAMPLER_PID}" ]; then return 0; fi
+  kill -TERM "${SAMPLER_PID}" 2>/dev/null || true
+  while kill -0 "${SAMPLER_PID}" 2>/dev/null && [ "${waited}" -lt 60 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL "${SAMPLER_PID}" 2>/dev/null || true
   SAMPLER_PID=""
 }
 
@@ -83,6 +93,15 @@ set_phase starting
 log_event_data entrypoint info container_start \
   "$(json_object gateway_version "${IB_GATEWAY_VERSION}" channel "${IB_GATEWAY_CHANNEL}" ibc_version "${IBC_VERSION}" ibc_release "${IBC_RELEASE_TAG:-}" trading_mode "${TRADING_MODE:-}" instance "${IBGW_INSTANCE:-default}")" \
   "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
+
+# Preflight (doctor.sh): name every configuration problem and its fix before anything starts.
+# A failed check stops the container here, before any login is attempted (DOCTOR_STRICT=no
+# downgrades it to a warning); a warning never stops it. It runs before render_config because
+# it inspects the secret files.
+if ! "${BROKERSRE_LIB}/doctor.sh" --startup; then
+  set_phase exited
+  exit 1
+fi
 
 set_ports
 render_config
