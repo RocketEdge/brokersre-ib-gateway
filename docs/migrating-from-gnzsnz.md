@@ -9,7 +9,7 @@
 | `TWOFA_TIMEOUT_ACTION=exit` default | default `restart` | Re-prompt instead of giving up. |
 | `RELOGIN_AFTER_TWOFA_TIMEOUT`, `TWOFA_EXIT_INTERVAL`, `TWOFA_DEVICE`, `EXISTING_SESSION_DETECTED_ACTION`, `AUTO_RESTART_TIME`, `AUTO_LOGOFF_TIME`, `TIME_ZONE`, `TWS_SETTINGS_PATH`, `BYPASS_WARNING`, `TWS_ACCEPT_INCOMING`, `ALLOW_BLIND_TRADING`, `SAVE_TWS_SETTINGS`, `TWS_MASTER_CLIENT_ID`, `CUSTOM_CONFIG` | same names | Defaults differ where noted in `env-vars.md`. |
 | `TWS_COLD_RESTART` | removed | Not needed with daily `AUTO_RESTART_TIME`. |
-| `JAVA_HEAP_SIZE` (runtime) | build arg `JAVA_HEAP_MB` | The Gateway directory is read-only at runtime. |
+| `JAVA_HEAP_SIZE` (runtime, megabytes) | `JAVA_HEAP_MB` (runtime; megabytes or `auto`) | Renamed. `JAVA_HEAP_SIZE` is ignored and the preflight says so (`config_deprecated`). |
 | `VNC_SERVER_PASSWORD` | same + `_FILE`; bound to `127.0.0.1` | gnzsnz bound VNC to all interfaces. |
 | `SSH_TUNNEL`, `SSH_*` | removed | A sidecar sharing the network namespace or a private network replaces the tunnel. |
 | `START_SCRIPTS`, `X_SCRIPTS`, `IBC_SCRIPTS` | removed in v1 | Hook directories may return if a concrete need appears (ADR 0004). |
@@ -19,3 +19,8 @@
 | `sudo` for `ibgateway` | none | |
 | image `ghcr.io/gnzsnz/ib-gateway` | `ghcr.io/rocketedge/brokersre-ib-gateway` | Same tag scheme: `stable`, `latest`, `10.50`, `10.50.1f`. Pin digests. |
 | `tws-rdesktop` image | not provided | |
+| relay listens from container start | relay listens only while logged in | `RELAY_MODE=always` restores the old behaviour. A client that gets "connection refused" retries. |
+
+Run `docker compose run --rm ib-gateway doctor` with your existing environment: it lists every
+variable from this table that the image ignores, with its replacement. `STRICT_ENV=yes` makes
+such a variable stop the start instead of warning.

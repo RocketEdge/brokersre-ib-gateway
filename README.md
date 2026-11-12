@@ -18,6 +18,8 @@ by or endorsed by Interactive Brokers.
 
 - [Images and tags](#images-and-tags)
 - [Quick start](#quick-start)
+- [Going live](#going-live)
+- [The weekly login](#the-weekly-login)
 - [Environment variables](#environment-variables)
 - [Ports, volumes and the sidecar contract](#ports-volumes-and-the-sidecar-contract)
 - [Health, phases and logs](#health-phases-and-logs)
@@ -111,13 +113,66 @@ You should see `logged-in`, and `(healthy)` in the status column. The API is the
 
 | You see | Cause | Fix |
 |---|---|---|
-| event `secret_unreadable` and the container stops | A secret file is empty or UTF-16 | Write it again with the commands in step 1 |
-| event `login_failed_dialog`, phase stays `login` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
+| event `doctor_failed` naming `credentials`, and the container stops | A secret file is missing, empty or UTF-16 | Write it again with the commands in step 1 |
+| event `doctor_failed` naming another check, and the container stops | The preflight found a setting the gateway cannot run with; the message says which and how to fix it | Fix the setting. `docker compose ... run --rm ib-gateway doctor` shows every check |
+| event `login_failed_dialog`, phase `needs-human` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
+| event `unknown_window` or `login_stalled`, phase stays `login` | The Gateway shows a window that IBC does not handle | Look at `ibc/ibc.log` on the log volume for the window title; report it |
 | event `existing_session` | The username is logged in somewhere else | Close the other session, or use a dedicated username |
 | event `dirs_not_writable` | A tmpfs or volume is not writable by uid 1000 | Keep the `uid=1000,gid=1000` mount options of the example |
+| a client gets "connection refused" on 4001/4002 | The Gateway is not logged in yet, or is restarting: the relay opens only while it is logged in | Retry; check the phase |
 
-To go live, set `TRADING_MODE=live` (and `READ_ONLY_API=no` only if your strategy places
-orders), pin the image by digest, and read [Security posture](#security-posture).
+## Going live
+
+Paper first. Before the same setup holds a live session, check each line:
+
+- [ ] **A username of its own.** IBKR allows one session per username: a login with the same
+      username in IBKR Mobile, Client Portal or TWS ends the gateway's session. Use a second
+      username for people.
+- [ ] **The image is pinned by digest** (`IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`)
+      and [verified](#verifying-an-image). A tag can move; a digest cannot.
+- [ ] **`TRADING_MODE=live`**, and `READ_ONLY_API=no` only if the strategy places orders.
+- [ ] **A daily restart time** (`AUTO_RESTART_TIME`, two-digit hour) outside IBKR's reset
+      windows for your region; `doctor` checks the form and, for three time-zone families,
+      the window.
+- [ ] **The relay is published on a private address** (`PRIVATE_IP`), never on a public one.
+      Every client that reaches the relay is trusted by the Gateway.
+- [ ] **The preflight is clean:**
+      `docker compose -f compose/docker-compose.example.yml run --rm ib-gateway doctor`.
+- [ ] **Someone is told when a person is needed.** The image records `2fa-pending`,
+      `needs-human` and `unknown_window` as events and phases; it does not notify anybody by
+      itself. Read `events/events.jsonl` with your own tooling, or run a companion that turns
+      them into messages.
+- [ ] **The host stays up**: no sleep, no unattended reboot during trading hours, Docker
+      starts at boot, the clock is synchronised.
+- [ ] **You have stopped and started it once on purpose** (`docker compose ... down`, then
+      `up -d`) and watched the phases, so the first real restart is not a surprise.
+- [ ] **You know what is not covered**: [docs/limitations.md](docs/limitations.md).
+
+## The weekly login
+
+IBKR asks for a full login with the second factor about once a week; the daily restart in
+between does not ask again. IBKR's own page puts it as "the weekly authentication cycle
+starts on every Monday"
+([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/best-practice-configure-tws-ib-gateway/daily-weekly-reauthentication));
+IBC's user guide says authentication is required "the first time during the week that TWS or
+Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
+prompt, and no setting of this image changes that: the image never answers, types or bypasses
+a second factor.
+
+What happens: the phase becomes `2fa-pending` and the events `twofa_initiated` and
+`twofa_dialog` appear (recognised from the text IBC's code logs; not yet seen in a real
+session of this image, [limitations](docs/limitations.md) L09). Approve the prompt in IBKR
+Mobile. A prompt that is not answered
+expires after about three minutes; with the defaults IBC then logs in again and asks again,
+without limit. Each time the phase passes through `login` for a few seconds (event
+`twofa_timeout`) before it is `2fa-pending` again, so anything that watches for a waiting
+person must look at the events ("a prompt without a completed login since"), not at how long
+one phase value has lasted. `TWOFA_MAX_PROMPTS` sets a limit,
+after which the gateway stops asking and waits in phase `needs-human` until someone restarts
+the container.
+
+Plan it: decide who approves the prompt and when, and make sure that person learns that it is
+waiting.
 
 ## Environment variables
 
@@ -128,9 +183,13 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
 | `TWS_USERID_FILE`, `TWS_PASSWORD_FILE` | required | Files holding the IBKR credentials (Docker secrets). `TWS_USERID`/`TWS_PASSWORD` also work but keep secrets in the process table. |
 | `TRADING_MODE` | `paper` | `live` or `paper`. One brokerage session per container; `both` is not supported. |
 | `READ_ONLY_API` | `yes` | Read-Only API in IBC. Set `no` only for a host that must place orders. |
-| `AUTO_RESTART_TIME` | empty | IBC `AutoRestartTime` in the Gateway's time zone, e.g. `11:45 PM`; keep it outside the IBKR reset windows. |
+| `AUTO_RESTART_TIME` | empty | IBC `AutoRestartTime` in the Gateway's time zone, with a two-digit hour, e.g. `11:45 PM` or `01:05 AM`; keep it outside the IBKR reset windows. A value IBC would not apply stops the start. |
 | `TIME_ZONE` | `Etc/UTC` | IANA zone written to `jts.ini` on first start. |
 | `TWOFA_TIMEOUT_ACTION` / `RELOGIN_AFTER_TWOFA_TIMEOUT` / `TWOFA_EXIT_INTERVAL` | `restart` / `yes` / `60` | 2FA retry behaviour: re-prompt instead of giving up. |
+| `TWOFA_MAX_PROMPTS` | `0` (no limit) | After this many unanswered second-factor prompts the gateway stops asking and waits for a person (phase `needs-human`). It never answers a prompt itself. |
+| `RELAY_MODE` | `gated` | `gated`: the relay on 4003/4004 listens only while the Gateway is logged in. `always`: it listens from container start. |
+| `JAVA_HEAP_MB` | unset (768) | Gateway heap in megabytes, set at run time; `auto` takes half of the container memory limit (768 to 4096). |
+| `DOCTOR_STRICT` | `yes` | `no` lets the container start although a preflight check failed (see `doctor` below). |
 | `EXISTING_SESSION_DETECTED_ACTION` | `primary` | IBC action when another session of the same username appears. |
 | `TWS_ACCEPT_INCOMING` | `reject` | IBC `AcceptIncomingConnectionAction`: API clients must be trusted. |
 | `IBC_COMMAND_SERVER_PORT` | `7462` | IBC command server on `127.0.0.1`; `0` disables it. |
@@ -143,6 +202,10 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
 - IB Gateway listens on **loopback only** (`4001` live / `4002` paper, `TrustedIPs=127.0.0.1`).
   `socat` relays that port to the container interface on **4003 / 4004**; publish the relay
   bound to a private address your strategy host can reach, never to the public internet.
+- The relay **follows the login**: it listens only while the Gateway is logged in. Before the
+  login and during the daily restart a client gets "connection refused" and should simply
+  retry; it is never accepted and then dropped. `RELAY_MODE=always` restores a relay that
+  listens from container start.
 - The IBC **command server** (`STOP`, `RESTART`, `RECONNECTDATA`, `RECONNECTACCOUNT`, ...) is on
   `127.0.0.1:7462`. A sidecar can use it only by sharing this container's network namespace
   (`network_mode: "service:ib-gateway"`), which is how the BrokerSRE agent does it. `ibc-cmd STOP`
@@ -155,14 +218,37 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
 `HEALTHCHECK` is healthy only when the IBC/Gateway process is alive **and** the API port accepts a
 connection; a pending 2FA is therefore honestly unhealthy, and nothing restarts the container on
 unhealthy. The finer lifecycle lives in `/var/log/ibgateway/state/phase`:
-`starting`, `login`, `2fa-pending`, `logged-in`, `restarting`, `existing-session`, `stopping`,
-`stopped`, `exited`, `test-mode`.
 
-Stdout carries one JSON object per line (`ts`, `src`, `level`, `event`, `msg`; schema in
-[schemas/log-event.v1.schema.json](schemas/log-event.v1.schema.json)). Raw IBC output goes to
-`/var/log/ibgateway/ibc/ibc.log` and the Gateway's own logs are mirrored under
-`/var/log/ibgateway/jts/`, so a dialog that echoes a username can never leak through container
-logging. The contract is specified in [docs/log-contract.md](docs/log-contract.md).
+| Phase | What it means | What to do |
+|---|---|---|
+| `starting`, `login` | starting up, logging in | wait |
+| `2fa-pending` | IBKR waits for a second factor | approve it in IBKR Mobile |
+| `logged-in` | login completed, API available | nothing |
+| `restarting` | the daily restart | wait; clients retry |
+| `existing-session` | the username is logged in elsewhere | close the other session |
+| `needs-human` | nothing will change until a person acts (IBKR rejected the login, or the second factor was not approved after `TWOFA_MAX_PROMPTS` prompts) | fix the cause, then restart the container |
+| `stopping`, `stopped`, `exited`, `test-mode` | shutting down, stopped, IBC ended, offline test | |
+
+**Events.** Every event is one JSON object on one line (`ts`, `src`, `level`, `event`, `msg`,
+`boot_id`, `seq`; schema in [schemas/log-event.v2.schema.json](schemas/log-event.v2.schema.json)).
+It goes to stdout and, as the identical line, to `/var/log/ibgateway/events/events.jsonl`, so a
+sidecar that mounts only the log volume sees what `docker logs` shows. `seq` counts the events
+of one container start without gaps: a reader can tell that it lost nothing. Raw IBC output
+goes to `/var/log/ibgateway/ibc/ibc.log` and the Gateway's own logs are mirrored under
+`/var/log/ibgateway/jts/`, so a dialog that echoes a username can never leak through an event.
+
+**Resources.** `/var/log/ibgateway/metrics/metrics.jsonl` gets one sample every 30 s from the
+container's own cgroup and `/proc` (memory, CPU, processes, the Gateway JVM, open files, disk).
+The events `oom_kill`, `memory_high`, `disk_low` and `login_stalled` are derived from it.
+
+**Preflight.** `docker compose -f compose/docker-compose.example.yml run --rm ib-gateway doctor`
+checks the configuration without starting the gateway (secret files and their encoding, the
+restart time, variables the image ignores, heap against the memory limit, disk space) and names
+the fix for each problem; `--json` prints one document. The same checks run at every start: a
+failed check stops the container before any login is attempted.
+
+All log files on the volume are size-capped and rotated (`LOG_MAX_BYTES`, `LOG_KEEP`). The
+contract is specified in [docs/log-contract.md](docs/log-contract.md).
 
 ## Security posture
 
@@ -299,10 +385,12 @@ same permissions and `actions/create-github-app-token` in the workflow.
 ## Differences from gnzsnz/ib-gateway-docker
 
 See [docs/migrating-from-gnzsnz.md](docs/migrating-from-gnzsnz.md) for the variable-by-variable
-mapping. Removed: SSH tunnel, `TRADING_MODE=both`, the TWS desktop image, `telnet`, `sudo`,
-runtime `JAVA_HEAP_SIZE` (now a build argument). Added: `HEALTHCHECK`, phase file, JSON log
-contract, command server on loopback, checksum pinning of every input, SBOM and signatures,
-read-only filesystem support.
+mapping. Removed: SSH tunnel, `TRADING_MODE=both`, the TWS desktop image, `telnet`, `sudo`.
+Renamed: `JAVA_HEAP_SIZE` is `JAVA_HEAP_MB` (megabytes, or `auto`). Added: `HEALTHCHECK`, phase
+file, JSON event contract on stdout and on the log volume, a preflight (`doctor`) that names
+variables carried over from gnzsnz which this image ignores, a relay that follows the login,
+resource samples, command server on loopback, checksum pinning of every input, SBOM and
+signatures, read-only filesystem support.
 
 ## Documentation
 

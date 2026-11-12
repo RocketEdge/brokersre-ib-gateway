@@ -11,9 +11,9 @@
 | `TWOFA_EXIT_INTERVAL` | `60` | seconds | IBC `SecondFactorAuthenticationExitInterval`. |
 | `TWOFA_DEVICE` | empty | IBC device name | IBC `SecondFactorDevice` when the account has several. |
 | `EXISTING_SESSION_DETECTED_ACTION` | `primary` | `primary`, `primaryoverride`, `secondary`, `manual` | IBC behaviour when another session of the same username exists. |
-| `AUTO_RESTART_TIME` | empty | e.g. `11:45 PM` | IBC `AutoRestartTime` in the Gateway's time zone. Keep outside IBKR reset windows (NA 00:15-01:45 ET, Europe 06:25-07:45 CET, APAC 04:45-06:05 and 20:15-21:15 HKT). |
-| `AUTO_LOGOFF_TIME` | empty | e.g. `11:45 PM` | IBC `AutoLogoffTime`. Prefer restart over logoff: a logoff forces a daily login. |
-| `TIME_ZONE` | `Etc/UTC` | IANA zone | Written to `jts.ini` `[Logon] TimeZone` on first start only. |
+| `AUTO_RESTART_TIME` | empty | `hh:mm AM` or `hh:mm PM` with a two-digit hour, e.g. `11:45 PM`, `01:05 AM` | IBC `AutoRestartTime` in the Gateway's time zone. IBC parses it with the pattern `hh:mm a` and does not apply a value in another form (`1:05 AM` is rejected), so the preflight refuses such a value. Keep outside IBKR reset windows (NA 00:15-01:45 ET, Europe 06:25-07:45 CET, APAC 04:45-06:05 and 20:15-21:15 HKT). |
+| `AUTO_LOGOFF_TIME` | empty | same form | IBC `AutoLogoffTime`. Prefer restart over logoff: a logoff forces a daily login. IBC ignores it when `AUTO_RESTART_TIME` is also set. |
+| `TIME_ZONE` | `Etc/UTC` | IANA zone | Written to `jts.ini` `[Logon] TimeZone` on first start only. The preflight warns, and never fails, when the value is not `UTC`, `GMT` or an `Area/City` name: the image has no time-zone database to verify it. |
 | `TWS_SETTINGS_PATH` | `/home/ibgateway/Jts/settings` | path | Gateway settings directory (persist as a volume). |
 | `TWS_ACCEPT_INCOMING` | `reject` | `accept`, `reject`, `manual` | IBC `AcceptIncomingConnectionAction`. Reject: API clients must be in Trusted IPs. |
 | `ALLOW_BLIND_TRADING` | `no` | `yes`, `no` | IBC `AllowBlindTrading`. |
@@ -28,18 +28,32 @@
 | `SOCAT_RESTART_DELAY` | `5` | seconds | Pause before the relay is restarted after it exits. |
 | `JAVA_USER_HOME` | `<TWS_SETTINGS_PATH>/.java-home` | path without spaces | The Gateway JVM's `user.home`. The Gateway writes its hardware id (`.hwid`) and Java caches there during login and cannot log in when it is not writable. On the settings volume by default so it survives a restart. |
 | `_JAVA_OPTIONS` | unset | JVM options | Extra options for the Gateway JVM. Appended after the image's own `-Duser.home=...`, so a value given here wins. Options written to `ibgateway.vmoptions` or `JAVA_TOOL_OPTIONS` do not reach the JVM (IBC drops them). |
-| `LOG_MAX_BYTES` | `10485760` | bytes | Size at which `ibc/ibc.log` and the mirrored Gateway logs are rotated. |
+| `JAVA_HEAP_MB` | unset (the image's 768) | megabytes (256 or more), `auto` | Gateway heap, set at run time through `_JAVA_OPTIONS`. `auto`: half of the container memory limit, between 768 and 4096; without a limit the built-in heap stays. The preflight fails when the heap is as large as the container memory limit and warns above 75 % of it; without a limit it skips the comparison. |
+| `LOG_MAX_BYTES` | `10485760` | bytes | Size at which each log file on the volume is rotated (`ibc/ibc.log`, the mirrored Gateway logs, `events/events.jsonl`, `metrics/metrics.jsonl`). |
 | `LOG_KEEP` | `3` | count | Rotated generations kept per log file (`.1` is the newest). |
+| `RELAY_MODE` | `gated` | `gated`, `always` | `gated`: the relay on 4003/4004 listens only while the phase is `logged-in`. `always`: from container start. |
+| `TWOFA_MAX_PROMPTS` | `0` | count | `0`: IBC re-prompts for the second factor without limit. `n`: after more than `n` prompts without a login the gateway stops IBC and stays up in phase `needs-human`. It never answers a prompt. |
+| `IBGW_INSTANCE` | `default` | label | Name of this gateway in the `container_start` event; give each gateway its own when you run several. |
+| `DOCTOR_STRICT` | `yes` | `yes`, `no` | `no`: a failed preflight check (`doctor`) is logged as `doctor_failed` with level `warn` and the container starts anyway. By default a failed check stops the start with exit 1. A check fails only when the gateway cannot work or would send a wrong login: `TRADING_MODE` is not `live` or `paper`; a credential is missing, given twice or in an unusable secret file; a restart or logoff time IBC rejects; a directory the gateway cannot write; a heap as large as the container memory limit; less than 16 MiB free on the log or settings volume; an ignored variable when `STRICT_ENV=yes`. Everything else is a warning. A defect of the preflight itself never stops a start. |
+| `DOCTOR_RESULT_FILE` | `<RUN_DIR>/doctor.result` | path | Where the preflight of a container start writes its verdict: one line, `fail`, `warn` or `pass`. The entrypoint stops the start only when the preflight exits 1 and this file says `fail`, so an abort of the preflight is never mistaken for a failed check. |
+| `STRICT_ENV` | `no` | `yes`, `no` | `yes`: a variable the image ignores (carried over from gnzsnz, or a likely typo of a known name) fails the preflight instead of warning (`config_deprecated`). |
+| `SAMPLE_INTERVAL_S` | `30` | seconds, 1 or more | Pause between two resource samples in `metrics/metrics.jsonl`. |
+| `DISK_MIN_FREE_PCT` | `10` | 0-100 | `disk_low` (and a preflight warning) when the log or the settings volume has less than this share free; `disk_ok` when it is back. It never stops a start; independently of it, the preflight fails when less than 16 MiB is free. |
+| `LOGIN_STALL_S` | `300` | seconds | `login_stalled` when the phase has been `login` without interruption for longer than this; `login_resumed` when it then leaves `login`. |
+| `MEM_HIGH_PCT` | `85` | 0-100 | `memory_high` threshold: working set as a share of the container memory limit. Never fires without a limit. |
+| `MEM_HIGH_FOR_S` | `600` | seconds | How long the working set must stay above `MEM_HIGH_PCT` before `memory_high`; `memory_ok` when it is no longer above. |
 
-Build arguments (not runtime): `JAVA_HEAP_MB` (default 768) replaces gnzsnz's runtime
-`JAVA_HEAP_SIZE`, because the Gateway directory is read-only at runtime.
+`JAVA_HEAP_MB` is also a build argument of the Dockerfile (the heap written into the image,
+768 by default); the run-time variable wins.
 
 ## Secret files
 
 A `_FILE` secret holds one value as UTF-8 text. Files written on Windows are accepted as they
 come: a trailing CR/LF and a UTF-8 byte-order mark are removed. A UTF-16 file (what Windows
-PowerShell 5.1 `>` and `Out-File` write) or an empty file stops the container with the event
-`secret_unreadable`, because a corrupted password sent to IBKR counts as a failed login.
+PowerShell 5.1 `>` and `Out-File` write) or an empty file stops the container before any login:
+the preflight reports it as `doctor_failed` (check `credentials`), and with `DOCTOR_STRICT=no`
+the reader itself still refuses it with `secret_unreadable`. A corrupted password sent to IBKR
+would count as a failed login.
 Characters inside the value are kept exactly, including spaces, `$`, `\` and non-ASCII text;
 the username and password are escaped for IBC's `.properties` parser when `config.ini` is
 rendered.
