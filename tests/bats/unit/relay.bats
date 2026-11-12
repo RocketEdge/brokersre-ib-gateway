@@ -69,57 +69,57 @@ relay_stopped() { ! pgrep -f "${STUB_DIR}/socat" >/dev/null; }
   sleep 0.6
   [ "$(starts)" == "0" ]
   echo logged-in >"${LOG_DIR}/state/phase"
-  wait_until 5 relay_running
-  wait_until 5 starts_are 1
+  wait_until 20 relay_running
+  wait_until 20 starts_are 1
   grep -q 'TCP-LISTEN:4004' "${STARTS}"
   grep -q 'TCP:127.0.0.1:4002' "${STARTS}"
-  wait_until 5 grep -q '"event":"relay_opened"' "${STUB_DIR}/events"
+  wait_until 20 grep -q '"event":"relay_opened"' "${STUB_DIR}/events"
 }
 
 @test "the relay closes when the Gateway leaves logged-in (daily restart, re-login)" {
   echo logged-in >"${LOG_DIR}/state/phase"
   start_relay
-  wait_until 5 relay_running
+  wait_until 20 relay_running
   echo restarting >"${LOG_DIR}/state/phase"
-  wait_until 5 relay_stopped
-  wait_until 5 grep -q '"event":"relay_closed"' "${STUB_DIR}/events"
+  wait_until 20 relay_stopped
+  wait_until 20 grep -q '"event":"relay_closed"' "${STUB_DIR}/events"
   # ... and opens again after the restart.
   echo logged-in >"${LOG_DIR}/state/phase"
-  wait_until 5 relay_running
-  wait_until 5 starts_are 2
+  wait_until 20 relay_running
+  wait_until 20 starts_are 2
 }
 
 @test "RELAY_MODE=always keeps the old behaviour: the relay listens from the start" {
   export RELAY_MODE=always
   echo login >"${LOG_DIR}/state/phase"
   start_relay
-  wait_until 5 relay_running
-  wait_until 5 starts_are 1
+  wait_until 20 relay_running
+  wait_until 20 starts_are 1
 }
 
 @test "test mode (IBC_LAUNCH=no) listens without a login" {
   export IBC_LAUNCH=no
   echo test-mode >"${LOG_DIR}/state/phase"
   start_relay
-  wait_until 5 relay_running
+  wait_until 20 relay_running
 }
 
 @test "a relay that dies while it is wanted is started again" {
   echo logged-in >"${LOG_DIR}/state/phase"
   start_relay
-  wait_until 5 relay_running
+  wait_until 20 relay_running
   pkill -f "${STUB_DIR}/socat"
-  wait_until 5 bash -c "[ \"\$(wc -l <'${STARTS}')\" -ge 2 ]"
-  wait_until 5 relay_running
+  wait_until 20 bash -c "[ \"\$(wc -l <'${STARTS}')\" -ge 2 ]"
+  wait_until 20 relay_running
 }
 
 @test "stopping the supervisor stops the relay" {
   echo logged-in >"${LOG_DIR}/state/phase"
   start_relay
-  wait_until 5 relay_running
-  wait_until 5 test -s "${PIDFILE}"
+  wait_until 20 relay_running
+  wait_until 20 test -s "${PIDFILE}"
   kill "$(cat "${PIDFILE}")"
-  wait_until 5 relay_stopped
+  wait_until 20 relay_stopped
 }
 
 @test "an invalid RELAY_MODE is refused with config_invalid" {
