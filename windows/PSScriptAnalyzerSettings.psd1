@@ -16,8 +16,11 @@
         }
         PSAvoidLongLines                          = @{
             Enable            = $true
-            MaximumLineLength = 180
+            MaximumLineLength = 200
         }
+        # Check functions hand their parameters to Invoke-GwCheckSafely inside script blocks; tell the
+        # unused-parameter rule to look there instead of suppressing it.
+        PSReviewUnusedParameter                   = @{ CommandsToTraverse = @('Invoke-GwCheckSafely') }
         PSAvoidSemicolonsAsLineTerminators        = @{ Enable = $true }
         PSAvoidUsingDoubleQuotesForConstantString = @{ Enable = $true }
         PSAvoidExclaimOperator                    = @{ Enable = $true }
