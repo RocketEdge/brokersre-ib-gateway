@@ -39,6 +39,10 @@ jobs:
           jq -e '[.channels.stable.version, .channels.latest.version] | all(test("^10\\.[0-9]+\\.[0-9]+[a-z]?$"))' versions.json
       - name: README version table matches versions.json
         run: scripts/readme-versions.sh --check
+      - name: Every tracked shell script carries the execute bit (a Windows host does not record it)
+        run: |
+          set -euo pipefail
+          git ls-files -s | scripts/check-file-modes.sh
       - name: bake definition resolves, and the two channels claim no common tag
         run: |
           set -euo pipefail

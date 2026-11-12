@@ -27,6 +27,7 @@ sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev       
 pwsh -NoProfile -Command "Invoke-Pester windows/tests" ; powershell -NoProfile -Command "Invoke-Pester windows/tests"   # Windows kit, Pester 6.2.0, under BOTH PowerShell 7 and Windows PowerShell 5.1
 pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # PSScriptAnalyzer 1.25.0, 0 findings
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
+git ls-files -s | scripts/check-file-modes.sh                                            # every tracked *.sh is 100755 in git (a Windows host does not record the bit)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
 ```
@@ -190,6 +191,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
   tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
   processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.
+- A Windows host records a new script as `100644` and still shows and runs it as executable
+  (Git Bash, the Docker Desktop share, a tree streamed with `tar`), so a missing execute bit
+  passes every local run and fails on the Linux runner with "Permission denied" (it did, on
+  `screenshot.sh`). Add new scripts with `git add --chmod=+x <path>`; before pushing run
+  `git ls-files -s | scripts/check-file-modes.sh`, which the lint job runs too.
 - `scripts/migrate-from-gnzsnz.sh` carries its own copy of the doctor's known names (it must run
   outside the image); `tests/bats/ci/migrate-from-gnzsnz.bats` fails when the two differ, so a
   new variable goes into `doctor.sh`, `docs/env-vars.md` and the converter together.

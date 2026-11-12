@@ -5,6 +5,26 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — `screenshot.sh` was not executable on Linux; the execute bit is now checked
+
+- **What changed:** `screenshot.sh` and `login-latch.sh` are recorded as executable in git,
+  like the other scripts of the image. `scripts/check-file-modes.sh` reads `git ls-files -s`
+  and fails when a tracked `*.sh` file lacks the bit; the lint job runs it, and a test of the
+  CI-script suite runs it against the checkout when git is there.
+- **Result:** the two unit tests that run `screenshot.sh` as a command failed on the first
+  Linux run of the screenshot branch ("Permission denied") and pass with the bit set. The
+  check names 55 shell scripts, all executable.
+- **What did NOT work / root cause:** *every local run was green and proved nothing about the
+  mode.* The development host is Windows: git records a new file as `100644`, while Git Bash,
+  the Docker Desktop share and a tree streamed with `tar` all present it as executable, and
+  the fast local runner even ran `chmod -R a+rx`. The image is unaffected (the Dockerfile sets
+  0755 on its scripts), which is why the container suite passed too; only scripts run from the
+  tree were hit. `login-latch.sh` had the same mode for two pull requests without a failure,
+  because it is only sourced. A check of the file system would repeat the mistake, so the
+  check reads the index, which is the same on every host.
+- **Next step:** none for the mode. The general rule stands: a green run on the Windows host
+  says nothing about POSIX behaviour; look at the first Linux run before building on a branch.
+
 ### 2026-11-12 — Opt-in screenshot of the Gateway's screen when a window blocks the login
 
 - **What changed:** with `SCREENSHOTS=yes` Xvfb keeps its framebuffer in a file on the run
