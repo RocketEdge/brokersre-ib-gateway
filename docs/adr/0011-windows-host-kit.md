@@ -35,6 +35,14 @@ the kit (`windows/`):
 - A restricted access list on the secrets folder (current user only, inheritance off) is still
   readable through a Docker Desktop bind mount (measured with a dummy file on Docker Desktop
   4.99.0, WSL 2 backend, 2026-11-12).
+- A folder created directly under `C:\` inherits write access for every local user
+  (Authenticated Users: Modify), so the default gateway folder and a kit extracted there are
+  writable by other accounts unless inheritance is switched off.
+- `docker compose up -d` does not recreate a container when only the content of a file-based
+  secret changed; `--force-recreate` does (measured 2026-11-12 with a small test container).
+- With `restart: unless-stopped` every start of the container is a login attempt, and a
+  container that was stopped "isn't restarted even after Docker daemon restarts"
+  ([Start containers automatically](https://docs.docker.com/engine/containers/start-containers-automatically/)).
 
 ## Decision
 
@@ -55,13 +63,31 @@ the kit (`windows/`):
    hidden prompt, writes them with `System.IO.File.WriteAllText` and `UTF8Encoding($false)`
    (no mark, no newline), zero-frees the BSTR in a `finally`, restricts the folder to the
    current account and verifies with a dummy file that a container can still read it. The
-   values never reach `compose.yaml`, a command line, a log or the screen.
+   values never reach `compose.yaml`, a command line, a log or the screen. The gateway folder
+   itself is closed to other accounts too (current account, SYSTEM, Administrators,
+   inheritance off) before anything is written into it, and nothing is written into a folder
+   that could not be closed. The default path stays `C:\BrokerSRE\gateway`.
 5. **Every host change is journaled and reversible.** Power settings, Windows Update policy
    values, scheduled tasks, `.wslconfig` keys and the firewall rule are each behind
    `ShouldProcess`, recorded with the previous value in `harden-journal.json` before they are
-   made, and reverted by `harden.ps1 -Undo`. `.wslconfig` is merged, never overwritten.
-6. **Alert, do not act.** The kit never automates 2FA, never restarts a running gateway and
-   stops the stack after the first rejected login so Docker's restart policy cannot repeat it.
+   made, and reverted by `harden.ps1 -Undo`. `.wslconfig` is merged, never overwritten. The
+   journal is a file and undo often runs elevated, so undo acts only on entries that match
+   what the kit itself records (the Windows Update policy key and its three value names, the
+   `.wslconfig` of the run and the three keys the kit sets, the kit's task names, its firewall
+   rule name, a power scheme GUID with one of two setting aliases) and refuses everything else
+   loudly; `-Undo` exits with 1 while any change is still in place.
+6. **Alert, do not act; a rejected login is never sent twice by the kit.** The kit never
+   automates 2FA and never restarts a running gateway. Its guarantee about a rejected login is
+   exactly this: (a) `setup.ps1` and `start.ps1` never start a gateway while a rejection is on
+   record in `kit-state.json`; only entering the credentials again clears it, and that
+   replaces the container. (b) Both scripts look for a rejection since the container's
+   current start (`.State.StartedAt`), not since their own start, so a rejection nobody
+   watched is found by the next run, including the start task after a restart; on a hit they
+   record it and run `docker compose stop` (in a `finally`, so the stop does not depend on the
+   record). (c) The kit is not a service: between a rejection and the next run of one of its
+   scripts it cannot act. In that window an image that latches a rejected login (event
+   `login_rejected_latched`, state `needs-human`) refuses by itself; with an image that does
+   not, Docker's restart policy can still make one login attempt per container start.
    `doctor.ps1` is read-only and reports `SKIP`, never `PASS`, for what it cannot measure.
 7. **Both PowerShell editions.** Windows PowerShell 5.1 is what a trader's computer has, so the
    kit is ASCII-only, avoids newer syntax and is tested under 5.1 and 7 in
@@ -81,8 +107,16 @@ PowerShell and Pester become a second toolchain in a repository that was shell-o
 own workflow on a Windows runner. Docker Engine inside WSL, the boot task without sign-in and
 the clock fix after a real resume are tested with mocks only and are listed as "to validate" in
 `windows/README.md`. The start tasks refer to the kit's folder, so moving the kit breaks them
-until `harden.ps1` runs again. The clock check pins `busybox` by digest outside
-`versions.json`, a second place that needs a manual bump.
+until `harden.ps1` runs again, and whoever can write to that folder can change what the task
+runs: `doctor.ps1` warns (`KitFolderAccess`), the kit does not move or lock its own folder.
+The two host-side probes (container clock, secret mount) run a `busybox` image pinned by
+digest in one constant (`$script:GwProbeImage` in `windows/src/Checks.ps1`). That is an
+accepted exception to invariant 1 ("no other file carries a version"): `versions.json`
+describes the inputs of the gateway image, and the probe image is not one of them. It needs a
+manual bump, and a test fails when a second copy of the reference appears.
+The rejected-login guarantee has the gap described in decision 6 (c) until the image carries
+its own latch. The start task now runs for up to 15 more minutes after each start to watch
+the login.
 
 ## Revisit trigger
 

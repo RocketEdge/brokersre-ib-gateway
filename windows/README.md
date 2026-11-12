@@ -10,6 +10,7 @@ knowing Docker, and keep it running through restarts, sleep and Windows Update.
 - [Step by step](#step-by-step)
 - [What can interrupt the gateway on Windows](#what-can-interrupt-the-gateway-on-windows)
 - [Start after a restart](#start-after-a-restart)
+- [If IBKR rejects the login](#if-ibkr-rejects-the-login)
 - [The weekly Sunday login](#the-weekly-sunday-login)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
@@ -27,16 +28,16 @@ Five PowerShell scripts. They run on Windows PowerShell 5.1 (built into Windows)
 | `setup.ps1` | Checks the computer, stores your IBKR credentials as two protected files, writes `compose.yaml`, starts the gateway and tells you when to approve the login on your phone | Creates one folder; starts one container |
 | `doctor.ps1` | Reports everything that can interrupt the gateway: `PASS`, `WARN`, `FAIL` or `SKIP` per check, with the fix | No, read-only |
 | `harden.ps1` | Applies the fixes `doctor.ps1` recommends, one switch each; `-Undo` reverts all of them | Yes, only what you ask for, recorded with the previous value |
-| `start.ps1` | Starts the stack without asking anything (used by the scheduled tasks) | Starts a stopped stack; never touches a running one |
+| `start.ps1` | Starts the stack without asking anything (used by the scheduled tasks), then watches the login | Starts a stopped stack; never replaces a running one; stops it again if IBKR rejected the login |
 | `uninstall.ps1` | Removes the container and the kit's scheduled tasks; with `-RemoveData` also the data | Yes, after asking |
 
 Every script that changes something accepts `-WhatIf` (show what would happen, change nothing).
 
 ## What the kit never does
 
-- It never automates or bypasses two-factor authentication. You approve every login on your phone.
-- It never restarts a running gateway. A restart forces a new login.
-- It never retries a rejected login. After one rejection it stops the gateway and records the rejection; `start.ps1` and a plain `setup.ps1` then refuse to start it until you enter the credentials again (`-ResetSecrets`), because repeated failures can lock an IBKR account.
+- It never automates or bypasses two-factor authentication. You approve every login on your phone. The kit has no means to do otherwise: the only thing it ever runs inside the gateway container is `cat` on the gateway's state file, it opens no network connection of its own (so none to the gateway window, its VNC port or its command port) and it never copies a file into the container. Two tests in `tests/Kit.Tests.ps1` fail if any of that is added.
+- It never restarts a running gateway. A restart forces a new login. The one exception is your own request: `setup.ps1 -ResetSecrets` (and `-Force`) replace the container, because new credentials cannot reach a running one.
+- It never starts a gateway whose login IBKR has rejected. When `setup.ps1` or `start.ps1` sees a rejected login it stops the gateway and records the rejection; both then refuse to start it until you enter the credentials again (`-ResetSecrets`), because repeated failures can lock an IBKR account. What this covers and what it cannot cover is in [If IBKR rejects the login](#if-ibkr-rejects-the-login).
 - It never places, changes or cancels an order. The API is read-only unless you pass `-AllowApiOrders`.
 - It never puts your username or password in `compose.yaml`, on a command line, in a log or on the screen.
 - It never sets up Windows auto-logon and never stores a Windows password.
@@ -94,9 +95,9 @@ only; it changes nothing on the computer.
 .\doctor.ps1
 ```
 
-You should see: a table of about 25 lines starting with `PASS`, `WARN`, `FAIL` or `SKIP`, and a
-summary such as `15 PASS, 2 WARN, 0 FAIL, 8 SKIP`. Fix every `FAIL` using the `Fix:` line under
-it. `SKIP` on the secret and compose lines is normal before setup.
+You should see: a table of about 27 lines starting with `PASS`, `WARN`, `FAIL` or `SKIP`, and a
+summary such as `15 PASS, 3 WARN, 0 FAIL, 9 SKIP`. Fix every `FAIL` using the `Fix:` line under
+it. `SKIP` on the secret, folder and compose lines is normal before setup.
 
 ### Step 3: preview the installation
 
@@ -130,6 +131,10 @@ image (recommended; the digest is in the release notes).
 
 If you were too slow with the phone, run `.\setup.ps1` again: it keeps your secrets, changes
 nothing that is already right and follows the login again. The gateway keeps prompting by itself.
+
+`setup.ps1` closes the gateway folder to other Windows accounts before it writes anything: the
+folder itself to your account, SYSTEM and Administrators, the `secrets` folder to your account
+alone. If it cannot (you answered "no" under `-Confirm`, or Windows refused), it writes nothing.
 
 ### Step 5: connect your program
 
@@ -185,6 +190,7 @@ to validate.
 | Firewall and port proxies | An allow rule or a `netsh interface portproxy` entry can put the trading API on the network | `FirewallExposure`, `ComposePortBinding` | The compose file binds the API to `127.0.0.1`; `harden.ps1 -FirewallLoopbackOnly` adds a block rule for 4001, 4002 and 9810 (loopback is not affected) |
 | Clock drift after resume | The clock inside the container VM can lag by the time the computer slept | `ContainerClock`, `HostClock` | `harden.ps1 -ResumeClockFix`: a task that runs `wsl -u root hwclock -s` after every resume |
 | Secret file encoding | A byte-order mark, UTF-16 or a Windows line ending becomes part of the password and the login fails | `SecretEncodingUsername`, `SecretEncodingPassword`, `SecretFolderAccess` | `setup.ps1` writes the files itself, byte-exact, and restricts the folder to your account |
+| Other Windows accounts on the computer | A folder created directly under `C:\` is writable by every local user. Whoever can write to the gateway folder can change `compose.yaml` or the journal that `harden.ps1 -Undo` replays; whoever can write to the kit folder can change `start.ps1`, which the start task runs as you | `GatewayFolderAccess`, `KitFolderAccess` | `setup.ps1` closes the gateway folder (your account, SYSTEM, Administrators). The kit folder is yours to place: keep it under your user profile, or use the `icacls` line `doctor.ps1` prints. `harden.ps1 -Undo` also refuses any journal entry the kit could not have written |
 | Docker Desktop updates | Applying an update restarts the engine and the gateway | `DockerDesktopAutoUpdate`, `DockerDesktopVersion` | Reported only. Leave "Always download updates" off and update on purpose |
 | Too little memory for the VM | The gateway's Java process is killed | `WslMemory` | `harden.ps1 -WslConfig -WslMemoryGB 4` |
 | Short stop timeout | Docker kills the gateway after 10 s, before it saved its settings | `ComposeStopGrace` | The compose file sets `stop_grace_period: 90s` |
@@ -234,6 +240,46 @@ use `.\harden.ps1 -StartAtBoot WslEngine -AfterSignIn` and treat it like option 
 
 Check the result with `.\doctor.ps1` (line `StartAtBoot`) and in `kit.log` in the gateway folder.
 
+## If IBKR rejects the login
+
+Repeated failed logins can lock an IBKR account, so a rejected username or password must not be
+sent again. A rejected login shows in the gateway's log as the events `login_failed` or
+`login_failed_dialog`; a gateway image that remembers a rejection also reports
+`login_rejected_latched` and the state `needs-human`. The kit treats all of these the same way.
+
+What the kit does:
+
+| When the rejection happens | What happens |
+|---|---|
+| While `setup.ps1` follows the login | It says so, records the rejection in `kit-state.json`, stops the stack (`docker compose stop`) and exits with 2 |
+| After a Windows or Docker restart, with the start task registered (for example the password was changed or expired at IBKR) | `start.ps1` starts the stack, then watches the login for 15 minutes (`-FollowSeconds`). It looks at everything since the container's current start, so it also finds a rejection that happened before the task ran. It records the rejection, stops the stack, writes a line to `kit.log` and exits with 1 |
+| Earlier, with nobody watching, and you then run `setup.ps1` | Same: `setup.ps1` looks back to the container's current start instead of showing `Logging in...` until it times out |
+| Any later run | `setup.ps1` (without `-ResetSecrets`) and `start.ps1` refuse to start the stack: `Not started: IBKR rejected the stored credentials at <time>` |
+
+A stopped container stays stopped: Docker's `unless-stopped` policy does not start it again,
+also not after a restart of Docker or Windows. The stop happens even when the record cannot be
+written. `.\setup.ps1 -ResetSecrets` asks for the credentials again, clears the record once both
+files are written and replaces the container, so the new values are really used (Docker Compose
+does not recreate a container when only the content of a secret file changed).
+
+What the kit guarantees, exactly:
+
+- The kit never starts a gateway while a rejection is on record.
+- When one of its scripts is running and the gateway reports a rejection, it stops the stack.
+
+What it cannot guarantee: the kit is two scripts, not a service. Between a rejection and the
+next run of `start.ps1` or `setup.ps1` nothing of the kit is running. During that time it
+depends on the image:
+
+- An image that latches a rejected login (it reports `login_rejected_latched`) refuses by
+  itself to log in again until the secret files change, whatever starts the container.
+- An image without that latch makes one login attempt every time its container starts. If the
+  gateway process exits after the rejection, Docker's restart policy starts the container
+  again, and that is one more attempt with the same credentials, until a kit script runs.
+
+So: after you change your IBKR password, run `.\setup.ps1 -ResetSecrets` right away, and keep
+the start task registered on a computer that restarts unattended: it is what watches the login.
+
 ## The weekly Sunday login
 
 IBKR requires one full login with two-factor authentication every week. During the week the
@@ -263,8 +309,13 @@ You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-li
 | `FAIL ContainerRuntime: Docker is set to Windows containers` | Docker Desktop is in Windows-container mode | Tray icon > "Switch to Linux containers..." |
 | `FAIL Port4002: Another program is listening` | Trader Workstation or another gateway uses the port | Close it, or find it: `Get-NetTCPConnection -LocalPort 4002 -State Listen` |
 | No prompt arrives on the phone | IBKR Mobile is not enrolled for this username, or notifications are off | Open IBKR Mobile; enrol IB Key for the username; the gateway prompts again by itself |
-| `IBKR rejected the username or password` and the gateway was stopped; later `Not started: IBKR rejected the stored credentials` | Wrong credentials, or the live username used for paper trading | `.\setup.ps1 -ResetSecrets`. Until then neither `setup.ps1` nor the start task sends the rejected credentials again |
-| `Another session is using this IBKR username` | TWS, the mobile app or another gateway is logged in with the same username | Log that session out, or use a second username for the gateway |
+| `IBKR rejected the username or password` and the gateway was stopped; later `Not started: IBKR rejected the stored credentials` | Wrong credentials, a password changed or expired at IBKR, or the live username used for paper trading | `.\setup.ps1 -ResetSecrets`. Until then neither `setup.ps1` nor the start task starts the gateway; see [If IBKR rejects the login](#if-ibkr-rejects-the-login) |
+| `The gateway needs a person and will not continue by itself`, and the gateway was stopped | The gateway image reported the state `needs-human` (it does so after a rejected login it remembers) | Look at `docker logs <container>`, then `.\setup.ps1 -ResetSecrets` |
+| `Another session is using this IBKR username ... the gateway is taking it over`, and the login does not complete | TWS, the mobile app or another gateway is logged in with the same username and keeps taking the session back | Log that session out, or use a second username for the gateway. The message alone is not an error: the gateway takes the session over by itself |
+| `... is not restricted to your account ... Nothing was written` | `setup.ps1` could not close the folder to other Windows accounts | Run `setup.ps1` again and answer "yes", or choose a folder your account owns with `-Path` |
+| `WARN GatewayFolderAccess` or `WARN KitFolderAccess` | Other Windows accounts may change the folder | Gateway folder: run `.\setup.ps1` again. Kit folder: move the kit under your user profile, or run the `icacls` line in the `Fix:` text |
+| `harden.ps1 -Undo` prints `Refused a journal entry this kit did not write` and exits with 1 | `harden-journal.json` holds an entry that does not match anything `harden.ps1` records (edited by hand or by another account), or you hardened another file with `-WslConfigPath` | Pass the same `-WslConfigPath` to `-Undo`. Otherwise read the entry, revert that setting by hand if it is real, and delete the entry from the file |
+| `uninstall.ps1 -RemoveData` prints `Nothing was deleted from ...` | The container engine did not answer, `docker compose down` failed or a task could not be deleted | Fix what the lines above it say (usually: start Docker) and run it again. The files are kept because they are what the next run needs to remove the container and its volumes |
 | `Logged in`, but your program cannot connect | Wrong port, or the program is on another computer | Paper is `127.0.0.1:4002`, live `127.0.0.1:4001`; the API is reachable from this computer only |
 | Your program connects but orders are refused | The API is read-only by default | `.\setup.ps1 -AllowApiOrders -Force` (recreates the container: new login) |
 | `compose.yaml exists and differs from what these options generate` | You ran setup with other options than before (for example without `-Live`) | Use the same options, or add `-Force` to replace the file (a backup is kept) |
@@ -291,6 +342,13 @@ credential); `kit.log` in the gateway folder shows what the scheduled tasks did.
 You should see: one `Reverted:` line per change, then the container and the scheduled tasks
 removed, and `Kept C:\BrokerSRE\gateway with your secret files and the Docker volumes`.
 
+`harden.ps1 -Undo` exits with 1 while any recorded change is still in place: a change that
+needs an elevated PowerShell (`Needs an elevated PowerShell to revert`), one that failed, or an
+entry it refused. Run it again as administrator until it exits with 0. A `.wslconfig` that
+nobody edited in between comes back byte for byte (line endings and byte-order mark included)
+and the kit's backup copy is removed; if you edited it since, your edits stay and so does the
+backup. If you hardened with `-WslConfigPath`, pass the same path to `-Undo`.
+
 To delete the gateway settings and logs (Docker volumes) and the files the kit wrote, including the secret files:
 
 ```powershell
@@ -301,25 +359,29 @@ PowerShell asks before each removal. Only files the kit wrote are deleted, by na
 else you keep in the folder stays, and the folder is removed only when it is empty. A folder
 without the kit's `kit-state.json` is never touched. While changes made by `harden.ps1` are
 still in place, `-RemoveData` refuses, because the folder holds the journal that can revert them.
+The files are deleted last and only when everything before worked: if Docker does not answer,
+`docker compose down` fails or a task cannot be deleted, nothing is deleted from the folder and
+the exit code is 1, so the next run can still find and remove the container and its volumes.
 
 If you registered the start-at-boot task from an elevated PowerShell, run `uninstall.ps1` from an
 elevated PowerShell too: a non-elevated session may not see that task.
 
 ## Files the kit creates
 
-In the gateway folder (default `C:\BrokerSRE\gateway`):
+In the gateway folder (default `C:\BrokerSRE\gateway`; its access list names your account,
+SYSTEM and Administrators, inheritance off):
 
 | File | Content |
 |---|---|
 | `secrets\ib-username`, `secrets\ib-password` | Your credentials, UTF-8 without byte-order mark and without newline; the folder's access list names only your account |
 | `compose.yaml` | The stack: image, API on `127.0.0.1`, read-only root file system, no capabilities, 90 s stop timeout, log size limits. Generated; change it through `setup.ps1` options |
-| `kit-state.json` | What setup detected: runtime, trading mode, container name, port. No secret |
+| `kit-state.json` | What setup detected: runtime, trading mode, container name, port; and the time of a login IBKR rejected, until you enter the credentials again. No secret |
 | `harden-journal.json` | Every host change made by `harden.ps1` with its previous value |
 | `kit.log`, `kit.log.1` | What the scheduled tasks did; at most 256 KB each |
 
 Elsewhere: scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
 three values under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`; with `-WslConfig`
-keys in `%UserProfile%\.wslconfig` (a `.brokersre-backup-<time>` copy is kept); with
+keys in `%UserProfile%\.wslconfig` (a `.brokersre-backup-<time>` copy is kept until undo); with
 `-FirewallLoopbackOnly` the rule `BrokerSRE-Gateway-Block-Api-Ports`; with `-DisableSleep` two
 values of the active power scheme.
 
@@ -339,6 +401,10 @@ intentions, not facts. `doctor.ps1` tells you the outcome on your computer.
 | The reading "Windows adjusts active hours automatically" | The value `SmartActiveHoursState = 1` is described by community sources, not by Microsoft | Compare with Settings > Windows Update > Advanced options |
 | `DockerDesktopAutoUpdate` | Docker does not document the key names of `settings-store.json`; the check reads `AutoDownloadUpdates` and reports `SKIP` when it is absent | Docker Desktop > Settings > Updates |
 | `cap_drop: ALL` with the gateway image during a real login | No gateway was started during development | Step 4; if the container fails to start, report it |
+| Everything in [If IBKR rejects the login](#if-ibkr-rejects-the-login) against a real gateway | No gateway was started and no login was attempted during development; the behaviour is tested against the event names and states of the image's log contract with a mocked `docker` | Nothing to do on purpose: do not provoke a rejected login. If it happens, `kit.log` and `kit-state.json` show what the kit did |
+| The states `needs-human` and the event `login_rejected_latched` | Not part of the log contract of the image version this kit was developed against (`docs/log-contract.md`); the kit understands them so it is ready for an image that reports them | `docker logs <container>` shows whether your image reports them |
+| Ending a hung `docker compose up` together with its child processes | Proven with `cmd.exe` and a child process under both PowerShell editions, not with a real hung `docker compose` | If `kit.log` reports a failed start and the gateway starts anyway, report it |
+| `-ResetSecrets` replacing the container | Only the reason was measured (Docker Compose 2 leaves a running container untouched when only a secret file's content changed; `--force-recreate` replaces it), with a small test container | After `-ResetSecrets`, `docker ps` shows the gateway container "Up" for seconds, not days |
 | The C# snippet | Not compiled by this repository | Build it against IBKR's TWS API client |
 
 ## How the kit is tested
@@ -353,8 +419,13 @@ commands are mocked at one wrapper each; file handling is real. Among the things
 secret files are byte-exact under both editions, the password appears in no output stream and
 in no other file, `-WhatIf` changes nothing, the rendered compose file passes
 `docker compose config`, every check has its PASS, WARN, FAIL and SKIP path, every hardening
-change round-trips through undo, and the login follower never restarts anything and stops at
-the first rejected login.
+change round-trips through undo (and an entry the kit could not have written is refused), a
+timed-out command is ended together with its child process, `uninstall.ps1 -RemoveData` keeps
+the files when an earlier step failed, and both `setup.ps1` and `start.ps1` stop the stack at a
+rejected login, also one that happened before they ran, and never start it again while the
+rejection is on record. `tests/Kit.Tests.ps1` also reads the image's own contract files
+(`rootfs/etc/brokersre/ibc-patterns.tsv`, `docs/log-contract.md`) and fails when the image
+gains a state the kit does not know.
 
 ## Sources
 
@@ -362,7 +433,7 @@ the first rejected login.
 - Microsoft Learn, "Troubleshooting Windows Subsystem for Linux" (known issue with published container ports in mirrored networking mode); moby/moby issue 48056.
 - Microsoft Learn, "Manage device restarts after updates" (active hours, at most 18 hours; policy registry values).
 - microsoft/WSL issues 9231 (session 0) and 10006 (clock skew after resume).
-- Docker documentation: "Install Docker Desktop on Windows" (requirements), "Change settings" (start at sign-in, updates), "Docker Desktop license agreement".
+- Docker documentation: "Install Docker Desktop on Windows" (requirements), "Change settings" (start at sign-in, updates), "Docker Desktop license agreement", "Start containers automatically" (restart policy `unless-stopped`: a stopped container "isn't restarted even after Docker daemon restarts"; read 2026-11-12).
 - Microsoft Sysinternals, "Autologon".
 
 Interactive Brokers, IBKR, IB Gateway and Trader Workstation are trademarks of Interactive
