@@ -95,6 +95,8 @@ _ALIVE_PHASES = frozenset(
     }
 )
 _FEED_FRESH_S = 120.0
+# Statuses that are logged at info level; the others are warnings.
+_CALM_STATUSES = frozenset({ProbeStatus.READY, ProbeStatus.NOT_MEASURED})
 
 _NOTIFIER_DISABLED = NotifierSnapshot(
     enabled=False,
@@ -423,7 +425,7 @@ class Application:
                 self._last_status = snapshot.status
                 log_event(
                     _LOGGER,
-                    logging.INFO if snapshot.status is ProbeStatus.READY else logging.WARNING,
+                    logging.INFO if snapshot.status in _CALM_STATUSES else logging.WARNING,
                     "api_status_changed",
                     snapshot.reason,
                     status=snapshot.status.value,
