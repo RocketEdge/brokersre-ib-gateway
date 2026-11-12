@@ -145,3 +145,23 @@ def test_the_scanner_catches_a_planted_call() -> None:
     assert any(
         REQUEST_IDENTIFIER.fullmatch(name) and name not in ALLOWED_REQUESTS for name in names
     )
+
+
+def test_the_adapter_uses_exactly_these_attributes_of_the_ib_async_client() -> None:
+    """An allow-list, not a deny-list: any new use of the client must be added here on purpose."""
+    adapter = SOURCE / "brokersre_sidecar" / "probe" / "adapter.py"
+    tree = ast.parse(adapter.read_text(encoding="utf-8"))
+    used = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "_client"
+    }
+    assert used == {
+        "connectAsync",  # version exchange and startApi, nothing else
+        "req" + "CurrentTime",  # the server-time request
+        "isReady",
+        "disconnect",
+        "_accounts",  # only to drop the account list the gateway sends
+    }

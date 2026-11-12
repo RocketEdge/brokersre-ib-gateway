@@ -16,7 +16,11 @@ REDACTED = "[REDACTED]"
 """Replacement text for a secret or an identity value."""
 
 # IBKR account ids: U/F (live individual/advisor), DU/DF (paper) followed by 5-9 digits.
-ACCOUNT_RE = re.compile(r"\b(?:DU|DF|U|F)\d{5,9}\b")
+# Boundaries are deliberately loose on the left: an id glued to an underscore, a digit or
+# lower-case text (``acct_DU1234567``, the ``\\x00DU1234567`` of a bytes repr) must still
+# be caught. Only an upper-case letter before it (``CPU12345``) or a tenth digit after it
+# make it something else.
+ACCOUNT_RE = re.compile(r"(?<![A-Z])(?:DU|DF|U|F)\d{5,9}(?!\d)")
 
 # "key=value" / "key: value" where the key names an identity. The value runs to the next
 # whitespace, comma, semicolon or closing bracket. Keys are matched case-insensitively and

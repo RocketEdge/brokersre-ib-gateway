@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
 import socket
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pytest
 
+from brokersre_sidecar.logsetup import configure_logging
 from brokersre_sidecar.probe import IbConnectError, IbDisconnectedError, IbTimeoutError
 from brokersre_sidecar.probe.adapter import IbAsyncClient
+from brokersre_sidecar.redaction import SecretRegistry
 from fakes.fake_gateway_tcp import WireGateway
 
 GENEROUS = 5.0
@@ -161,5 +165,28 @@ async def test_the_account_list_sent_by_the_gateway_is_not_exposed(
     gateway: WireGateway, client: IbAsyncClient
 ) -> None:
     await client.connect("127.0.0.1", gateway.port, 999, GENEROUS)
-    assert "DU1234567" not in repr(client)
-    assert "DU1234567" not in repr(vars(client))
+    # The gateway sends its account list right after the handshake and ib_async keeps
+    # it; the adapter must drop it, so no object of the sidecar holds an account id.
+    kept = client._client._accounts
+    assert kept == []
+    assert client.is_connected() is True
+    assert (await client.current_time(GENEROUS)).timestamp() == gateway.epoch
+
+
+async def test_a_malformed_message_before_the_handshake_completes_leaks_no_account_id(
+    gateway: WireGateway, client: IbAsyncClient
+) -> None:
+    """The event library logs raw socket bytes on a handler error; none may reach the log."""
+    stream = io.StringIO()
+    root = logging.getLogger()
+    saved_handlers, saved_level = list(root.handlers), root.level
+    configure_logging("debug", SecretRegistry(), stream)
+    try:
+        gateway.mode = "malformed_after_accounts"
+        with pytest.raises(IbConnectError):
+            await client.connect("127.0.0.1", gateway.port, 999, 0.5)
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+    assert "DU1234567" not in stream.getvalue()
+    assert logging.getLogger("eventkit").getEffectiveLevel() > logging.CRITICAL

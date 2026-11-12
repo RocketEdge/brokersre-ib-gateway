@@ -70,10 +70,10 @@ def test_secrets_and_account_ids_are_redacted_in_messages_and_fields(stream: io.
 
 
 def test_third_party_records_are_wrapped_and_redacted_too(stream: io.StringIO) -> None:
-    logging.getLogger("ib_async.client").error("Peer closed connection for %s", "DU1234567")
+    logging.getLogger("some.library").error("Peer closed connection for %s", "DU1234567")
     (record,) = lines(stream)
     assert record["event"] == "log"
-    assert record["logger"] == "ib_async.client"
+    assert record["logger"] == "some.library"
     assert record["msg"] == "Peer closed connection for ***567"
 
 
@@ -93,7 +93,8 @@ def test_an_exception_is_reported_by_type_and_redacted_message_without_a_traceba
 
 def test_library_noise_below_warning_is_dropped(stream: io.StringIO) -> None:
     logging.getLogger("httpx").info("HTTP Request: POST https://example.invalid/secret-path")
-    logging.getLogger("ib_async.client").info("Connecting")
+    logging.getLogger("ib_async.client").error("raw fields DU1234567")
+    logging.getLogger("eventkit").error("Value (b'DU1234567',) caused exception")
     assert stream.getvalue() == ""
 
 

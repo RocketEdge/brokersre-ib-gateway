@@ -26,7 +26,7 @@ MSG_MANAGED_ACCOUNTS = "15"
 MSG_CURRENT_TIME = "49"
 REQ_CURRENT_TIME = "49"
 
-Mode = Literal["ok", "silent", "no_time_answer", "client_id_in_use"]
+Mode = Literal["ok", "silent", "no_time_answer", "client_id_in_use", "malformed_after_accounts"]
 
 
 def frame(*fields: object) -> bytes:
@@ -109,6 +109,12 @@ class WireGateway:
                 writer.write(frame(MSG_ERROR, 2, -1, 326, text, ""))
                 await writer.drain()
                 writer.close()
+                return
+            if self.mode == "malformed_after_accounts":
+                # The account list and a message with a non-numeric id in one segment.
+                writer.write(frame(MSG_MANAGED_ACCOUNTS, 1, ACCOUNT) + frame("x", 1, 1))
+                await writer.drain()
+                await reader.read()
                 return
             writer.write(frame(MSG_MANAGED_ACCOUNTS, 1, ACCOUNT))
             writer.write(frame(MSG_NEXT_VALID_ID, 1, 1))

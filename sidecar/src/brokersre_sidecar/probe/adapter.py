@@ -87,11 +87,12 @@ class IbAsyncClient:
         """Create the client; no socket is opened until ``connect``.
 
         Side effects:
-            Silences the ``ib_async`` loggers: on a decode error the library logs the raw
-            message fields, which can contain account ids, and the probe engine reports
-            every outcome itself.
+            Silences the ``ib_async`` and ``eventkit`` loggers: on a decode or handler
+            error they log the raw message fields or the raw socket bytes, which can
+            contain account ids, and the probe engine reports every outcome itself.
         """
-        logging.getLogger("ib_async").setLevel(logging.CRITICAL + 1)
+        for library in ("ib_async", "eventkit"):
+            logging.getLogger(library).setLevel(logging.CRITICAL + 1)
         self._wrapper = _TimeProbeWrapper()
         self._client = Client(self._wrapper)
 
@@ -111,6 +112,10 @@ class IbAsyncClient:
         except (TimeoutError, OSError) as error:
             # ib_async has already closed the socket and reset itself.
             raise IbConnectError(type(error).__name__) from None
+        # The gateway announces its account list during the handshake and ib_async keeps
+        # it (it only needs it to decide that the handshake is complete). The probe has
+        # no use for account ids, so the list is dropped here, at the boundary.
+        self._client._accounts = []
 
     async def current_time(self, timeout_s: float) -> datetime:
         """Ask for the server time and wait for the answer.

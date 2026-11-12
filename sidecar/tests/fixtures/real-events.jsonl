@@ -1,0 +1,13 @@
+{"ts":"2026-11-12T01:52:00.053Z","src":"entrypoint","level":"info","event":"container_start","msg":"brokersre-ib-gateway 10.50.1g (stable) IBC 3.24.2 starting as uid 1000","data":{"gateway_version":"10.50.1g","channel":"stable","ibc_version":"3.24.2","ibc_release":"3.24.2-rocketedge.1","trading_mode":"paper","instance":"paper-1"},"boot_id":"443d261aecbd4789","seq":1}
+{"ts":"2026-11-12T01:52:00.976Z","src":"doctor","level":"warn","event":"config_deprecated","msg":"ignored_variables: JAVA_HEAP_SIZE is ignored: it was renamed (fix: use JAVA_HEAP_MB)","boot_id":"443d261aecbd4789","seq":2}
+{"ts":"2026-11-12T01:52:00.987Z","src":"doctor","level":"info","event":"doctor_ok","msg":"preflight passed: 9 passed, 1 warned, 2 skipped","boot_id":"443d261aecbd4789","seq":3}
+{"ts":"2026-11-12T01:52:01.670Z","src":"entrypoint","level":"info","event":"config_rendered","msg":"IBC config rendered to /run/brokersre/config.ini (mode 0600)","data":{"config_hash":"c7c60feb79adfd61","trading_mode":"paper","read_only_api":"yes","auto_restart_time":"11:45 PM","time_zone":"America/New_York"},"boot_id":"443d261aecbd4789","seq":4}
+{"ts":"2026-11-12T01:52:01.681Z","src":"entrypoint","level":"info","event":"jts_ini_written","msg":"jts.ini created in /home/ibgateway/Jts/settings (TimeZone=America/New_York)","boot_id":"443d261aecbd4789","seq":5}
+{"ts":"2026-11-12T01:52:02.201Z","src":"xvfb","level":"info","event":"xvfb_started","msg":"Xvfb listening on :1","boot_id":"443d261aecbd4789","seq":6}
+{"ts":"2026-11-12T01:52:02.211Z","src":"vnc","level":"info","event":"vnc_disabled","msg":"VNC_SERVER_PASSWORD not set; VNC disabled","boot_id":"443d261aecbd4789","seq":7}
+{"ts":"2026-11-12T01:52:02.221Z","src":"socat","level":"info","event":"socat_started","msg":"relay 0.0.0.0:4004 -> 127.0.0.1:4002 (paper); mode gated","boot_id":"443d261aecbd4789","seq":8}
+{"ts":"2026-11-12T01:52:02.235Z","src":"ibc","level":"info","event":"ibc_starting","msg":"IBC 3.24.2 starting IB Gateway 10.50.1g (stable, paper); command server port 7462","boot_id":"443d261aecbd4789","seq":9}
+{"ts":"2026-11-12T01:52:02.618Z","src":"ibc","level":"info","event":"ibc_version","msg":"ibc_version","boot_id":"443d261aecbd4789","seq":10}
+{"ts":"2026-11-12T01:52:05.055Z","src":"ibc","level":"info","event":"login_dialog","msg":"login_dialog","boot_id":"443d261aecbd4789","seq":11}
+{"ts":"2026-11-12T01:52:45.277Z","src":"entrypoint","level":"info","event":"shutdown_requested","msg":"SIGTERM/SIGINT received; stopping IB Gateway tidily","boot_id":"443d261aecbd4789","seq":12}
+{"ts":"2026-11-12T01:52:46.410Z","src":"entrypoint","level":"info","event":"shutdown_complete","msg":"all processes stopped","boot_id":"443d261aecbd4789","seq":13}

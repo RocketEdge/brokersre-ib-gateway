@@ -152,3 +152,27 @@ def test_dir_writable_is_false_for_a_read_only_directory(tmp_path: Path) -> None
         assert is_dir_writable(locked) is False
     finally:
         locked.chmod(0o700)
+
+
+def test_an_account_id_glued_to_other_text_is_still_shortened() -> None:
+    # What ib_async's event library logs on a handler error: the raw socket bytes.
+    data = b"\x00\x00\x00\x0f15\x001\x00DU1234567\x00"
+    text = redact_accounts(f"Value ({data!r},) caused exception for event Event<hasData, []>")
+    assert "DU1234567" not in text
+    assert "***567" in text
+    assert redact_accounts("acct_DU1234567_x") == "acct_***567_x"
+    assert redact_accounts("accountU7654321") == "account***321"
+    assert redact_accounts("['15', '1', 'DU1234567,U7654321']") == "['15', '1', '***567,***321']"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "CPU12345 load",  # an upper-case word that merely ends in U
+        "SHELF123456",
+        "U1234567890",  # ten digits: not an account id
+        "sha256:9aaaf1234567deadbeef",  # lower-case hex is never an account id
+    ],
+)
+def test_text_that_only_resembles_an_account_id_is_left_alone(text: str) -> None:
+    assert redact_accounts(text) == text

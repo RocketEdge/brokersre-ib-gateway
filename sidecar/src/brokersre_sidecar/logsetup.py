@@ -5,8 +5,9 @@ a log sink: ``ts``, ``src`` (always ``sidecar``), ``level`` (``debug|info|warn|e
 ``event`` (snake_case), ``msg``, plus the keyword fields of ``log_event``. Every string that
 reaches the stream passes ``redact_text`` first, including records of third-party loggers.
 
-Why library loggers are capped at WARNING: httpx logs the full request URL at INFO (a webhook
-URL is a credential) and ib_async logs raw API traffic at DEBUG.
+Why library loggers are capped: httpx logs the full request URL at INFO (a webhook URL is a
+credential), so HTTP libraries are held at WARNING; ib_async and its event library log raw
+API fields and raw socket bytes on errors, so they are silenced completely.
 """
 
 from __future__ import annotations
@@ -34,7 +35,10 @@ _LEVELS = {
     "warning": logging.WARNING,
     "error": logging.ERROR,
 }
-_NOISY_LIBRARIES = ("httpx", "httpcore", "ib_async", "asyncio")
+_NOISY_LIBRARIES = ("httpx", "httpcore", "asyncio")
+# Never logged at all: on a decode or handler error these libraries log raw API message
+# fields or raw socket bytes (account ids), and the probe reports every outcome itself.
+_SILENT_LIBRARIES = ("ib_async", "eventkit")
 _FIELDS_ATTRIBUTE = "sidecar_fields"
 _EVENT_ATTRIBUTE = "sidecar_event"
 
@@ -134,3 +138,5 @@ def configure_logging(level: str, registry: SecretRegistry, stream: TextIO | Non
     root.setLevel(numeric)
     for name in _NOISY_LIBRARIES:
         logging.getLogger(name).setLevel(logging.WARNING)
+    for name in _SILENT_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.CRITICAL + 1)
