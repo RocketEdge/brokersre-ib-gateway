@@ -1,0 +1,66 @@
+# Unit tests for the redaction RULES (redact.vrl and the user-name step of raw_gate), with the
+# bypass cases an independent review found. Run by azure/tests/run.sh with
+# IBGW_RAW_MODE=redacted and IBGW_REDACT_USERNAME=CANARY_USER_zq7. Every identifier is a canary.
+tests:
+  - name: redaction - an account id next to an underscore, glued to a word, after an escaped line break or in lower case is caught
+    inputs:
+      - insert_at: raw_gate
+        type: vrl
+        source: |
+          .message = "a _U1234567 b U7654321_x c acctDU1234567 d " + "\\" + "nU1111111 e " + "\\" + "tDU2222222 f u3333333 g du4444444 h U5555555. i (U6666666) j \"U7777777\" k U8888888/9 l =U9999999; m " + "\\" + "ndf4040404"
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "a _[ACCT:…567] b [ACCT:…321]_x c acct[ACCT:…567] d " + "\\" + "n[ACCT:…111] e " + "\\" + "t[ACCT:…222] f [ACCT:…333] g [ACCT:…444] h [ACCT:…555]. i ([ACCT:…666]) j \"[ACCT:…777]\" k [ACCT:…888]/9 l =[ACCT:…999]; m " + "\\" + "n[ACCT:…404]")
+
+  - name: redaction - ordinary words, versions, hashes and long numbers are left alone
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "build U1234 XDU1234567 U1234567890 menu1234567 config_hash c7c60feb79adfd61 digest f67ff624e9d565e8 f1234567abc 10.50.1g FUTURES Du12 port 4002 snake_case_name __init__"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "build U1234 XDU1234567 U1234567890 menu1234567 config_hash c7c60feb79adfd61 digest f67ff624e9d565e8 f1234567abc 10.50.1g FUTURES Du12 port 4002 snake_case_name __init__")
+
+  - name: redaction - the user name is replaced whatever its case, also glued to other text and repeated
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "exact CANARY_USER_zq7 lower canary_user_zq7 upper CANARY_USER_ZQ7 title Canary_User_Zq7 mixed canary_USER_zq7 glued xCaNaRy_UsEr_Zq7y twice CANARY_USER_zq7canary_user_zq7 key=CANARY_USER_zq7; é-CANARY_USER_zq7-ü"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "exact [USER] lower [USER] upper [USER] title [USER] mixed [USER] glued x[USER]y twice [USER][USER] key=[USER]; é-[USER]-ü")
+              assert!(!contains(downcase(encode_json(.)), "canary_user_zq7"), "user name shipped")
+
+  - name: redaction - an event message with an id behind an underscore is redacted too
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "ibc", "level": "warn", "event": "unknown_window", "msg": "window acct_DU1234567 and du7654321",
+            "data": {"title": "id=u0001234"}, "boot_id": "443d261aecbd4789", "seq": 12
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Msg, "window acct_[ACCT:…567] and [ACCT:…321]")
+              assert_eq!(.Props.title, "id=[ACCT:…234]")

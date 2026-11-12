@@ -4,7 +4,7 @@
 tests:
   - name: raw - acknowledged mode ships lines with account ids redacted
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/ibc/ibc.log

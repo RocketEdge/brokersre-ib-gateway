@@ -1,10 +1,10 @@
-# Unit tests for raw-log shipping WITH user-name redaction (transform raw_out in ../vector.yaml).
+# Unit tests for raw-log shipping WITH user-name redaction (transforms raw_gate -> raw_redacted -> raw_out in ../vector.yaml).
 # Run by azure/tests/run.sh with IBGW_RAW_MODE=redacted, IBGW_REDACT_USERNAME=CANARY_USER_zq7,
 # IBGW_INSTANCE=test-instance and HOST_LABEL=test-host. Every identifier below is a canary.
 tests:
   - name: raw - the user name and account ids are redacted before the line leaves the host
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/ibc/ibc.log
@@ -29,7 +29,7 @@ tests:
 
   - name: raw - identifiers that only look like account ids are left alone
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/jts/launcher.log
@@ -44,7 +44,7 @@ tests:
   # One input per test: Vector passes a condition when ANY output event satisfies it.
   - name: raw - an error level and a code are derived when the line states them
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/jts/launcher.log
@@ -59,7 +59,7 @@ tests:
 
   - name: raw - a warning level is derived and no code is invented
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/jts/launcher.log
@@ -74,7 +74,7 @@ tests:
 
   - name: raw - a line longer than 32768 bytes is cut and flagged
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: vrl
         source: |
           chunk = "0123456789abcdef"
@@ -103,7 +103,7 @@ tests:
 
   - name: raw - a multi-byte line is cut to at most 32768 bytes and stays valid text
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: vrl
         source: |
           chunk = "éàü€éàü€éàü€éàü€"
@@ -133,7 +133,7 @@ tests:
 
   - name: raw - control characters are replaced by a space and a tab is kept
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: vrl
         source: |
           .message = "bell" + decode_base64!("Bw==") + "escape" + decode_base64!("Gw==") + "[0m tab" + decode_base64!("CQ==") + "kept"
@@ -148,7 +148,7 @@ tests:
 
   - name: raw - a blank line is dropped
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/ibc/ibc.log

@@ -4,9 +4,11 @@
 #           opted in, its raw IBC/launcher logs; map each line to the columns of its table;
 #           redact; hand the rows to the sinks of sinks-managed-identity.yaml or
 #           sinks-certificate.yaml (entrypoint.sh renders one of them).
-# Contract  Inputs are read-only files under /var/log/ibgateway (log contract v2). Outputs are
-#           the transforms events_out, metrics_out and raw_out: their rows carry exactly the
-#           columns the data collection rule declares for the matching stream
+# Contract  Inputs are read-only files under /var/log/ibgateway (log contract v2):
+#             event   ts, src, level, event, msg, boot_id, seq and an optional flat `data` object;
+#             sample  ts, src=metrics, boot_id, seq (its own series), phase and the measured keys.
+#           Outputs are the transforms events_out, metrics_out and raw_out: their rows carry
+#           exactly the columns the data collection rule declares for the matching stream
 #           (../bicep/modules/dcr.bicep), with `timestamp` in place of TimeGenerated (the
 #           azure_logs_ingestion sink writes TimeGenerated from the event timestamp).
 #           azure/tests/run.sh runs this file in the real container and fails when the rows
@@ -16,17 +18,19 @@
 # Rules     1. A malformed line is dropped and counted, never fatal
 #              (component_discarded_events_total of the mapping transform, printed on stdout).
 #           2. A value that was not measured is absent, never 0.
-#           3. An IBKR account id leaves the host only as [ACCT:…last3]; the user name only as
-#              [USER]; a raw line becomes a row only when IBGW_RAW_MODE allows it.
+#           3. An IBKR account id leaves the host only as [ACCT:…last3] (redact.vrl, applied to
+#              every string of every event and raw row); the user name only as [USER]; a raw
+#              line becomes a row only when IBGW_RAW_MODE allows it.
 #           4. No network listener, no docker.sock, one writable volume (/var/tmp).
-# Env       IBGW_INSTANCE, HOST_LABEL (row labels, read by the mappings); IBGW_RAW_MODE and
-#           IBGW_REDACT_USERNAME are set by entrypoint.sh only, never by the operator.
+# Env       IBGW_INSTANCE, HOST_LABEL (row labels, validated by entrypoint.sh, read by the
+#           mappings); IBGW_RAW_MODE and IBGW_REDACT_USERNAME are set by entrypoint.sh only.
 #           Vector 0.61 does not interpolate ${VAR} in this file (that needs
 #           --dangerously-allow-env-var-interpolation, which stays off).
 # Tests     tests/*.test.yaml (vector test) and azure/tests/run.sh (real container, fixtures).
 
-# Checkpoints of the file sources and the sinks' disk buffers. The compose override mounts a
-# named volume at /var/tmp; entrypoint.sh creates this directory.
+# Checkpoints of the file sources (which line of which file has been delivered). The compose
+# override mounts a named volume at /var/tmp; entrypoint.sh creates this directory. Rows in
+# flight are kept in memory only (see the sink templates for why).
 data_dir: /var/tmp/vector
 
 sources:
@@ -60,7 +64,10 @@ sources:
   # Raw IBC and launcher text. Read from the end on first start (the history of an append-only
   # log is not worth shipping); afterwards the checkpoint decides. Raw files may begin with
   # identical banner lines, so they are told apart by device and inode instead of a checksum.
-  # raw_out drops every line unless the operator opted in.
+  # raw_gate drops every line unless the operator opted in.
+  # A line longer than max_line_bytes is skipped and counted (component_errors_total,
+  # error_code reading_line_from_file). Vector would also LOG the start of such a line; that
+  # message is switched off by entrypoint.sh (VECTOR_LOG), for all three file sources.
   raw_file:
     type: file
     include:
@@ -78,10 +85,12 @@ sources:
     scrape_interval_secs: 60
 
 transforms:
-  # events.jsonl line -> IbGwEvents_CL row.
+  # events.jsonl line -> IbGwEvents_CL row (before redaction).
   # Input: file source event (.message = one line). Output: the row, or nothing when the line
   # is not a JSON object with an RFC 3339 `ts` (abort -> dropped and counted).
-  events_out:
+  # Props is the event's `data` object plus every top-level key the contract does not name
+  # (the gateway may add keys; they are kept, not dropped).
+  events_row:
     type: remap
     inputs:
       - events_file
@@ -97,53 +106,35 @@ transforms:
       if err != null {
         abort
       }
-
-      instance = get_env_var("IBGW_INSTANCE") ?? "default"
-      if instance == "" {
-        instance = "default"
+      # Azure stamps a row whose TimeGenerated is more than two days old with its ARRIVAL time,
+      # which would put replayed history at the wrong place. Lines older than 36 hours are
+      # therefore not back-filled: dropped, counted and reported in Vector's own log.
+      if to_unix_timestamp(now()) - to_unix_timestamp(ts) > 129600 {
+        log("dropped an event older than 36 hours (history is not back-filled)", level: "warn", rate_limit_secs: 300)
+        abort
       }
 
-      # Defence in depth: the gateway already emits account_tail only, but nothing that looks
-      # like a full account id may leave the host through a message or an extra key either.
-      msg = string(line.msg) ?? null
-      if msg != null {
-        msg = replace_with(string!(msg), r'\b(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
-          "[ACCT:…" + slice!(m.string, -3) + "]"
-        }
-      }
-      tail = string(line.account_tail) ?? null
-      if tail != null && strlen(string!(tail)) > 3 {
-        tail = slice!(string!(tail), -3)
-      }
-
-      # Unknown keys are kept, not dropped: the contract allows the gateway to add keys.
-      known = ["ts", "src", "level", "event", "msg", "boot_id", "seq", "phase", "code", "account_tail"]
+      known =["ts", "src", "level", "event", "msg", "boot_id", "seq", "data"]
       props = filter(line) -> |key, _value| {
         !includes(known, key)
       }
-      props = map_values(props, recursive: true) -> |value| {
-        if is_string(value) {
-          replace_with(string!(value), r'\b(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
-            "[ACCT:…" + slice!(m.string, -3) + "]"
-          }
-        } else {
-          value
-        }
+      data = line.data
+      if is_object(data) {
+        props = merge(props, object!(data))
+      } else if data != null {
+        props.data = data
       }
 
       # A field of the wrong type becomes null and compact() removes it: empty, never 0.
       row = {
-        "Instance": instance,
+        "Instance": get_env_var("IBGW_INSTANCE") ?? "default",
         "Host": get_env_var("HOST_LABEL") ?? "",
         "BootId": string(line.boot_id) ?? null,
         "Seq": int(line.seq) ?? null,
         "Src": string(line.src) ?? null,
         "Level": string(line.level) ?? null,
         "Event": string(line.event) ?? null,
-        "Phase": string(line.phase) ?? null,
-        "Code": int(line.code) ?? null,
-        "AccountTail": tail,
-        "Msg": msg
+        "Msg": string(line.msg) ?? null
       }
       row = compact(row, recursive: false)
       if length(props) > 0 {
@@ -151,6 +142,16 @@ transforms:
       }
       row.timestamp = ts
       . = row
+
+  # Event row -> redacted event row: no string of the row, at any depth of Props, may carry
+  # a full account id. The gateway does not put one there; this is defence in depth.
+  events_out:
+    type: remap
+    inputs:
+      - events_row
+    drop_on_error: true
+    drop_on_abort: true
+    file: /etc/vector/redact.vrl
 
   # metrics.jsonl line -> IbGwMetrics_CL row.
   # Input: file source event (.message = one line). Output: the row with one column per
@@ -171,10 +172,10 @@ transforms:
       if err != null {
         abort
       }
-
-      instance = get_env_var("IBGW_INSTANCE") ?? "default"
-      if instance == "" {
-        instance = "default"
+      # Not back-filled, for the same reason as events (see events_row).
+      if to_unix_timestamp(now()) - to_unix_timestamp(ts) > 129600 {
+        log("dropped a metrics sample older than 36 hours (history is not back-filled)", level: "warn", rate_limit_secs: 300)
+        abort
       }
 
       # Contract key -> table column. A key that is not listed here is ignored.
@@ -190,7 +191,9 @@ transforms:
         "open_fds": "OpenFds",
         "api_close_wait_sockets": "CloseWaitSockets",
         "disk_free_bytes_logs": "DiskFreeBytesLogs",
-        "disk_free_bytes_settings": "DiskFreeBytesSettings"
+        "disk_free_bytes_settings": "DiskFreeBytesSettings",
+        "disk_total_bytes_logs": "DiskTotalBytesLogs",
+        "disk_total_bytes_settings": "DiskTotalBytesSettings"
       }
       measured = filter(sample) -> |key, value| {
         column = get(columns, [key]) ?? null
@@ -208,7 +211,7 @@ transforms:
       }
 
       row = {
-        "Instance": instance,
+        "Instance": get_env_var("IBGW_INSTANCE") ?? "default",
         "Host": get_env_var("HOST_LABEL") ?? "",
         "BootId": string(sample.boot_id) ?? null,
         "Seq": int(sample.seq) ?? null,
@@ -219,12 +222,13 @@ transforms:
       row.timestamp = ts
       . = row
 
-  # Raw IBC/launcher line -> IBGatewayLogs_CL row, ONLY after the operator opted in.
+  # Raw IBC/launcher line -> gated line, ONLY after the operator opted in.
   # IBGW_RAW_MODE (set by entrypoint.sh): "redacted" = user name known, replace it by [USER];
   # "acknowledged" = SHIP_RAW_LOGS=yes, the user name is not known and stays in the line;
   # anything else, or "redacted" without a user name = drop every line (fail closed).
-  # Order matters: redact first, then cut, so a cut can never leave half an identifier.
-  raw_out:
+  # Output: {RawData, FilePath, timestamp}; the account ids are redacted by the next step and
+  # the line is cut after that, so a cut can never leave half an identifier.
+  raw_gate:
     type: remap
     inputs:
       - raw_file
@@ -245,17 +249,66 @@ transforms:
         if username == "" {
           abort
         }
-        # Exact match plus the two case variants IBC and the Gateway may echo.
-        line = replace(line, username, "[USER]")
-        line = replace(line, downcase(username), "[USER]")
-        line = replace(line, upcase(username), "[USER]")
-      }
-      line = replace_with(line, r'\b(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
-        "[ACCT:…" + slice!(m.string, -3) + "]"
+        # The user name is replaced in ANY case (IBC and the Gateway echo it as typed, in upper
+        # case and in lower case; a title-cased echo must not slip through either). VRL cannot
+        # build a regular expression at run time, so: the entrypoint guarantees a name of
+        # printable ASCII without spaces, hence every occurrence lies inside one run of
+        # printable ASCII; inside such a run lower-casing keeps every byte offset, so the run
+        # is split on the lower-cased name and rebuilt from the ORIGINAL text between matches.
+        name_lower = downcase(username)
+        name_bytes = length(name_lower)
+        line = replace_with(line, r'[!-~]+') -> |run| {
+          original = run.string
+          pieces = split(downcase(original), name_lower)
+          last = length(pieces) - 1
+          if last == 0 {
+            original
+          } else {
+            rebuilt = ""
+            offset = 0
+            for_each(pieces) -> |index, piece| {
+              piece_bytes = length(piece)
+              rebuilt = rebuilt + slice!(original, offset, offset + piece_bytes)
+              if index < last {
+                rebuilt = rebuilt + "[USER]"
+              }
+              offset = offset + piece_bytes + name_bytes
+            }
+            rebuilt
+          }
+        }
       }
       # Control characters (terminal escapes, NUL) would be JSON-escaped to six bytes each and
       # make the request-size bound of the sink meaningless; a tab is kept.
       line = replace(line, r'[\x00-\x08\x0B-\x1F\x7F]', " ")
+
+      . = compact({
+        "RawData": line,
+        "FilePath": string(.file) ?? null,
+        "timestamp": .timestamp
+      }, recursive: false)
+
+  # Gated raw line -> the same line without full account ids.
+  raw_redacted:
+    type: remap
+    inputs:
+      - raw_gate
+    drop_on_error: true
+    drop_on_abort: true
+    file: /etc/vector/redact.vrl
+
+  # Redacted raw line -> IBGatewayLogs_CL row: cut to the size limit, derive level and code.
+  raw_out:
+    type: remap
+    inputs:
+      - raw_redacted
+    drop_on_error: true
+    drop_on_abort: true
+    source: |
+      line, err = string(.RawData)
+      if err != null {
+        abort
+      }
 
       # At most 32,768 bytes. truncate() counts characters; a line that is still too long in
       # bytes is multi-byte text and is cut to 8,192 characters (at most 4 bytes each).
@@ -280,15 +333,11 @@ transforms:
         code = to_int(found.code) ?? null
       }
 
-      instance = get_env_var("IBGW_INSTANCE") ?? "default"
-      if instance == "" {
-        instance = "default"
-      }
       row = {
         "RawData": line,
-        "FilePath": string(.file) ?? null,
+        "FilePath": string(.FilePath) ?? null,
         "Computer": get_env_var("HOST_LABEL") ?? "",
-        "Instance": instance,
+        "Instance": get_env_var("IBGW_INSTANCE") ?? "default",
         "Level": level,
         "Code": code
       }
@@ -297,7 +346,10 @@ transforms:
       row.timestamp = .timestamp
       . = row
 
-  # Keep the handful of counters that answer "is it shipping, dropping or failing?".
+  # Keep the handful of counters that answer "is it shipping, dropping or failing?". The
+  # file counters stand in for the file source's log messages, which entrypoint.sh switches
+  # off: open_files says how many files each source watches, files_added_total and
+  # files_unwatched_total count what "found new file" and "stopped watching" used to say.
   vector_metrics_selected:
     type: filter
     inputs:
@@ -306,6 +358,9 @@ transforms:
       type: vrl
       source: |
         includes([
+          "open_files",
+          "files_added_total",
+          "files_unwatched_total",
           "component_received_events_total",
           "component_sent_events_total",
           "component_discarded_events_total",

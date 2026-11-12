@@ -5,7 +5,7 @@
 tests:
   - name: raw - redacted mode without a user name to redact ships nothing
     inputs:
-      - insert_at: raw_out
+      - insert_at: raw_gate
         type: log
         log_fields:
           file: /var/log/ibgateway/ibc/ibc.log
