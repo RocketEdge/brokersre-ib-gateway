@@ -93,7 +93,7 @@ reject() {
   [ "$status" -eq 0 ]
   [ "$(wc -l <"${LATCH}")" == "1" ]
   grep -Eq '^v1 files:[0-9a-f]{16} [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$' "${LATCH}"
-  ! grep -q -i -e canary -e hunter2 "${LATCH}"
+  ! grep -q -i -e canary -e hunter2 "${LATCH}" || false
   [ -z "$(find "${LOG_DIR}/state" -name 'login-rejected.tmp*')" ]
 }
 

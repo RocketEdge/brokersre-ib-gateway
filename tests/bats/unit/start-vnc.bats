@@ -47,7 +47,7 @@ vnc() {
   run vnc 'true'
   [ "$status" -eq 0 ]
   grep -q '^ARGV: ' "${ARGV_LOG}"
-  ! grep '^ARGV: ' "${ARGV_LOG}" | grep -q 'hunter2vnc'
+  ! grep '^ARGV: ' "${ARGV_LOG}" | grep -q 'hunter2vnc' || false
 }
 
 @test "x11vnc reads the password from a private file that it removes after reading" {

@@ -3,6 +3,8 @@
 # versions.json (the only place versions live), and CI fails when the two drift apart. The
 # README showed stable 10.50.1f for days after versions.json had moved to 10.50.1g.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../../../scripts/readme-versions.sh"
   WORK="$(mktemp -d)"
@@ -33,7 +35,7 @@ teardown() {
   [ "$status" -eq 0 ]
   grep -q -F -x '| stable | 10.50.1g | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1g` |' "${WORK}/README.md"
   grep -q -F -x '| latest | 10.51.1e | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.51`, `10.51.1e` |' "${WORK}/README.md"
-  ! grep -q 'stale' "${WORK}/README.md"
+  run ! grep -q 'stale' "${WORK}/README.md"
 }
 
 @test "text outside the markers is untouched" {

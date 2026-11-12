@@ -135,8 +135,8 @@ err_lacks() { ! grep -q -F -- "$1" "${WORK}/err"; }
   printf '%s\r\n' '# from Windows' 'TRADING_MODE=live' 'JAVA_HEAP_SIZE=1024' 'SSH_TUNNEL=yes' 'TIME_ZONE=Etc/UTC' >"${WORK}/in.env"
   convert
   [ "${RC}" -eq 0 ]
-  ! grep -q $'\r' "${WORK}/out"
-  ! grep -q $'\r' "${WORK}/err"
+  ! grep -q $'\r' "${WORK}/out" || false
+  ! grep -q $'\r' "${WORK}/err" || false
   out_has '# from Windows'
   out_has 'TRADING_MODE=live'
   out_has 'JAVA_HEAP_MB=1024'
@@ -260,7 +260,7 @@ err_lacks() { ! grep -q -F -- "$1" "${WORK}/err"; }
     'SSH_PASSPHRASE_FILE=/run/secrets/passphrase' 'SSH_SOMETHING_NEW=1'
   convert
   [ "${RC}" -eq 0 ]
-  ! grep -q '^[^#]*SSH_' "${WORK}/out"
+  ! grep -q '^[^#]*SSH_' "${WORK}/out" || false
   [ "$(grep -c 'dropped: the SSH tunnel was removed' "${WORK}/err")" -eq 10 ]
   err_has "line 1: SSH_TUNNEL dropped: the SSH tunnel was removed"
   err_has "private network"
@@ -271,7 +271,7 @@ err_lacks() { ! grep -q -F -- "$1" "${WORK}/err"; }
   write_env "TWS_USERID_PAPER=${CANARY_USER}" "TWS_PASSWORD_PAPER=${CANARY_PAPER}" 'TWS_PASSWORD_PAPER_FILE=/run/secrets/paper'
   convert
   [ "${RC}" -eq 0 ]
-  ! grep -q '^[^#]*_PAPER' "${WORK}/out"
+  ! grep -q '^[^#]*_PAPER' "${WORK}/out" || false
   err_has "line 1: TWS_USERID_PAPER dropped: dual mode was removed"
   err_has "line 2: TWS_PASSWORD_PAPER dropped: dual mode was removed"
   err_has "line 3: TWS_PASSWORD_PAPER_FILE dropped: dual mode was removed"

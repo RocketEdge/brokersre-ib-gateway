@@ -69,7 +69,7 @@ relay_stopped() { ! pgrep -f "${STUB_DIR}/socat" >/dev/null; }
   start_relay
   sleep 1
   [ "$(starts)" == "0" ]
-  ! relay_running
+  ! relay_running || false
 }
 
 @test "the relay opens when the phase becomes logged-in" {
@@ -294,7 +294,7 @@ stop_real_relay() {
   run timeout 10 socat -u TCP:127.0.0.1:15602 STDOUT
   stop_real_relay
   [ "$output" == "hello" ]
-  ! grep -q '"event":"relay_refused"' "${STUB_DIR}/events"
+  ! grep -q '"event":"relay_refused"' "${STUB_DIR}/events" || false
 }
 
 @test "real socat: a peer outside RELAY_ALLOW_CIDR gets nothing and is reported" {
