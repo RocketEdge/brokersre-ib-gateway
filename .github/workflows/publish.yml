@@ -1,7 +1,7 @@
 # Build, scan, sign, attest and tag both channels whenever an image input changes on main, or on
 # demand (also used for OS-patch rebuilds with a -rYYYYMMDD suffix, monthly and when rebuild.yml
 # finds a fixable finding). Each channel gets a git tag v<version>-<channel>[-rDATE] and a GitHub
-# release carrying digests.json, the SBOM and the VEX document for IBKR's bundled jars.
+# release carrying digests.json, one SBOM per platform and the VEX document for IBKR's bundled jars.
 #
 # Order, and why (a tag never points at bytes that were not scanned and signed):
 #   1. build linux/amd64 and linux/arm64 once and push the image index BY DIGEST ONLY: it has no
@@ -9,12 +9,22 @@
 #   2. Trivy scans both platforms of exactly that digest from the registry (it reads the layers;
 #      nothing is emulated). The gate is the same for both: fixable CRITICAL/HIGH in OS packages.
 #      Scanning the pushed digest, rather than a local build, is what makes the scanned bytes
-#      and the published bytes the same bytes;
-#   3. SBOM, cosign signature, SBOM and VEX attestations, build provenance, all on the digest;
+#      and the published bytes the same bytes. Each report is then checked for the platform it
+#      was asked to read;
+#   3. one SBOM per platform, attested to that platform's manifest; cosign signature, VEX
+#      attestation and build provenance on the index digest;
 #   4. only then scripts/promote-tags.sh points the tags at that digest and checks that every
 #      tag resolves to it.
 # A build that fails the gate leaves an untagged, unsigned manifest in the registry and nothing
 # else: no tag, no signature, no release (SECURITY.md).
+#
+# Rules this file keeps, checked by tests/bats/ci/workflows.bats:
+#   - no ${{ }} expression inside a `run:` script: values reach scripts through `env:`. The
+#     `channels` input is text from whoever dispatched the run, and this job can push to the
+#     registry and mint the signing identity;
+#   - every action is pinned by commit (the version is the trailing comment; Dependabot updates
+#     both), and every scanner step asks for one Trivy version;
+#   - one publish per channel at a time (job-level concurrency), never one per workflow.
 name: Publish
 
 on:
@@ -41,10 +51,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: publish
-  cancel-in-progress: false
-
 env:
   IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway
 
@@ -54,11 +60,23 @@ jobs:
     outputs:
       channels: ${{ steps.plan.outputs.channels }}
     steps:
-      - id: plan
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Channels to publish (scripts/publish-channels.sh)
+        id: plan
+        # The input travels in an environment variable and is handed to the script as one
+        # quoted argument; only `stable` and `latest` can come out, anything else stops here.
+        env:
+          RAW: ${{ inputs.channels || 'stable latest' }}
         run: |
-          raw="${{ inputs.channels || 'stable latest' }}"
-          json=$(printf '%s\n' $raw | jq -R . | jq -sc .)
-          echo "channels=$json" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          scripts/publish-channels.sh "$RAW" | tee -a "$GITHUB_OUTPUT"
+      - name: The two channels must not claim the same tag (scripts/check-bake-tags.sh)
+        # Each channel moves its own tags in its own job. A tag in both lists (both channels on
+        # one major.minor) would be moved twice; nothing is built until that is resolved.
+        run: |
+          set -euo pipefail
+          eval "$(scripts/bake-env.sh)"
+          docker buildx bake --print stable latest | scripts/check-bake-tags.sh
 
   publish:
     needs: plan
@@ -67,21 +85,31 @@ jobs:
       fail-fast: false
       matrix:
         channel: ${{ fromJson(needs.plan.outputs.channels) }}
+    # One publish per channel at a time. A group for the whole workflow would let a request for
+    # one channel (the daily rebuild) replace a pending run for both, and the other channel's
+    # change would never be published. Within a channel a newer pending run may replace an
+    # older pending one: it builds the same or a newer commit of main.
+    concurrency:
+      group: publish-${{ matrix.channel }}
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write
       id-token: write
       attestations: write
       security-events: write
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      REBUILD: ${{ inputs.rebuild }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: docker/setup-qemu-action@v4.4.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: linux/amd64,linux/arm64
-      - uses: docker/setup-buildx-action@v4.4.1
-      - uses: docker/login-action@v4.8.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -90,17 +118,16 @@ jobs:
         id: vars
         run: |
           eval "$(scripts/bake-env.sh)"
-          ch="${{ matrix.channel }}"
-          case "$ch" in
+          case "$CHANNEL" in
             stable) version="$STABLE_VERSION" ;;
             latest) version="$LATEST_VERSION" ;;
-            *) echo "unknown channel $ch"; exit 1 ;;
+            *) echo "::error::unknown channel '$CHANNEL'"; exit 1 ;;
           esac
           suffix=""
-          if [ "${{ inputs.rebuild }}" = "true" ]; then suffix="-r$(date -u +%Y%m%d)"; fi
+          if [ "$REBUILD" = "true" ]; then suffix="-r$(date -u +%Y%m%d)"; fi
           echo "REBUILD_SUFFIX=$suffix" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v${version}-${ch}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-${CHANNEL}${suffix}" >> "$GITHUB_OUTPUT"
           # GITHUB_ENV takes NAME=value literally (no shell quoting), so re-export the evaluated values.
           for v in UBUNTU_DIGEST IBC_VERSION IBC_RELEASE_TAG IBC_SHA256 STABLE_VERSION STABLE_MINOR STABLE_SHA256_X64 STABLE_SHA256_ARM LATEST_VERSION LATEST_MINOR LATEST_SHA256_X64 LATEST_SHA256_ARM SOURCE_REVISION CREATED; do
             echo "$v=${!v}" >> "$GITHUB_ENV"
@@ -112,7 +139,6 @@ jobs:
         # copy (IBKR re-uploaded the version) falls back to the URL instead of failing the build.
         env:
           GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
-          CHANNEL: ${{ matrix.channel }}
           VERSION: ${{ steps.vars.outputs.version }}
         run: |
           if [ "$CHANNEL" = stable ]; then x64="$STABLE_SHA256_X64"; arm="$STABLE_SHA256_ARM"; else x64="$LATEST_SHA256_X64"; arm="$LATEST_SHA256_ARM"; fi
@@ -121,77 +147,94 @@ jobs:
         id: push
         # `*.tags=<name without a tag>` plus push-by-digest pushes the image index under its
         # digest alone. The tags of docker-bake.hcl are applied later by promote-tags.sh.
+        # No build cache is read or written here: the point of a rebuild is a fresh
+        # `apt-get upgrade` layer, and a cached one would publish yesterday's packages.
         run: |
-          docker buildx bake ${{ matrix.channel }} \
-            --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' \
+          docker buildx bake "$CHANNEL" \
             --set "*.tags=$IMAGE" \
             --set '*.output=type=image,push-by-digest=true,name-canonical=true,push=true' \
             --metadata-file meta.json
-          digest=$(jq -r '.["${{ matrix.channel }}"]["containerimage.digest"]' meta.json)
+          digest=$(jq -r --arg channel "$CHANNEL" '.[$channel]["containerimage.digest"]' meta.json)
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest in meta.json (got '$digest')"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "pushed by digest, untagged: $IMAGE@$digest"
       # The two gates differ only in TRIVY_PLATFORM. TRIVY_IMAGE_SRC=remote makes Trivy read the
       # pushed digest from the registry instead of looking for a local image first. The arm64
-      # gate also runs when the amd64 gate failed, so one run shows both results.
+      # gate also runs when the amd64 gate failed, so one run shows both results. The report is
+      # JSON so that the next step can check which platform Trivy really read (and JSON, unlike
+      # SARIF, never makes the scanner action drop the severity filter).
       - name: Trivy gate, linux/amd64, before any tag moves (fixable CRITICAL/HIGH in OS packages)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/amd64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
-          format: sarif
-          output: trivy-amd64.sarif
+          format: json
+          output: trivy-os-amd64.json
           exit-code: "1"
           severity: CRITICAL,HIGH
-          # Without this the action drops the severity filter whenever the format is SARIF
-          # (its README: "SARIF format enforces output of all vulnerabilities regardless of
-          # configured severities"), and the gate would fail on a fixable LOW finding too.
-          limit-severities-for-sarif: "true"
           ignore-unfixed: true
           # OS packages are what this image can patch. IBKR's bundled jars are reported by the
           # steps below but not gated: see docs/limitations.md L08.
           vuln-type: os
       - name: Trivy gate, linux/arm64, before any tag moves (fixable CRITICAL/HIGH in OS packages)
         if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
-          format: sarif
-          output: trivy-arm64.sarif
+          format: json
+          output: trivy-os-arm64.json
           exit-code: "1"
           severity: CRITICAL,HIGH
-          limit-severities-for-sarif: "true"
           ignore-unfixed: true
           vuln-type: os
+      - name: Each gate read the platform it was asked to read (scripts/check-report-arch.sh)
+        # TRIVY_PLATFORM is an environment pass-through of the scanner action. If it ever stopped
+        # reaching Trivy, both gates would read linux/amd64 and both would pass. The report says
+        # which platform was read; a mismatch stops the publish here.
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        run: |
+          scripts/check-report-arch.sh trivy-os-amd64.json linux/amd64
+          scripts/check-report-arch.sh trivy-os-arm64.json linux/arm64
+      - name: SARIF of the two gate reports for code scanning (not a gate)
+        if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
+        continue-on-error: true
+        run: |
+          trivy convert --format sarif --output trivy-amd64.sarif trivy-os-amd64.json
+          trivy convert --format sarif --output trivy-arm64.sarif trivy-os-arm64.json
+      # From here to the VEX drift check nothing may fail the publish: these steps inform, and
+      # an OS-patch rebuild must not wait for a download of the Java database or for a document.
       - name: Trivy report of IBKR-bundled jars (not gated, docs/limitations.md L08)
         if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
-        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/amd64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           vuln-type: library
           format: table
           exit-code: "0"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-      # Unfiltered JSON of the jars of both platforms: the input of the VEX drift check. Neither
-      # these scans nor the check can fail the publish (an OS-patch rebuild must not wait for a
-      # document), so each step continues on error and the check only warns.
+      # Unfiltered JSON of the jars of both platforms: the input of the VEX drift check.
       - name: Trivy JSON of the bundled jars, linux/amd64 (input of the VEX drift check)
         if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
         continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/amd64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           vuln-type: library
           format: json
@@ -201,11 +244,12 @@ jobs:
       - name: Trivy JSON of the bundled jars, linux/arm64 (input of the VEX drift check)
         if: ${{ !cancelled() && steps.push.outputs.digest != '' }}
         continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           vuln-type: library
           format: json
@@ -219,57 +263,84 @@ jobs:
           scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json trivy-library-amd64.json trivy-library-arm64.json || rc=$?
           case "$rc" in
             0) ;;
-            1) echo "::warning title=VEX drift (${{ matrix.channel }})::security/vex/ibgateway-vendor-jars.openvex.json and Trivy's findings for the bundled jars differ; see the MISSING and STALE lines of this step. A statement that is STALE here may belong to the other channel." ;;
-            *) echo "::warning title=VEX drift check did not run (${{ matrix.channel }})::scripts/check-vex.sh exited $rc; see this step's log." ;;
+            1) echo "::warning title=VEX drift ($CHANNEL)::security/vex/ibgateway-vendor-jars.openvex.json and Trivy's findings for the bundled jars differ; see the MISSING and STALE lines of this step. A statement that is STALE here may belong to the other channel." ;;
+            *) echo "::warning title=VEX drift check did not run ($CHANNEL)::scripts/check-vex.sh exited $rc; see this step's log." ;;
           esac
       - name: Upload Trivy SARIF (linux/amd64)
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4.39.3
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-amd64.sarif
           category: trivy-os-${{ matrix.channel }}-amd64
       - name: Upload Trivy SARIF (linux/arm64)
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4.39.3
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-arm64.sarif
           category: trivy-os-${{ matrix.channel }}-arm64
-      - name: SBOM (CycloneDX)
-        uses: anchore/sbom-action@v0.24.3
+      - name: The index holds exactly one image per platform (scripts/platform-digests.sh)
+        id: platforms
+        # The two platform manifests are what the SBOMs describe and are attested to. An index
+        # that lost a platform stops here, before anything is signed.
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          scripts/platform-digests.sh "$IMAGE" "$DIGEST" | tee -a "$GITHUB_OUTPUT"
+      # One SBOM per platform: the two images hold different software (arm64 runs Ubuntu's
+      # OpenJDK, amd64 the JRE IBKR bundles), and an SBOM made from the index describes only
+      # the platform of the runner. Each is made from its own platform manifest.
+      - name: SBOM of the linux/amd64 image (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          image: ${{ env.IMAGE }}@${{ steps.platforms.outputs.amd64 }}
           format: cyclonedx-json
-          output-file: sbom-${{ matrix.channel }}.cdx.json
+          output-file: sbom-${{ matrix.channel }}-linux-amd64.cdx.json
+          artifact-name: sbom-${{ matrix.channel }}-linux-amd64.cdx.json
           upload-artifact: true
           upload-release-assets: false
-      - uses: sigstore/cosign-installer@v4.1.3
+      - name: SBOM of the linux/arm64 image (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.platforms.outputs.arm64 }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.channel }}-linux-arm64.cdx.json
+          artifact-name: sbom-${{ matrix.channel }}-linux-arm64.cdx.json
+          upload-artifact: true
+          upload-release-assets: false
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: Sign and attest (keyless)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-        # The VEX document (docs/limitations.md L08) is attested like the SBOM, so a scanner can
-        # find this project's statements about IBKR's bundled jars next to the image
-        # (`trivy image --vex oci`), signed by the same workflow identity.
+          AMD64: ${{ steps.platforms.outputs.amd64 }}
+          ARM64: ${{ steps.platforms.outputs.arm64 }}
+        # The signature and the VEX document belong to the index (what a consumer pins); each
+        # SBOM belongs to the platform manifest it describes. The VEX document
+        # (docs/limitations.md L08) is attested so that a scanner can find this project's
+        # statements about IBKR's bundled jars next to the image (`trivy image --vex oci`).
         run: |
           cosign sign --yes "$IMAGE@$DIGEST"
-          cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.channel }}.cdx.json" "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "sbom-$CHANNEL-linux-amd64.cdx.json" "$IMAGE@$AMD64"
+          cosign attest --yes --type cyclonedx --predicate "sbom-$CHANNEL-linux-arm64.cdx.json" "$IMAGE@$ARM64"
           cosign attest --yes --type openvex --predicate security/vex/ibgateway-vendor-jars.openvex.json "$IMAGE@$DIGEST"
       - name: Verify the signature and attestations just published (evidence in this log)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
+          AMD64: ${{ steps.platforms.outputs.amd64 }}
+          ARM64: ${{ steps.platforms.outputs.arm64 }}
           IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@${{ github.ref }}
+          ISSUER: https://token.actions.githubusercontent.com
         run: |
-          cosign verify "$IMAGE@$DIGEST" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "$IDENTITY" --output text
-          cosign verify-attestation --type cyclonedx "$IMAGE@$DIGEST" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity "$IDENTITY" > /dev/null && echo "cyclonedx attestation verified for $IMAGE@$DIGEST"
-          cosign verify-attestation --type openvex "$IMAGE@$DIGEST" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          cosign verify "$IMAGE@$DIGEST" --certificate-oidc-issuer "$ISSUER" --certificate-identity "$IDENTITY" --output text
+          cosign verify-attestation --type cyclonedx "$IMAGE@$AMD64" --certificate-oidc-issuer "$ISSUER" \
+            --certificate-identity "$IDENTITY" > /dev/null && echo "cyclonedx attestation verified for linux/amd64 $IMAGE@$AMD64"
+          cosign verify-attestation --type cyclonedx "$IMAGE@$ARM64" --certificate-oidc-issuer "$ISSUER" \
+            --certificate-identity "$IDENTITY" > /dev/null && echo "cyclonedx attestation verified for linux/arm64 $IMAGE@$ARM64"
+          cosign verify-attestation --type openvex "$IMAGE@$DIGEST" --certificate-oidc-issuer "$ISSUER" \
             --certificate-identity "$IDENTITY" > /dev/null && echo "openvex attestation verified for $IMAGE@$DIGEST"
-      - uses: actions/attest-build-provenance@v4.2.2
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -280,38 +351,53 @@ jobs:
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          mapfile -t tags < <(docker buildx bake --print "${{ matrix.channel }}" | jq -r '.target["${{ matrix.channel }}"].tags[]')
+          mapfile -t tags < <(docker buildx bake --print "$CHANNEL" | jq -r --arg channel "$CHANNEL" '.target[$channel].tags[]')
           scripts/promote-tags.sh "$IMAGE" "$DIGEST" "${tags[@]}"
       - name: digests.json
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          AMD64: ${{ steps.platforms.outputs.amd64 }}
+          ARM64: ${{ steps.platforms.outputs.arm64 }}
         run: |
-          jq -n --arg channel "${{ matrix.channel }}" --arg version "${{ steps.vars.outputs.version }}" \
-                --arg digest "${{ steps.push.outputs.digest }}" --arg image "$IMAGE" --arg tag "${{ steps.vars.outputs.tag }}" \
+          jq -n --arg channel "$CHANNEL" --arg version "$VERSION" --arg digest "$DIGEST" --arg image "$IMAGE" --arg tag "$TAG" \
+                --arg amd64 "$AMD64" --arg arm64 "$ARM64" \
                 --arg ibc "$IBC_RELEASE_TAG" --arg base "$UBUNTU_DIGEST" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                '{channel:$channel, gateway_version:$version, image:$image, digest:$digest, pinned_ref:($image+"@"+$digest), git_tag:$tag, ibc_release:$ibc, base_digest:$base, created:$created}' \
-                > "digests-${{ matrix.channel }}.json"
-          cat "digests-${{ matrix.channel }}.json"
-          echo "### ${{ matrix.channel }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "$IMAGE@${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+                '{channel:$channel, gateway_version:$version, image:$image, digest:$digest, pinned_ref:($image+"@"+$digest), platforms:{"linux/amd64":$amd64, "linux/arm64":$arm64}, git_tag:$tag, ibc_release:$ibc, base_digest:$base, created:$created}' \
+                > "digests-$CHANNEL.json"
+          cat "digests-$CHANNEL.json"
+          echo "### $CHANNEL" >> "$GITHUB_STEP_SUMMARY"
+          echo "$IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
       - name: Tag and release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.vars.outputs.tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          # Anchored to the main branch: `...publish.yml@` alone would also accept a signature
+          # made by this workflow file on any other branch.
+          IDENTITY_REGEXP: '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
         run: |
           # Built with printf so every line stays indented inside this YAML block scalar.
           notes="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
-            "IB Gateway ${{ steps.vars.outputs.version }} (IBKR ${{ matrix.channel }} channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
-            "Pin this exact build: \`$IMAGE@${{ steps.push.outputs.digest }}\`" \
-            "Verify: \`cosign verify $IMAGE@${{ steps.push.outputs.digest }} --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'\`" \
-            "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
+            "IB Gateway $VERSION (IBKR $CHANNEL channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
+            "Pin this exact build: \`$IMAGE@$DIGEST\`" \
+            "Verify: \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '$IDENTITY_REGEXP'\`" \
+            "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. Each platform has its own SBOM (\`sbom-$CHANNEL-linux-amd64.cdx.json\`, \`sbom-$CHANNEL-linux-arm64.cdx.json\`), attested to that platform's manifest; the two manifest digests are in \`digests-$CHANNEL.json\` under \`platforms\`. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
             "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers.")"
+          assets=("digests-$CHANNEL.json" "sbom-$CHANNEL-linux-amd64.cdx.json" "sbom-$CHANNEL-linux-arm64.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json)
           # The tag is created server-side by the release API: GITHUB_TOKEN may not `git push` a ref
           # whose commit contains workflow files ("refusing to allow a GitHub App to create or update workflow").
           if gh release view "$TAG" >/dev/null 2>&1; then
             # Republishing an already released version: replace the assets and the notes, so the
             # digest the notes show is the one the channel tag now points at. Editing a release
             # sends watchers no notification; only a new release does.
-            gh release upload "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            # A release made before SBOMs were per platform carries one `sbom-<channel>.cdx.json`
+            # that describes the previous image; it must not stay beside the new assets.
+            gh release delete-asset "$TAG" "sbom-$CHANNEL.cdx.json" --yes >/dev/null 2>&1 || true
             gh release edit "$TAG" --notes "$notes"
           else
-            gh release create "$TAG" "digests-${{ matrix.channel }}.json" "sbom-${{ matrix.channel }}.cdx.json" security/vex/ibgateway-vendor-jars.openvex.json --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
+            gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
           fi
