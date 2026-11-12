@@ -291,8 +291,6 @@ class Application:
 
         return worker
 
-    # --- public surface ---------------------------------------------------------------
-
     @property
     def http_listening(self) -> bool:
         """True while the HTTP server is bound."""
@@ -359,8 +357,6 @@ class Application:
             await asyncio.gather(*waiters, return_exceptions=True)
             await self._shutdown()
         log_event(_LOGGER, logging.INFO, "sidecar_stopped")
-
-    # --- task bodies ------------------------------------------------------------------
 
     async def _follow(self) -> None:
         """Read the gateway's files in a worker thread and apply them to the model."""
@@ -461,8 +457,6 @@ class Application:
                 )
         if self._transport is not None:
             await self._transport.aclose()
-
-    # --- endpoints (synchronous, in-memory only) ----------------------------------------
 
     def _livez(self) -> Response:
         """200 while the supervisor is running its tasks."""

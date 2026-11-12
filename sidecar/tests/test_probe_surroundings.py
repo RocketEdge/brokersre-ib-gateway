@@ -103,9 +103,6 @@ def test_reset_windows_follow_the_local_time_of_each_region(
     assert active_reset_window(instant) == expected
 
 
-# --- network namespace watch ----------------------------------------------------------------
-
-
 def test_listeners_other_than_the_sidecars_own_port_are_counted(tmp_path: Path) -> None:
     # 9810 is 0x2652 (the sidecar itself); 4004 is 0x0FA4 and 7462 is 0x1D26 (the gateway).
     tcp = HEADER4 + "".join(

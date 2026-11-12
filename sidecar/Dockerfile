@@ -15,7 +15,7 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8
 
 FROM ${UV_IMAGE} AS uv
 
-# ---- build: resolve nothing, install exactly uv.lock into /opt/sidecar ----------------------
+# Build stage: resolve nothing, install exactly uv.lock into /opt/sidecar.
 FROM ${PYTHON_IMAGE} AS build
 COPY --from=uv /uv /usr/local/bin/uv
 # --frozen: fail instead of re-resolving. Bytecode is compiled here because the runtime root
@@ -32,7 +32,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
-# ---- runtime ------------------------------------------------------------------------------
+# Runtime stage.
 FROM ${PYTHON_IMAGE} AS runtime
 
 ARG VERSION=0.1.0

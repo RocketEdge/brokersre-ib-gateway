@@ -82,9 +82,6 @@ def run_cli(*argv: str, env: dict[str, str] | None = None) -> tuple[int, str, st
     return code, out.getvalue(), err.getvalue()
 
 
-# --- check-config -------------------------------------------------------------------------
-
-
 def test_check_config_accepts_the_defaults_and_summarises_them() -> None:
     code, out, err = run_cli("check-config")
     assert code == 0
@@ -130,9 +127,6 @@ def test_check_config_reports_the_configured_channels(tmp_path: Path) -> None:
     assert "CANARY" not in out
 
 
-# --- print-schema -------------------------------------------------------------------------
-
-
 def test_print_schema_status_prints_the_committed_schema() -> None:
     code, out, _ = run_cli("print-schema", "status")
     assert code == 0
@@ -145,9 +139,6 @@ def test_an_unknown_command_or_schema_is_a_usage_error() -> None:
     code, out, _ = run_cli("--version")
     assert code == 0
     assert out.strip() == "brokersre-sidecar 0.1.0"
-
-
-# --- status and healthcheck ---------------------------------------------------------------
 
 
 def endpoint_env(server: LocalServer) -> dict[str, str]:
@@ -188,9 +179,6 @@ def test_healthcheck_follows_livez(server: LocalServer) -> None:
     assert run_cli("healthcheck", env=endpoint_env(server))[0] == 1
     assert run_cli("healthcheck", env={"SIDECAR_PORT": str(free_port())})[0] == 1
     assert run_cli("healthcheck", env={"SIDECAR_PORT": "not-a-port"})[0] == 1
-
-
-# --- notify test --------------------------------------------------------------------------
 
 
 def webhook_env(tmp_path: Path, server: LocalServer, **extra: str) -> dict[str, str]:
@@ -238,9 +226,6 @@ def test_notify_test_without_a_channel_is_a_configuration_error() -> None:
     assert "no notification channel is configured" in err
 
 
-# --- support-bundle -----------------------------------------------------------------------
-
-
 def test_support_bundle_writes_an_archive_and_prints_its_path(
     tmp_path: Path, server: LocalServer
 ) -> None:
@@ -268,9 +253,6 @@ def test_support_bundle_works_without_a_running_sidecar_and_refuses_a_missing_di
     code, _, err = run_cli("support-bundle", "--out", str(tmp_path / "absent"), env=env)
     assert code == 2
     assert "--out" in err
-
-
-# --- run ----------------------------------------------------------------------------------
 
 
 def test_run_with_an_invalid_configuration_logs_each_problem_as_json_and_exits_two() -> None:

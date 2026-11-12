@@ -200,8 +200,6 @@ def test_the_schema_rejects_unknown_fields_and_wrong_vocabulary() -> None:
         validate(document | {"generated_at": "yesterday"})
 
 
-# --- metrics ------------------------------------------------------------------------------
-
 SAMPLE_LINE = re.compile(
     r'^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>[a-zA-Z_][a-zA-Z0-9_]*="[^"\\\n]*"'
     r'(?:,[a-zA-Z_][a-zA-Z0-9_]*="[^"\\\n]*")*)\})? (?P<value>-?[0-9.]+(?:e[+-]?[0-9]+)?)$'

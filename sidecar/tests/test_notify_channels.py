@@ -77,9 +77,6 @@ class Recorder:
         return json.loads(self.requests[index].content)
 
 
-# --- message ------------------------------------------------------------------------------
-
-
 def test_a_message_carries_instance_class_severity_phase_both_times_and_the_instruction() -> None:
     built = message()
     assert built.instance == "desk-1"
@@ -150,9 +147,6 @@ def test_every_text_field_is_scrubbed_of_registered_secrets_and_account_ids() ->
         now=T0,
     )
     assert built.detail == "status down for ***567 via [REDACTED]"
-
-
-# --- HTTP channels ------------------------------------------------------------------------
 
 
 async def test_the_generic_webhook_posts_versioned_json_signed_with_hmac_sha256() -> None:
@@ -308,9 +302,6 @@ async def test_pagerduty_ignores_heartbeats_and_a_test_opens_and_closes_its_own_
     assert json.loads(recorder.requests[0].content)["payload"]["severity"] == "info"
 
 
-# --- transport ----------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("status", "category", "retryable"),
     [
@@ -358,9 +349,6 @@ async def test_transport_failures_are_retryable_categories_that_never_quote_the_
     assert caught.value.category == category
     assert caught.value.retryable is True
     assert "CANARY" not in str(caught.value)
-
-
-# --- SMTP ---------------------------------------------------------------------------------
 
 
 class FakeSmtp:

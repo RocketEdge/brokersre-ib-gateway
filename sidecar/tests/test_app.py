@@ -136,8 +136,9 @@ class Harness:
 @contextlib.asynccontextmanager
 async def running(tmp_path: Path, *, webhook: bool = True, **env: str) -> AsyncIterator[Harness]:
     harness = Harness(tmp_path, env, webhook=webhook)
-    await harness.start()
     try:
+        # Inside the try: a start that fails must not leave the application running.
+        await harness.start()
         yield harness
     finally:
         await harness.shutdown()

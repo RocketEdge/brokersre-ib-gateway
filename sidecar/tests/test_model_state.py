@@ -39,9 +39,6 @@ def metrics_line(at: object = T0, boot: str | None = BOOT_A, **values: object) -
     return json.dumps(body)
 
 
-# --- parsing ------------------------------------------------------------------------------
-
-
 def test_an_event_line_is_parsed_and_its_message_is_not_kept() -> None:
     event = parse_event(event_line("login_completed", extra_key={"nested": "CANARY"}))
     assert event is not None
@@ -114,9 +111,6 @@ def test_a_metrics_line_without_a_timestamp_is_rejected_and_bad_phase_is_dropped
     assert dict(sample.values) == {}
 
 
-# --- phase --------------------------------------------------------------------------------
-
-
 def reading(token: str, at: object) -> PhaseReading:
     return PhaseReading(token=token, known=token != "unknown", modified=at)  # type: ignore[arg-type]
 
@@ -157,9 +151,6 @@ def test_a_phase_time_in_the_future_is_clamped_and_a_vanished_file_is_unmeasured
     state.observe_phase(None)
     assert state.snapshot().phase is None
     assert state.snapshot().phase_since is None
-
-
-# --- events, boots, logins ----------------------------------------------------------------
 
 
 def feed_event(state: GatewayState, line: str) -> None:
@@ -215,9 +206,6 @@ def test_event_names_and_boot_ids_are_bounded() -> None:
     assert "made_up_599" in snapshot.last_events
     assert snapshot.boots_30m is not None
     assert snapshot.boots_30m <= 64
-
-
-# --- metrics, memory pressure, oom ----------------------------------------------------------
 
 
 def feed_metrics(state: GatewayState, line: str) -> None:

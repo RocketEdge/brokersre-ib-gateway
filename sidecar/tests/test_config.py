@@ -174,9 +174,6 @@ def test_settings_are_immutable() -> None:
     assert isinstance(settings, Settings)
 
 
-# --- secret files -----------------------------------------------------------------------
-
-
 def write(tmp_path: Path, name: str, data: bytes) -> Path:
     path = tmp_path / name
     path.write_bytes(data)

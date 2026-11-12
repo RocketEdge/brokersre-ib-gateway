@@ -197,9 +197,6 @@ def test_active_alerts_are_listed_with_severity_and_progress() -> None:
     assert listed["disk_low"].notified is True
 
 
-# --- heartbeat ----------------------------------------------------------------------------
-
-
 def test_the_heartbeat_is_sent_once_a_day_at_the_local_time_when_nothing_is_active() -> None:
     # T0 is 15:00 UTC = 23:00 in Singapore.
     engine = ladder(heartbeat_time=time(23, 30), time_zone="Asia/Singapore")
@@ -237,8 +234,6 @@ def test_the_heartbeat_is_off_by_default_and_when_disabled_and_survives_a_restar
     second.import_state(json.loads(json.dumps(first.export_state())))
     assert second.step({}, at(60)) == []
 
-
-# --- invariants ---------------------------------------------------------------------------
 
 STEP = st.tuples(
     st.floats(min_value=0.0, max_value=1200.0),

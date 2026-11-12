@@ -213,9 +213,6 @@ def test_every_complete_line_is_delivered_exactly_once_and_in_order(
         assert delivered == expected
 
 
-# --- phase file ---------------------------------------------------------------------------
-
-
 def test_the_phase_file_yields_its_token_and_modification_time(tmp_path: Path) -> None:
     path = tmp_path / "phase"
     path.write_bytes(b"logged-in\n")
