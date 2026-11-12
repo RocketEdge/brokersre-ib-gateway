@@ -1,0 +1,18 @@
+<Project>
+  <!-- Settings shared by every project of the sample: .NET 10 (LTS), C# 14, nullable reference
+       types, warnings as errors. GenerateDocumentationFile turns a missing XML doc comment
+       on a public member into a build error (CS1591), which is how "every class and method
+       is documented" is enforced. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>

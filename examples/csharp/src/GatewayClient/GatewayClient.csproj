@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The behaviour of the sample: back-off, the 1100/1101/1102 state machine and the client
+       loop, behind the small IBrokerSession interface. It references no IBKR assembly, so it
+       builds and is tested anywhere. -->
+  <PropertyGroup>
+    <RootNamespace>GatewayClient</RootNamespace>
+    <AssemblyName>GatewayClient</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

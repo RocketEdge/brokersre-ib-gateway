@@ -24,3 +24,25 @@
 Run `docker compose run --rm ib-gateway doctor` with your existing environment: it lists every
 variable from this table that the image ignores, with its replacement. `STRICT_ENV=yes` makes
 such a variable stop the start instead of warning.
+
+## Converting a `.env` file
+
+`scripts/migrate-from-gnzsnz.sh` applies the table above to a gnzsnz `.env` file (bash only; it
+runs in Git Bash on Windows too):
+
+```bash
+scripts/migrate-from-gnzsnz.sh old.env > new.env
+```
+
+- stdout is the converted file, line for line; stderr is the report: what was dropped, renamed
+  or is unknown, and the defaults that differ. The report never prints a value.
+- `TRADING_MODE=both` is refused (exit 1, nothing converted): split the file and use
+  `compose/docker-compose.multi.yml`.
+- `TWS_USERID` and `TWS_PASSWORD` lines are carried over unchanged. Move them into secret files
+  (README, Quick start) and delete the lines: the reference compose sets the `_FILE` variables,
+  and the container refuses to start when both forms are set.
+- With `compose/docker-compose.example.yml`, start with
+  `docker compose --env-file new.env -f compose/docker-compose.example.yml up -d`: that applies
+  `TRADING_MODE`, `READ_ONLY_API`, `AUTO_RESTART_TIME` and `TIME_ZONE`. Every other variable
+  reaches the container only when the service also lists the file under `env_file:`.
+- Exit status: 0 converted, 1 refused, 2 usage error.

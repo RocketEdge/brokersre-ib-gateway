@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The executable: the library plus an adapter onto IBKR's official C# client.
+
+       IBKR's client is NOT part of this repository and is not on NuGet as an official
+       package: you download the TWS API from IBKR, accept its licence, and point this project
+       at YOUR copy of CSharpAPI.dll:
+
+         dotnet build src/GatewayClient.IbApi -p:IbApiDll="C:\TWS API\source\CSharpClient\client\bin\Release\net8.0\CSharpAPI.dll"
+
+       or set the environment variable IBAPI_DLL to that path. README.md explains where the
+       file comes from. This project is not in GatewayClient.slnx, so `dotnet build` and
+       `dotnet test` in this directory work without the file. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>GatewayClient.IbApi</RootNamespace>
+    <AssemblyName>GatewayClient.IbApi</AssemblyName>
+    <IbApiDll Condition="'$(IbApiDll)' == ''">$(IBAPI_DLL)</IbApiDll>
+  </PropertyGroup>
+
+  <Target Name="RequireIbApiDll" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(IbApiDll)' == ''"
+           Text="IbApiDll is not set. This project needs your own copy of IBKR's CSharpAPI.dll (it is not redistributed here). Build with -p:IbApiDll=&lt;path to CSharpAPI.dll&gt; or set the IBAPI_DLL environment variable; see examples/csharp/README.md." />
+    <Error Condition="'$(IbApiDll)' != '' And !Exists('$(IbApiDll)')"
+           Text="IbApiDll points at a file that does not exist: $(IbApiDll)" />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="CSharpAPI">
+      <HintPath>$(IbApiDll)</HintPath>
+    </Reference>
+    <!-- A dependency of CSharpAPI.dll itself (Directory.Packages.props explains the version). -->
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <ProjectReference Include="..\GatewayClient\GatewayClient.csproj" />
+  </ItemGroup>
+</Project>

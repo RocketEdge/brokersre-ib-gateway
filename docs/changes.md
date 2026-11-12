@@ -5,6 +5,42 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Client kit: several gateways per host, readiness samples, gnzsnz converter
+
+- **What changed:** new files, plus their entries in the README, the migration guide, the
+  variable reference and CI. `compose/docker-compose.multi.yml` (live and paper side by side, a
+  commented block for further usernames) with `compose/README.md`;
+  `scripts/check-compose-usernames.sh`; `examples/` (`wait-for-gateway.sh`,
+  `compose-with-client.yml`, a Python and a C# read-only client, the readiness rules in plain
+  words); `scripts/migrate-from-gnzsnz.sh`; `tests/compose/run.sh` and bats tests for all of it.
+- **Result:** compose suite 57/57; CI-script suite 83/83; unit suite 411/411 inside the image;
+  Python sample 136 tests with ruff, black and mypy strict clean; C# logic 88 tests, 0
+  warnings. Measured with the real ib_async against a stand-in gateway: a read-only connection
+  sends start-API, a positions request and the server time, nothing else.
+- **What did NOT work / root cause:**
+  - *ib_async is not silent by itself.* `connectAsync(readonly=True, fetchFields=StartupFetchNONE)`
+    still requests positions; its error handler opens a new, never-cancelled account-summary
+    subscription on every 1102 (IBKR allows two); its `timeout` applies to each connect step
+    separately; its loggers print IBKR's message text verbatim. The sample detaches the handler,
+    puts one deadline around the connect and silences those loggers.
+  - *IBKR's C# client cannot be shipped.* It is IBKR's licensed software and not an official
+    NuGet package, so the adapter project takes the path of the user's own `CSharpAPI.dll` and
+    sits outside the solution; the logic is tested behind `IBrokerSession` without it. IBKR's
+    threads still call back after a disconnect, so each connection has its own wrapper object.
+  - *An `internal: true` network alone cuts the gateway off from IBKR*: the example gives the
+    gateway a second network for its way out.
+  - *A converted `.env` did not apply through `env_file:` alone*: the reference compose
+    interpolates four variables from the compose env file and passes nothing else on.
+  - *`docker compose down` without `--profile` stops nothing* for the multi-gateway file.
+  - *A bash-only watchdog for the handshake probe was dropped*: killing the subshell leaves a
+    blocked `dd` behind; `timeout` ends the whole group.
+  - *The converter's copy of the preflight's variable names went stale within a day*: three
+    branches added variables after it was written, and only its own test noticed. The copy
+    stays (the converter must run outside the image); the test is the guard.
+  - Not established: any of this against a real IB Gateway; the C# adapter against a TWS API
+    release other than 10.48.01.
+- **Next step:** run `wait-for-gateway.sh` and both clients against a logged-in paper gateway.
+
 ### 2026-11-12 — Optional allowlist for the relay (`RELAY_ALLOW_CIDR`)
 
 - **What changed:** `RELAY_ALLOW_CIDR` (one IPv4 network) makes the relay serve peers in that

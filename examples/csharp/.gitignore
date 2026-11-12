@@ -1,0 +1,7 @@
+# Build and test output of the C# sample. IBKR's CSharpAPI.dll is copied into bin/ when the
+# IbApi project is built and must never be committed: it is not ours to redistribute.
+bin/
+obj/
+TestResults/
+*.user
+CSharpAPI.dll

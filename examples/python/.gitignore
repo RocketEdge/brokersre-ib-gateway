@@ -1,0 +1,6 @@
+# Local environment and tool caches of the example; uv.lock IS committed.
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
