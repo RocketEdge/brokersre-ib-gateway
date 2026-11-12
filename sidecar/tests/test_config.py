@@ -25,6 +25,8 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     assert settings.trading_mode == "paper"
     assert settings.gateway_host == "ib-gateway"
     assert settings.ibkr_region == "none"
+    assert settings.deadman_url_file is None
+    assert settings.deadman_interval_s == 60.0
     assert settings.shared_namespace() is False
     assert settings.api_port == 4004  # the relay port: reachable from another container
     assert settings.time_zone == "Etc/UTC"
@@ -92,6 +94,9 @@ def test_explicit_values_are_parsed() -> None:
         ({"IBGW_INSTANCE": "DU1234567"}, "IBGW_INSTANCE"),
         ({"PROBE_ENABLED": "maybe"}, "PROBE_ENABLED"),
         ({"IBKR_REGION": "antarctica"}, "IBKR_REGION"),
+        ({"DEADMAN_PING_INTERVAL_S": "5"}, "DEADMAN_PING_INTERVAL_S"),
+        ({"DEADMAN_PING_INTERVAL_S": "soon"}, "DEADMAN_PING_INTERVAL_S"),
+        ({"DEADMAN_PING_URL": "https://hc.example.com/ping/x"}, "DEADMAN_PING_URL"),
         ({"GATEWAY_HOST": "has space"}, "GATEWAY_HOST"),
         ({"GATEWAY_HOST": "https://ib-gateway"}, "GATEWAY_HOST"),
         ({"EXIT_WHEN_ORPHANED": "maybe"}, "EXIT_WHEN_ORPHANED"),
@@ -353,3 +358,27 @@ def test_exit_when_orphaned_means_nothing_with_an_own_network_namespace() -> Non
 @pytest.mark.parametrize("region", ["america", "europe", "asia", "none", "Europe"])
 def test_the_ibkr_region_is_one_of_four_words(region: str) -> None:
     assert load_settings({"IBKR_REGION": region}).ibkr_region == region.lower()
+
+
+def test_the_dead_man_url_is_a_secret_file_and_https_only(tmp_path: Path) -> None:
+    env = channel_env(tmp_path, DEADMAN_PING_URL_FILE="https://hc.example.com/ping/CANARY_ID\n")
+    settings = load_settings(env | {"DEADMAN_PING_INTERVAL_S": "120"})
+    assert settings.deadman_interval_s == 120.0
+    assert settings.configured_channels() == ()  # it is not a notification channel
+    registry = SecretRegistry()
+    secrets = load_secrets(settings, registry)
+    assert secrets.deadman_url is not None
+    assert secrets.deadman_url.reveal() == "https://hc.example.com/ping/CANARY_ID"
+    assert "CANARY" not in repr(secrets)
+    assert "CANARY" not in repr(settings)
+    assert "CANARY" not in registry.scrub("GET https://hc.example.com/ping/CANARY_ID failed")
+
+    plain = channel_env(tmp_path, DEADMAN_PING_URL_FILE="http://hc.internal/ping/CANARY_ID")
+    with pytest.raises(ConfigError) as caught:
+        load_secrets(load_settings(plain), SecretRegistry())
+    text = "\n".join(caught.value.problems)
+    assert "DEADMAN_PING_URL_FILE" in text
+    assert "https" in text
+    assert "CANARY" not in text
+    allowed = load_secrets(load_settings(plain | {"NOTIFY_ALLOW_HTTP": "yes"}), SecretRegistry())
+    assert allowed.deadman_url is not None

@@ -155,6 +155,8 @@ def _settings(settings: Settings) -> str:
                 "heartbeat_time": heartbeat.strftime("%H:%M") if heartbeat else None,
                 "runbook_base_set": settings.runbook_base is not None,
                 "allow_http": settings.allow_http,
+                "deadman_ping_configured": settings.deadman_url_file is not None,
+                "deadman_interval_s": settings.deadman_interval_s,
                 "configured_channels": list(settings.configured_channels()),
                 "primary_channels": list(settings.primary_channels()),
                 "escalation_channels": list(settings.escalation_channels()),

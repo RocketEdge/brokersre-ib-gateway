@@ -200,6 +200,12 @@ def _check_config(env: Mapping[str, str], out: TextIO, err: TextIO) -> int:
         out.write(f"state directory: {settings.state_dir} ({note})\n")
     else:
         out.write("notifier: disabled (no channel configured)\n")
+    if settings.deadman_url_file is not None:
+        out.write(f"dead-man ping: every {settings.deadman_interval_s:g} s\n")
+    else:
+        out.write(
+            "dead-man ping: not configured " "(nobody is told when this sidecar or its host dies)\n"
+        )
     present = "present" if settings.log_dir.is_dir() else "missing"
     out.write(f"gateway log volume: {settings.log_dir} ({present})\n")
     return EXIT_OK

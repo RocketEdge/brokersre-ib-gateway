@@ -16,6 +16,7 @@ from brokersre_sidecar.model import STATUS_SCHEMA, build_status, status_json_sch
 from brokersre_sidecar.model.health import (
     ActiveAlertSnapshot,
     ChannelSnapshot,
+    DeadmanSnapshot,
     FarmState,
     NotifierSnapshot,
     TaskSnapshot,
@@ -200,6 +201,15 @@ def test_unmeasured_values_are_null_never_zero_or_ok() -> None:
         "state_persistence": "disabled",
         "state_persistence_reason": None,
     }
+    assert document["deadman"] == {
+        "enabled": False,
+        "interval_s": None,
+        "withheld": None,
+        "last_ping_at": None,
+        "last_error": None,
+        "pings_total": 0,
+        "failures_total": 0,
+    }
 
 
 @pytest.mark.parametrize("status_value", list(ProbeStatus))
@@ -362,3 +372,41 @@ def test_an_unknown_phase_token_is_exported_as_unknown() -> None:
 
 def test_the_content_type_is_the_prometheus_text_format() -> None:
     assert CONTENT_TYPE == "text/plain; version=0.0.4; charset=utf-8"
+
+
+DEADMAN = DeadmanSnapshot(
+    enabled=True,
+    interval_s=60.0,
+    withheld="alert active: twofa_pending",
+    last_ping_at=T0,
+    last_error="http_503",
+    pings_total=41,
+    failures_total=2,
+)
+
+
+def test_the_dead_man_ping_is_reported_in_status_and_metrics() -> None:
+    document = status(deadman=DEADMAN)
+    validate(document)
+    assert document["deadman"] == {
+        "enabled": True,
+        "interval_s": 60.0,
+        "withheld": "alert active: twofa_pending",
+        "last_ping_at": "2026-11-12T15:00:00.000Z",
+        "last_error": "http_503",
+        "pings_total": 41,
+        "failures_total": 2,
+    }
+    samples = metrics(deadman=DEADMAN)
+    assert samples["ibgw_deadman_pings_total"] == 41
+    assert samples["ibgw_deadman_ping_failures_total"] == 2
+    assert samples["ibgw_deadman_withheld"] == 1
+    assert samples["ibgw_deadman_last_ping_timestamp_seconds"] == T0.timestamp()
+
+
+def test_without_a_dead_man_ping_no_dead_man_metric_is_exported() -> None:
+    assert not [name for name in metrics() if name.startswith("ibgw_deadman")]
+    never = DeadmanSnapshot(True, 60.0, None, None, None, 0, 0)
+    samples = metrics(deadman=never)
+    assert samples["ibgw_deadman_withheld"] == 0
+    assert "ibgw_deadman_last_ping_timestamp_seconds" not in samples  # never is not zero

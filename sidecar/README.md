@@ -146,6 +146,8 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `PROBE_INTERVAL_S` | `60` | 5 to 3600 | Seconds between time round trips while healthy. |
 | `PROBE_TIMEOUT_S` | `10` | 1 to 60 | Bound of the handshake and of each round trip. |
 | `EXIT_WHEN_ORPHANED` | `yes` | `yes`, `no` | Shared-namespace mode only (ignored otherwise): exit with code 75 when the gateway container restarted and left the sidecar in its old network namespace, so the restart policy rejoins it. |
+| `DEADMAN_PING_URL_FILE` | unset | path | File holding the URL of a [dead-man check](#dead-man-ping-recommended). `https://` only, unless `NOTIFY_ALLOW_HTTP=yes`. The plain variable `DEADMAN_PING_URL` is refused. |
+| `DEADMAN_PING_INTERVAL_S` | `60` | 10 to 86400 | Seconds between dead-man pings. |
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
@@ -279,6 +281,10 @@ Metric names are frozen. A value that was not measured is **omitted**, never exp
 | `ibgw_notify_sent_total{channel}` | counter | Notifications delivered. |
 | `ibgw_notify_dropped_total{channel}` | counter | Notifications discarded because the channel's outbox was full. |
 | `ibgw_notify_undelivered_alerts` | gauge | Active alerts that no channel has accepted yet. They are sent again with a capped back-off. |
+| `ibgw_deadman_pings_total` | counter | Dead-man pings the monitoring service accepted. Exported only when a ping URL is configured, like the next three. |
+| `ibgw_deadman_ping_failures_total` | counter | Dead-man ping attempts that failed. |
+| `ibgw_deadman_withheld` | gauge | 1 while the ping is withheld; the reason is in `/status` (`deadman.withheld`). |
+| `ibgw_deadman_last_ping_timestamp_seconds` | gauge | Unix time of the last accepted ping; absent before the first one. |
 | `ibgw_sidecar_task_restarts_total{task}` | counter | Restarts of a sidecar task after a crash. |
 | `ibgw_sidecar_task_progress_age_seconds{task}` | gauge | Seconds since a periodic sidecar task (`follow`, `probe`, `notify`, `deadman`) completed a step of its loop. |
 | `ibgw_sidecar_task_stalled{task}` | gauge | 1 while such a task has made no progress for longer than its limit (about a minute plus the longest wait a step may take). `/livez` then answers 503. |

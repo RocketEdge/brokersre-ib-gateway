@@ -7,6 +7,7 @@ from brokersre_sidecar.notify.channels import (
     HttpTransport,
     build_channels,
 )
+from brokersre_sidecar.notify.deadman import DeadmanPinger, alerting_classes
 from brokersre_sidecar.notify.dispatcher import Dispatcher
 from brokersre_sidecar.notify.ladder import STATE_SCHEMA, LadderConfig, LadderEngine, Outbound
 from brokersre_sidecar.notify.message import ALERT_SCHEMA, Message, MessageFactory
@@ -28,6 +29,7 @@ __all__ = [
     "AlertSpec",
     "Channel",
     "Condition",
+    "DeadmanPinger",
     "DeliveryError",
     "Dispatcher",
     "Evaluation",
@@ -41,6 +43,7 @@ __all__ = [
     "Outbound",
     "RuleConfig",
     "RuleEngine",
+    "alerting_classes",
     "build_channels",
     "skew_exceeds",
 ]

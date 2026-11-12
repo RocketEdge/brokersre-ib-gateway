@@ -91,6 +91,9 @@ def test_check_config_accepts_the_defaults_and_summarises_them() -> None:
     assert "probe: enabled, ib-gateway:4004, client id 999" in out
     assert "reset windows: none (IBKR_REGION=none; API alerts are never held back)\n" in out
     assert "notifier: disabled (no channel configured)" in out
+    assert (
+        "dead-man ping: not configured (nobody is told when this sidecar or its host dies)\n" in out
+    )
 
 
 def test_check_config_lists_every_problem_without_echoing_values(tmp_path: Path) -> None:
@@ -350,3 +353,15 @@ def test_check_config_names_the_region_whose_reset_windows_apply() -> None:
     code, out, _ = run_cli("check-config", env={"IBKR_REGION": "asia"})
     assert code == 0
     assert "reset windows: asia (IBKR_REGION)\n" in out
+
+
+def test_check_config_reports_the_dead_man_ping_without_its_url(tmp_path: Path) -> None:
+    secret = tmp_path / "deadman-url"
+    secret.write_text("https://hc.example.com/ping/CANARY_ID", encoding="utf-8")
+    code, out, err = run_cli(
+        "check-config",
+        env={"DEADMAN_PING_URL_FILE": str(secret), "DEADMAN_PING_INTERVAL_S": "30"},
+    )
+    assert code == 0
+    assert "dead-man ping: every 30 s\n" in out
+    assert "CANARY" not in out + err

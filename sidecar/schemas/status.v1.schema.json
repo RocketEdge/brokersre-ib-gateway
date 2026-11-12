@@ -144,6 +144,86 @@
       "title": "Channel",
       "type": "object"
     },
+    "Deadman": {
+      "additionalProperties": false,
+      "description": "State of the optional dead-man ping.",
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "failures_total": {
+          "minimum": 0,
+          "title": "Failures Total",
+          "type": "integer"
+        },
+        "interval_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Interval S"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failure category of the last attempt",
+          "title": "Last Error"
+        },
+        "last_ping_at": {
+          "anyOf": [
+            {
+              "description": "UTC, ISO-8601 with milliseconds and a Z suffix",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last ping the service accepted",
+          "title": "Last Ping At"
+        },
+        "pings_total": {
+          "minimum": 0,
+          "title": "Pings Total",
+          "type": "integer"
+        },
+        "withheld": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why no ping is sent right now; null while pinging and when disabled",
+          "title": "Withheld"
+        }
+      },
+      "required": [
+        "enabled",
+        "interval_s",
+        "withheld",
+        "last_ping_at",
+        "last_error",
+        "pings_total",
+        "failures_total"
+      ],
+      "title": "Deadman",
+      "type": "object"
+    },
     "Farm": {
       "additionalProperties": false,
       "description": "One IBKR data farm reported on the probe's API connection.",
@@ -528,6 +608,9 @@
       "title": "Connectivity",
       "type": "string"
     },
+    "deadman": {
+      "$ref": "#/$defs/Deadman"
+    },
     "farms": {
       "items": {
         "$ref": "#/$defs/Farm"
@@ -702,6 +785,7 @@
     "gateway_feed",
     "versions",
     "notifier",
+    "deadman",
     "tasks"
   ],
   "title": "brokersre-ib-gateway-sidecar status document (brokersre.sidecar.status.v1)",

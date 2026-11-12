@@ -66,6 +66,7 @@ _REFUSED_PLAIN = (
     "NOTIFY_NTFY_TOKEN",
     "NOTIFY_PAGERDUTY_KEY",
     "NOTIFY_SMTP_URL",
+    "DEADMAN_PING_URL",
 )
 
 _INSTANCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
@@ -122,6 +123,9 @@ class Settings(BaseModel):
     bind: str
     port: int
     exit_when_orphaned: bool
+
+    deadman_url_file: Path | None
+    deadman_interval_s: float
 
     escalate_after_s: float
     escalate_again_after_s: float
@@ -201,6 +205,7 @@ class ChannelSecrets:
     ntfy_token: Secret | None = None
     pagerduty_key: Secret | None = None
     smtp: SmtpTarget | None = None
+    deadman_url: Secret | None = None
 
 
 class _Reader:
@@ -487,6 +492,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         "NOTIFY_DISABLE_CLASSES", frozenset(item.value for item in AlertClass), "alert classes"
     )
 
+    deadman_file = reader.raw("DEADMAN_PING_URL_FILE")
+
     settings = Settings(
         instance=instance,
         trading_mode=trading_mode,
@@ -518,6 +525,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         # Only a sidecar inside the gateway's network namespace can be orphaned by a
         # restart of the gateway container; with its own namespace the flag means nothing.
         exit_when_orphaned=reader.flag("EXIT_WHEN_ORPHANED", True) and shared,
+        deadman_url_file=Path(deadman_file) if deadman_file else None,
+        deadman_interval_s=reader.seconds("DEADMAN_PING_INTERVAL_S", 60.0, 10.0, 86_400.0),
         escalate_after_s=escalate_after_s,
         escalate_again_after_s=escalate_again_after_s,
         heartbeat_time=heartbeat_time,
@@ -604,6 +613,7 @@ def load_secrets(settings: Settings, registry: SecretRegistry) -> ChannelSecrets
         ntfy_token=read(settings.ntfy_token_file, "NOTIFY_NTFY_TOKEN_FILE"),
         pagerduty_key=read(settings.pagerduty_key_file, "NOTIFY_PAGERDUTY_KEY_FILE"),
         smtp=smtp,
+        deadman_url=read(settings.deadman_url_file, "DEADMAN_PING_URL_FILE", http_url),
     )
     if problems:
         raise ConfigError(problems)

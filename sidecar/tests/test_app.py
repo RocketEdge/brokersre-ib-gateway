@@ -23,6 +23,7 @@ from testkit import T0, FakeClock, free_port, http_get, iso, replace_file, until
 
 SCHEMA_FILE = Path(__file__).resolve().parents[1] / "schemas" / "status.v1.schema.json"
 WEBHOOK_URL = "https://hooks.example.com/CANARY_WEBHOOK_PATH"
+DEADMAN_URL = "https://hc.example.com/ping/CANARY_DEADMAN_ID"
 
 
 class Volume:
@@ -74,11 +75,13 @@ class Harness:
         webhook: bool,
         proc_root: Path | None = None,
         feed_read_timeout_s: float = 10.0,
+        deadman: bool = False,
     ) -> None:
         self.volume = Volume(tmp_path / "volume")
         self.clock = FakeClock()
         self.ib = FakeIb(self.clock)
         self.received: list[dict[str, Any]] = []
+        self.pings: list[httpx.Request] = []
         self.webhook_status = 200
         self.port = free_port()
         full_env = {
@@ -93,6 +96,10 @@ class Harness:
             secret = tmp_path / "webhook-url"
             secret.write_text(WEBHOOK_URL, encoding="utf-8")
             full_env["NOTIFY_WEBHOOK_URL_FILE"] = str(secret)
+        if deadman:
+            ping_url = tmp_path / "deadman-url"
+            ping_url.write_text(DEADMAN_URL, encoding="utf-8")
+            full_env["DEADMAN_PING_URL_FILE"] = str(ping_url)
         full_env |= env
         settings = load_settings(full_env)
         registry = SecretRegistry()
@@ -111,6 +118,9 @@ class Harness:
         self.task: asyncio.Task[None] | None = None
 
     def _receive(self, request: httpx.Request) -> httpx.Response:
+        if str(request.url) == DEADMAN_URL:
+            self.pings.append(request)
+            return httpx.Response(200)
         assert str(request.url) == WEBHOOK_URL
         self.received.append(json.loads(request.content))
         return httpx.Response(self.webhook_status)
@@ -553,3 +563,92 @@ async def test_a_task_without_progress_fails_livez_and_is_visible(tmp_path: Path
     finally:
         release.set()
         await harness.shutdown()
+
+
+async def test_the_dead_man_ping_runs_while_the_gateway_is_seen_and_nothing_needs_a_person(
+    tmp_path: Path,
+) -> None:
+    # No notification channel at all: the ping works on its own.
+    harness = Harness(tmp_path, {}, webhook=False, deadman=True)
+    try:
+        await harness.start()
+        assert [task.name for task in harness.app.task_snapshot()] == [
+            "follow",
+            "probe",
+            "http",
+            "deadman",
+        ]
+        # No phase file yet: the sidecar is alive but cannot vouch for the gateway.
+        await until(lambda: harness.app.deadman_snapshot().withheld is not None)
+        assert harness.app.deadman_snapshot().withheld == (
+            "the gateway's log volume or phase cannot be read"
+        )
+        assert harness.pings == []
+
+        harness.volume.phase("login")
+        await until(lambda: len(harness.pings) >= 1)
+        (ping,) = harness.pings
+        assert (ping.method, str(ping.url), ping.content) == ("GET", DEADMAN_URL, b"")
+        document = await harness.status()
+        assert document["deadman"]["enabled"] is True
+        assert document["deadman"]["withheld"] is None
+        assert document["deadman"]["pings_total"] == 1
+        await let_time_pass(harness, 61)
+        await until(lambda: len(harness.pings) >= 2)
+
+        # A second factor is pending: a person is being asked to act, so the pings stop.
+        harness.volume.phase("2fa-pending")
+        await until(lambda: harness.app.deadman_snapshot().withheld is not None)
+        assert harness.app.deadman_snapshot().withheld == "alert active: twofa_pending"
+        sent = len(harness.pings)
+        await let_time_pass(harness, 200)
+        assert len(harness.pings) == sent
+
+        harness.volume.phase("logged-in")
+        await until(lambda: len(harness.pings) > sent)
+        text = (await harness.get("/metrics"))[2].decode()
+        assert "ibgw_deadman_withheld 0" in text
+        assert "CANARY" not in text + json.dumps(await harness.status())
+    finally:
+        await harness.shutdown()
+
+
+async def test_the_dead_man_ping_stops_when_a_task_of_the_sidecar_is_stalled(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, {}, webhook=False, deadman=True, feed_read_timeout_s=0.05)
+    release = threading.Event()
+    real_read = harness.app.feed.read
+    stuck = False
+
+    def read() -> Any:
+        if stuck:
+            release.wait(20)
+        return real_read()
+
+    harness.app.feed.read = read  # type: ignore[method-assign]
+    try:
+        await harness.start()
+        harness.volume.phase("login")
+        await until(lambda: len(harness.pings) >= 1)
+        stuck = True
+        await until(lambda: harness.app.deadman_snapshot().withheld is not None)
+        await let_time_pass(harness, 90)
+        await until(
+            lambda: (harness.app.deadman_snapshot().withheld or "").startswith(
+                "no progress: follow"
+            )
+        )
+    finally:
+        release.set()
+        await harness.shutdown()
+
+
+async def test_without_a_dead_man_url_nothing_is_pinged(tmp_path: Path) -> None:
+    async with running(tmp_path, webhook=False) as h:
+        h.volume.phase("login")
+        await until(lambda: h.app.gateway_snapshot().phase == "login")
+        document = await h.status()
+        assert document["deadman"]["enabled"] is False
+        assert "deadman" not in [task["name"] for task in document["tasks"]]
+        assert h.pings == []

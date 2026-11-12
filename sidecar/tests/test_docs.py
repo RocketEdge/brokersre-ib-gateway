@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from brokersre_sidecar.metrics import render_metrics
-from brokersre_sidecar.model.health import ChannelSnapshot, NotifierSnapshot, TaskSnapshot
+from brokersre_sidecar.model.health import (
+    ChannelSnapshot,
+    DeadmanSnapshot,
+    NotifierSnapshot,
+    TaskSnapshot,
+)
 from brokersre_sidecar.vocab import AlertClass, ChannelName, ProbeStatus
 from testkit import T0, gateway_snapshot, metrics_sample, probe_snapshot
 
@@ -34,6 +39,7 @@ REFUSED = {
     "NOTIFY_NTFY_TOKEN",
     "NOTIFY_PAGERDUTY_KEY",
     "NOTIFY_SMTP_URL",
+    "DEADMAN_PING_URL",
 }
 
 
@@ -94,6 +100,7 @@ def test_every_exported_metric_is_listed_in_the_readme() -> None:
         probe=probe_snapshot(),
         notifier=notifier,
         tasks=(TaskSnapshot("probe", "running", 0, None, None, progress_age_s=1.0),),
+        deadman=DeadmanSnapshot(True, 60.0, None, T0, None, 1, 0),
     )
     exported = set(re.findall(r"^# TYPE (\S+) ", text, flags=re.MULTILINE))
     assert len(exported) >= 19

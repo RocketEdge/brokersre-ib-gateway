@@ -12,7 +12,13 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 from brokersre_sidecar import __version__
-from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot, TaskSnapshot
+from brokersre_sidecar.model.health import (
+    DEADMAN_DISABLED,
+    DeadmanSnapshot,
+    NotifierSnapshot,
+    ProbeSnapshot,
+    TaskSnapshot,
+)
 from brokersre_sidecar.model.state import GatewaySnapshot
 from brokersre_sidecar.vocab import ProbeStatus
 
@@ -105,6 +111,7 @@ def render_metrics(
     probe: ProbeSnapshot,
     notifier: NotifierSnapshot,
     tasks: Sequence[TaskSnapshot],
+    deadman: DeadmanSnapshot = DEADMAN_DISABLED,
 ) -> str:
     """Render the ``/metrics`` body.
 
@@ -113,6 +120,7 @@ def render_metrics(
         probe: Probe snapshot (readiness, round-trip time, clock offset, CLOSE_WAIT count).
         notifier: Notifier snapshot (per-channel counters).
         tasks: Supervision records (restart counters).
+        deadman: State of the dead-man ping; nothing is exported for a disabled one.
 
     Returns:
         Prometheus text format 0.0.4. Label values come from closed vocabularies only, so
@@ -212,6 +220,32 @@ def render_metrics(
             "Active alerts that no channel has accepted yet (they are sent again).",
             sum(1 for alert in notifier.active_alerts if not alert.notified),
         )
+    if deadman.enabled:
+        out.add(
+            "ibgw_deadman_pings_total",
+            "counter",
+            "Dead-man pings the monitoring service accepted.",
+            deadman.pings_total,
+        )
+        out.add(
+            "ibgw_deadman_ping_failures_total",
+            "counter",
+            "Dead-man ping attempts that failed.",
+            deadman.failures_total,
+        )
+        out.add(
+            "ibgw_deadman_withheld",
+            "gauge",
+            "1 while the dead-man ping is withheld (see /status for the reason).",
+            1 if deadman.withheld is not None else 0,
+        )
+        if deadman.last_ping_at is not None:
+            out.add(
+                "ibgw_deadman_last_ping_timestamp_seconds",
+                "gauge",
+                "Unix time of the last accepted dead-man ping.",
+                deadman.last_ping_at.timestamp(),
+            )
     for task in tasks:
         out.add(
             "ibgw_sidecar_task_restarts_total",

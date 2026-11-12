@@ -22,7 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from brokersre_sidecar import __version__
 from brokersre_sidecar.clock import format_utc
-from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot, TaskSnapshot
+from brokersre_sidecar.model.health import (
+    DEADMAN_DISABLED,
+    DeadmanSnapshot,
+    NotifierSnapshot,
+    ProbeSnapshot,
+    TaskSnapshot,
+)
 from brokersre_sidecar.model.state import GatewaySnapshot
 
 STATUS_SCHEMA = "brokersre.sidecar.status.v1"
@@ -134,6 +140,20 @@ class Notifier(_Model):
     state_persistence_reason: str | None
 
 
+class Deadman(_Model):
+    """State of the optional dead-man ping."""
+
+    enabled: bool
+    interval_s: float | None
+    withheld: str | None = Field(
+        description="Why no ping is sent right now; null while pinging and when disabled"
+    )
+    last_ping_at: Timestamp | None = Field(description="Last ping the service accepted")
+    last_error: str | None = Field(description="Failure category of the last attempt")
+    pings_total: int = Field(ge=0)
+    failures_total: int = Field(ge=0)
+
+
 class Task(_Model):
     """Supervision record of one background task."""
 
@@ -181,6 +201,7 @@ class StatusDocument(_Model):
     gateway_feed: GatewayFeed
     versions: Versions
     notifier: Notifier
+    deadman: Deadman
     tasks: list[Task]
 
 
@@ -212,6 +233,7 @@ def build_status(
     notifier: NotifierSnapshot,
     tasks: Sequence[TaskSnapshot],
     now: datetime,
+    deadman: DeadmanSnapshot = DEADMAN_DISABLED,
 ) -> StatusDocument:
     """Assemble the status document from the subsystem snapshots.
 
@@ -224,6 +246,7 @@ def build_status(
         notifier: Notifier state (``enabled=False`` when no channel is configured).
         tasks: Supervision records.
         now: Generation time (UTC).
+        deadman: State of the dead-man ping (disabled by default).
 
     Returns:
         The validated document; serialise with ``model_dump_json(by_alias=True)``.
@@ -300,6 +323,15 @@ def build_status(
                 ],
                 "state_persistence": notifier.state_persistence,
                 "state_persistence_reason": notifier.state_persistence_reason,
+            },
+            "deadman": {
+                "enabled": deadman.enabled,
+                "interval_s": deadman.interval_s,
+                "withheld": deadman.withheld,
+                "last_ping_at": _ts(deadman.last_ping_at),
+                "last_error": deadman.last_error,
+                "pings_total": deadman.pings_total,
+                "failures_total": deadman.failures_total,
             },
             "tasks": [
                 {

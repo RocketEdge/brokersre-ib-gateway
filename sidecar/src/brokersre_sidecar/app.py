@@ -11,6 +11,7 @@ probe      one step of the read-only API probe
 http       serves /livez, /readyz, /status and /metrics
 notify     evaluates the alert rules and queues due notifications
 notify-<c> delivers the queue of channel <c> (one task per channel)
+deadman    sends the optional dead-man ping while nothing speaks against it
 ========== =====================================================================
 
 The tasks share nothing but in-memory snapshots, so a subsystem that hangs or crashes
@@ -43,8 +44,15 @@ from brokersre_sidecar.model import (
     build_status,
 )
 from brokersre_sidecar.model.feed import FeedBatch
-from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot, TaskSnapshot
+from brokersre_sidecar.model.health import (
+    DEADMAN_DISABLED,
+    DeadmanSnapshot,
+    NotifierSnapshot,
+    ProbeSnapshot,
+    TaskSnapshot,
+)
 from brokersre_sidecar.notify import (
+    DeadmanPinger,
     Dispatcher,
     HttpTransport,
     LadderConfig,
@@ -54,6 +62,7 @@ from brokersre_sidecar.notify import (
     NotifierStore,
     RuleConfig,
     RuleEngine,
+    alerting_classes,
     build_channels,
 )
 from brokersre_sidecar.probe import (
@@ -68,7 +77,7 @@ from brokersre_sidecar.probe import (
 )
 from brokersre_sidecar.redaction import SecretRegistry
 from brokersre_sidecar.supervisor import Supervisor, TaskFactory
-from brokersre_sidecar.vocab import Phase, ProbeStatus
+from brokersre_sidecar.vocab import UNKNOWN_PHASE, Phase, ProbeStatus
 from brokersre_sidecar.worker import SerialWorker
 
 _LOGGER = logging.getLogger(__name__)
@@ -80,6 +89,8 @@ _FEED_READ_TIMEOUT_S = 10.0
 # Time allowed at shutdown to deliver notifications that are already queued.
 _FLUSH_TIMEOUT_S = 3.0
 _TEXT = "text/plain; charset=utf-8"
+# Bound of every outbound HTTP request (notifications and the dead-man ping).
+_HTTP_TIMEOUT_S = 10.0
 
 EXIT_ORPHANED = 75
 """Exit code (EX_TEMPFAIL) when the sidecar leaves a dead network namespace."""
@@ -170,12 +181,13 @@ class Application:
 
         Args:
             settings: Validated configuration.
-            secrets: Channel credentials (all None when the notifier is not configured).
+            secrets: Channel credentials and the dead-man URL (each None when not configured).
             registry: Secrets to scrub from messages.
             clock: Time source (the system clock by default).
             sleep: Awaitable delay of the task loops and retries.
             ib_client: API client for the probe (the ib_async adapter by default).
-            http_client: Outbound HTTP client of the notifier (created when needed).
+            http_client: Outbound HTTP client of the notifier and the dead-man ping
+                (created when one of them is configured).
             proc_root: procfs mount point. Read only in the shared-namespace mode (socket
                 table of the namespace the gateway lives in).
             tick_s: Period of the follow, probe and notify loops.
@@ -248,11 +260,27 @@ class Application:
         )
         self._supervisor.add("http", self._serve_http)
 
+        self._http_client = http_client
         self._transport: HttpTransport | None = None
         self._dispatcher: Dispatcher | None = None
         self._notifier: Notifier | None = None
         if settings.configured_channels():
-            self._build_notifier(settings, secrets, registry, http_client)
+            self._build_notifier(settings, secrets, registry)
+        self._pinger: DeadmanPinger | None = None
+        # Its own rule engine: the ping must not depend on a notifier being configured.
+        self._deadman_rules = RuleEngine(RuleConfig())
+        if secrets.deadman_url is not None:
+            self._pinger = DeadmanPinger(
+                secrets.deadman_url,
+                self._outbound(),
+                self._clock,
+                interval_s=settings.deadman_interval_s,
+                withhold=self._deadman_withhold,
+            )
+            # One step is bounded by the HTTP timeout of the ping.
+            self._supervisor.add(
+                "deadman", self._deadman, stale_after_s=self._stale_after_s + _HTTP_TIMEOUT_S
+            )
 
         self._server = HttpServer(
             {
@@ -265,25 +293,30 @@ class Application:
             port=settings.port,
         )
 
+    def _outbound(self) -> HttpTransport:
+        """Return the shared outbound HTTP transport, creating it at first use.
+
+        A sidecar without a channel and without a dead-man ping never creates an HTTP
+        client at all.
+        """
+        if self._transport is None:
+            client = (
+                self._http_client
+                if self._http_client is not None
+                else httpx.AsyncClient(
+                    follow_redirects=False,
+                    limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                    headers={"User-Agent": f"brokersre-sidecar/{__version__}"},
+                )
+            )
+            self._transport = HttpTransport(client, _HTTP_TIMEOUT_S)
+        return self._transport
+
     def _build_notifier(
-        self,
-        settings: Settings,
-        secrets: ChannelSecrets,
-        registry: SecretRegistry,
-        http_client: httpx.AsyncClient | None,
+        self, settings: Settings, secrets: ChannelSecrets, registry: SecretRegistry
     ) -> None:
         """Create the notifier, its dispatcher and one delivery task per channel."""
-        client = (
-            http_client
-            if http_client is not None
-            else httpx.AsyncClient(
-                follow_redirects=False,
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-                headers={"User-Agent": f"brokersre-sidecar/{__version__}"},
-            )
-        )
-        self._transport = HttpTransport(client)
-        channels = build_channels(settings, secrets, self._transport)
+        channels = build_channels(settings, secrets, self._outbound())
         self._dispatcher = Dispatcher(channels, self._clock, self._sleep)
         self._notifier = Notifier(
             rules=RuleEngine(RuleConfig()),
@@ -356,6 +389,36 @@ class Application:
         """Return the notifier snapshot (``enabled=False`` when no channel is configured)."""
         return self._notifier.snapshot() if self._notifier is not None else _NOTIFIER_DISABLED
 
+    def deadman_snapshot(self) -> DeadmanSnapshot:
+        """Return the dead-man snapshot (``enabled=False`` when no URL is configured)."""
+        return self._pinger.snapshot() if self._pinger is not None else DEADMAN_DISABLED
+
+    def _deadman_withhold(self) -> str | None:
+        """Return why the dead-man ping must not be sent now, or None when it may.
+
+        A ping says three things at once, and each must hold: the sidecar's tasks run and
+        make progress; the gateway's phase can be read; no alert that asks a person to act
+        is active. The reason is made of fixed words and class names only.
+        """
+        if not self._supervisor.alive():
+            return "the supervisor is not running"
+        stalled = self._supervisor.stalled()
+        if stalled:
+            return "no progress: " + ", ".join(name for name, _ in stalled)
+        gateway = self._state.snapshot()
+        if not self._feed_ready or gateway.phase is None or gateway.phase == UNKNOWN_PHASE:
+            return "the gateway's log volume or phase cannot be read"
+        evaluations = self._deadman_rules.evaluate(
+            gateway,
+            self._engine.snapshot(),
+            now=self._clock.now(),
+            mono=self._clock.monotonic(),
+        )
+        alerting = alerting_classes(evaluations, self._settings.disabled_classes)
+        if alerting:
+            return "alert active: " + ", ".join(alert.value for alert in alerting)
+        return None
+
     def task_snapshot(self) -> tuple[TaskSnapshot, ...]:
         """Return the supervision records."""
         return self._supervisor.snapshot()
@@ -371,6 +434,7 @@ class Application:
             notifier=self.notifier_snapshot(),
             tasks=self._supervisor.snapshot(),
             now=self._clock.now(),
+            deadman=self.deadman_snapshot(),
         )
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -393,6 +457,7 @@ class Application:
             gateway_endpoint=self._settings.gateway_endpoint(),
             probe_enabled=self._settings.probe_enabled,
             channels=list(self._settings.configured_channels()),
+            deadman_ping=self._pinger is not None,
         )
         waiters = {
             asyncio.ensure_future(self._supervisor.run()),
@@ -538,6 +603,15 @@ class Application:
             self._supervisor.beat("notify")
             await self._sleep(self._tick_s)
 
+    async def _deadman(self) -> None:
+        """Send the dead-man ping while nothing speaks against it."""
+        pinger = self._pinger
+        assert pinger is not None  # noqa: S101 - registered only when configured
+        while True:
+            await pinger.tick()
+            self._supervisor.beat("deadman")
+            await self._sleep(self._tick_s)
+
     async def _serve_http(self) -> None:
         """Serve the endpoints; release the port when the task stops."""
         try:
@@ -592,5 +666,6 @@ class Application:
             probe=self._engine.snapshot(),
             notifier=self.notifier_snapshot(),
             tasks=self._supervisor.snapshot(),
+            deadman=self.deadman_snapshot(),
         )
         return Response(200, CONTENT_TYPE, text.encode())

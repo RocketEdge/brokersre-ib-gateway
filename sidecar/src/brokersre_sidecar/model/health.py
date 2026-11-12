@@ -152,6 +152,35 @@ class NotifierSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class DeadmanSnapshot:
+    """State of the dead-man ping for ``/status`` and ``/metrics``.
+
+    Attributes:
+        enabled: False when no ping URL is configured.
+        interval_s: Seconds between pings, or None when disabled.
+        withheld: Why no ping is sent right now (fixed words), or None while pinging
+            and when disabled.
+        last_ping_at: Time of the last ping the service accepted, or None.
+        last_error: Failure category of the last attempt (for example ``http_503``),
+            None after a success; never the URL.
+        pings_total: Pings the service accepted.
+        failures_total: Attempts that failed.
+    """
+
+    enabled: bool
+    interval_s: float | None
+    withheld: str | None
+    last_ping_at: datetime | None
+    last_error: str | None
+    pings_total: int
+    failures_total: int
+
+
+DEADMAN_DISABLED = DeadmanSnapshot(False, None, None, None, None, 0, 0)
+"""The snapshot of a sidecar without a dead-man ping."""
+
+
+@dataclass(frozen=True, slots=True)
 class TaskSnapshot:
     """Supervision record of one background task.
 
