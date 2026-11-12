@@ -14,17 +14,25 @@
 #     the in-memory event, which for these rows is larger than the JSON text unless a string is
 #     full of quotes or backslashes (2 bytes each in JSON). Events and metrics: short tokens
 #     and numbers, 900,000 bytes. Raw lines: free text, so 450,000 bytes keeps even a batch of
-#     pure quote characters under 1 MB (control characters are removed by raw_out).
+#     pure quote characters under 1 MB (control characters are removed by raw_gate).
 #   - a rejected call is retried for 401/403/404 as well: a role assignment or a new rule
 #     takes minutes to propagate, and losing rows meanwhile would be silent. 413 (too large)
 #     and 400 (malformed) are NOT retried, they would never succeed; the batch is dropped and
 #     counted (component_errors_total / component_discarded_events_total on stdout).
-#   - disk buffers: 268,435,488 bytes each is Vector's minimum. Events and metrics block the
-#     reader when the buffer is full (the files on the log volume are the backlog); raw lines
-#     are dropped instead (drop_newest) so a flood of raw text can never hold back the rows
-#     the alerts depend on.
-# acknowledgements: a file position is checkpointed only after its rows are on disk in the
-# buffer or accepted by Azure, so a crash re-reads lines instead of losing them.
+# Durability without a disk buffer. The buffers are in memory (500 rows per stream) and every
+# sink acknowledges end to end: a file position is checkpointed only after Azure accepted its
+# rows. A crash, a restart or an outage therefore loses nothing that is still in the gateway's
+# log files: the lines are read again (a row can arrive twice, never zero times). Events and
+# metrics block the reader while Azure is unreachable (the files on the log volume are the
+# backlog); raw lines are dropped instead (drop_newest), so a flood of raw text can never hold
+# back the rows the alerts depend on.
+# Why not Vector's disk buffer: (1) rows that were already mapped would survive a restart, so
+# raw rows mapped while SHIP_RAW_LOGS=yes would still be shipped unredacted after the operator
+# switched to redaction or off; with memory buffers the lines are mapped again under the mode
+# that is in force. (2) With disk buffers on Vector 0.61.0 the rows read at start-up sometimes
+# stayed undelivered until the next row of the same stream arrived (observed in 1 of 20 starts
+# and twice more in the test suite; 0 of 40 starts with memory buffers), which for sparse
+# events can mean hours. azure/tests/run.sh proves the first point on a blocked sink.
 
 sinks:
   azure_events:
@@ -43,8 +51,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: block
     request:
       timeout_secs: 30
@@ -71,8 +79,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: block
     request:
       timeout_secs: 30
@@ -99,8 +107,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: drop_newest
     request:
       timeout_secs: 30

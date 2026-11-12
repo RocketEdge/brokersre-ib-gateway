@@ -34,8 +34,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: block
     request:
       timeout_secs: 30
@@ -65,8 +65,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: block
     request:
       timeout_secs: 30
@@ -96,8 +96,8 @@ sinks:
       max_events: 1000
       timeout_secs: 5
     buffer:
-      type: disk
-      max_size: 268435488
+      type: memory
+      max_events: 500
       when_full: drop_newest
     request:
       timeout_secs: 30
