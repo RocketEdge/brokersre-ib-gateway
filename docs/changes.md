@@ -35,6 +35,16 @@ Next step.
   - *Image pins held in a Dockerfile `ARG` are invisible to Dependabot*: both images are named
     in `FROM` lines.
   - *One failed save of the state file switched to memory for good*; it now retries.
+  - *The end-to-end job failed on its first run in GitHub Actions and never locally.* After a
+    stop of the gateway the sidecar said "No action needed. The condition has cleared." about
+    a stalled login: the gateway's sampler closes that pair itself while stopping, and on a
+    fast machine the sidecar read the closing event before the new phase. The model now
+    records which event ended the gateway's attempt before the pair closed (the feed order is
+    deterministic) and the rule hands over on that.
+  - *Both test scripts ended pipelines in `grep -q` under `pipefail`*, which is false when the
+    writer dies of SIGPIPE; for "a credential is in the payloads: fail, else pass" that is a
+    false pass. Found through the Azure pack's first Linux run; a helper that reads all
+    input replaces them.
   - Not established: everything in L20 and L21.
 - **Next step:** a paper login with the sidecar attached; one real message per channel; the
   first runs of the three workflows.
