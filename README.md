@@ -25,6 +25,7 @@ by or endorsed by Interactive Brokers.
 - [Environment variables](#environment-variables)
 - [Ports, volumes and the sidecar contract](#ports-volumes-and-the-sidecar-contract)
 - [Health, phases and logs](#health-phases-and-logs)
+- [Optional sidecar: API probe, status endpoints, alerts](#optional-sidecar-api-probe-status-endpoints-alerts)
 - [Shipping to Azure Log Analytics](#shipping-to-azure-log-analytics)
 - [Security posture](#security-posture)
 - [Verifying an image](#verifying-an-image)
@@ -148,8 +149,9 @@ Paper first. Before the same setup holds a live session, check each line:
       sending a wrong password again and again until the account is locked.
 - [ ] **Someone is told when a person is needed.** The image records `2fa-pending`,
       `needs-human` and `unknown_window` as events and phases; it does not notify anybody by
-      itself. Read `events/events.jsonl` with your own tooling, or run a companion that turns
-      them into messages.
+      itself. Read `events/events.jsonl` with your own tooling, or run the
+      [optional sidecar](#optional-sidecar-api-probe-status-endpoints-alerts), which turns them
+      into messages. Give it a dead-man ping too, or nobody is told when the host itself dies.
 - [ ] **The host stays up**: no sleep, no unattended reboot during trading hours, Docker
       starts at boot, the clock is synchronised.
 - [ ] **You have stopped and started it once on purpose** (`docker compose ... down`, then
@@ -288,6 +290,24 @@ failed check stops the container before any login is attempted.
 
 All log files on the volume are size-capped and rotated (`LOG_MAX_BYTES`, `LOG_KEEP`). The
 contract is specified in [docs/log-contract.md](docs/log-contract.md).
+
+## Optional sidecar: API probe, status endpoints, alerts
+
+[`sidecar/`](sidecar/README.md) is a separate, optional image. It runs next to the gateway in its
+own container, reads the gateway's log volume read-only, probes the API through the relay port,
+serves `/livez`, `/readyz`, `/status` and `/metrics` on port 9810, and notifies people (Teams,
+Slack, Telegram, ntfy, PagerDuty, e-mail, webhook) when a person is needed: a pending second
+factor, a rejected login, a gateway that stopped. It alerts and never acts: no orders, no
+automated second factor, no restart of the gateway.
+
+```bash
+docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.sidecar.yml up -d
+```
+
+Configure its dead-man ping as well: without one, nobody is told when the host itself dies.
+The sidecar is tested against the real gateway image with IBC not launched and against
+stand-in API servers; it has not run against a logged-in Gateway yet
+([docs/sidecar.md](docs/sidecar.md) lists what that leaves open).
 
 ## Shipping to Azure Log Analytics
 
@@ -486,7 +506,8 @@ every variable it dropped or renamed on stderr, without printing a value.
 [docs/changes.md](docs/changes.md), [docs/limitations.md](docs/limitations.md),
 [docs/env-vars.md](docs/env-vars.md), [docs/log-contract.md](docs/log-contract.md),
 [docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
-[examples/README.md](examples/README.md), [azure/README.md](azure/README.md).
+[examples/README.md](examples/README.md), [azure/README.md](azure/README.md),
+[sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md).
 
 ## License
 

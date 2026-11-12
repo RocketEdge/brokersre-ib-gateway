@@ -19,6 +19,10 @@ IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh       
 (cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
 (cd examples/csharp && dotnet build -warnaserror && dotnet test && dotnet format GatewayClient.slnx --verify-no-changes)
 bash azure/tests/run.sh [group...]                                                       # Azure pack, offline (Docker + Bicep CLI, no Azure login); the group kql-run is opt-in
+(cd sidecar && uv sync && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest --cov)
+docker build -t brokersre-ib-gateway-sidecar:dev sidecar
+IMAGE=brokersre-ib-gateway-sidecar:dev sidecar/tests/container/run.sh                    # sidecar smoke suite (SMOKE_TIMEOUT_SCALE=5 for an emulated arm64 image)
+sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev                # gateway + sidecar on an internal network; never contacts IBKR
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
@@ -34,7 +38,9 @@ All of these must be green before claiming a change done; run them fresh.
    that goes INTO the gateway image. A companion that runs next to it pins its own third-party
    image by digest in the file that uses it: the Vector shipper in
    `compose/docker-compose.azure.yml`, repeated as the default of `vectorImage` in
-   `azure/bicep/vm.bicep`; `azure/tests/run.sh` fails when the two differ.
+   `azure/bicep/vm.bicep`; `azure/tests/run.sh` fails when the two differ. The sidecar image
+   names its two base images by digest in the `FROM` lines of `sidecar/Dockerfile` (not in an
+   `ARG`: Dependabot cannot see those) and its Python dependencies in `sidecar/uv.lock`.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
@@ -71,6 +77,11 @@ All of these must be green before claiming a change done; run them fresh.
 12. **Examples are read-only**: no order, cancel or what-if API name under `examples/`
     (`examples/python/tests/test_no_order_api.py` scans for them), and no IBKR code or binary
     is ever committed (the C# sample takes the path of the user's own `CSharpAPI.dll`).
+13. **The sidecar alerts and never acts**: no order, cancel or what-if call (a test asserts the
+    exact set of API calls the probe can make, another the frames on the wire), no IBC
+    command, no restart of the gateway, no second-factor automation, and no IBKR credential
+    in its container. A human-needed state is derived from events, never from how long a
+    phase has lasted. An alert counts as sent only when a channel accepted it.
 
 ## Layout
 
@@ -94,7 +105,9 @@ examples/                                             wait-for-gateway.sh, compo
 tests/compose/run.sh                                  both compose files above, started as shipped (docker CLI)
 azure/                                                Log Analytics pack: bicep/ (tables, DCR, alerts, workbook, query pack; vm.bicep), vector/ (shipper config, redact.vrl, entrypoint), kql/ (alert and report queries, scenarios), vm/ + cloud-init/ (optional gateway VM), tests/run.sh; README.md (ADR 0012)
 compose/docker-compose.azure.yml                      the shipper next to the gateway (profiles azure, azure-cert); Vector pinned by digest
-.github/workflows/  ci, azure-pack (the pack's offline suite), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
+sidecar/                                              optional second image (Python 3.14, uv): API probe, /livez /readyz /status /metrics, notifier; src/, tests/ (unit, container/, e2e/), schemas/status.v1.schema.json, Dockerfile, README.md (ADR 0010, docs/sidecar.md)
+compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
+.github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
 
@@ -195,3 +208,9 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - A consumer must not alert on how long a phase has lasted: an unanswered second-factor
   prompt flips the phase between `2fa-pending` and `login` every three minutes. Use events
   (`docs/log-contract.md`), as the Azure rule "human needed" does.
+- Sidecar: regenerate `sidecar/schemas/status.v1.schema.json` after any change to the status
+  model (`uv run brokersre-sidecar print-schema status`; the smoke suite compares the two).
+  The default compose override gives the sidecar its own network namespace: it reaches the
+  API through the relay (`GATEWAY_HOST`, 4004/4003), never the loopback port, and cannot use
+  the IBC command server. A new gateway event that puts the gateway into `needs-human` needs
+  its cause added to `notify/rules.py`, or the alert says only that the phase is `needs-human`.

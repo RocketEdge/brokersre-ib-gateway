@@ -49,7 +49,7 @@ services:
       AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-11:45 PM}   # exchange-local; outside IBKR reset windows
       TIME_ZONE: ${TIME_ZONE:-America/New_York}
       EXISTING_SESSION_DETECTED_ACTION: primary
-      IBC_COMMAND_SERVER_PORT: "7462"               # loopback only; reachable by a sidecar sharing this network namespace
+      IBC_COMMAND_SERVER_PORT: "7462"               # loopback only; reachable only from this network namespace (the optional sidecar does not use it)
       IBC_LAUNCH: ${IBC_LAUNCH:-yes}                # "no" starts everything except IBC (offline tests)
       # VNC_SERVER_PASSWORD_FILE: /run/secrets/vnc-password   # break-glass only; bound to 127.0.0.1 inside the container
     secrets:
