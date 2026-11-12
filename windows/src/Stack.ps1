@@ -261,6 +261,8 @@ function Invoke-GwCompose {
     compose arguments, for example 'up', '-d'.
     .PARAMETER Interactive
     Show compose's own output (image pull progress).
+    .PARAMETER TimeoutSeconds
+    Deadline for a captured call; default 120.
     .OUTPUTS
     PSCustomObject from the wrapper.
     #>
@@ -270,15 +272,16 @@ function Invoke-GwCompose {
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string[]]$ArgumentList,
-        [switch]$Interactive
+        [switch]$Interactive,
+        [ValidateRange(0, 86400)][int]$TimeoutSeconds = 120
     )
     $folder = Resolve-GwFullPath -Path $Path
     if ([string]$Runtime.Mode -eq 'WslEngine') {
         $arguments = [string[]](@('compose', '-f', 'compose.yaml') + $ArgumentList)
-        return (Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -WorkingDirectory $folder -Interactive:$Interactive)
+        return (Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -WorkingDirectory $folder -Interactive:$Interactive -TimeoutSeconds $TimeoutSeconds)
     }
     $arguments = [string[]](@('compose', '-f', (Join-Path $folder 'compose.yaml')) + $ArgumentList)
-    return (Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -Interactive:$Interactive)
+    return (Invoke-GwContainerCli -Runtime $Runtime -ArgumentList $arguments -Interactive:$Interactive -TimeoutSeconds $TimeoutSeconds)
 }
 
 function Start-GwStack {
@@ -289,15 +292,25 @@ function Start-GwStack {
     'up -d' is idempotent: a running container with an unchanged definition is left alone. With
     -NoRecreate a running container is left alone even when the definition changed, which is
     what the unattended start tasks use: they may start a stopped gateway but must never replace
-    a running one (that would force a new login with 2FA).
+    a running one (that would force a new login with 2FA). With -ForceRecreate the container is
+    replaced even when nothing in the definition changed; setup uses it after new credentials
+    were written, because compose does not recreate a container when only the content of a
+    secret file changed (observed 2026-11-12: same container id after 'up -d'), and the old
+    container would keep running with the old credentials.
+    A captured run gets a long deadline, because 'up' may have to pull the image; when it
+    expires the whole process tree is ended, so no orphaned compose can start the gateway.
     .PARAMETER Runtime
     Object from Get-GwRuntime.
     .PARAMETER Path
     Gateway folder.
     .PARAMETER NoRecreate
     Pass --no-recreate.
+    .PARAMETER ForceRecreate
+    Pass --force-recreate (ignored together with -NoRecreate).
     .PARAMETER ShowProgress
-    Let compose print its progress (image pull) to the console.
+    Let compose print its progress (image pull) to the console; no deadline then.
+    .PARAMETER TimeoutSeconds
+    Deadline of a captured run; default 1800.
     .OUTPUTS
     System.Boolean: true when compose exited with 0. Nothing is started under -WhatIf (returns false).
     #>
@@ -307,21 +320,23 @@ function Start-GwStack {
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string]$Path,
         [switch]$NoRecreate,
-        [switch]$ShowProgress
+        [switch]$ForceRecreate,
+        [switch]$ShowProgress,
+        [ValidateRange(60, 86400)][int]$TimeoutSeconds = 1800
     )
     $arguments = New-Object System.Collections.Generic.List[string]
     $arguments.Add('up')
     $arguments.Add('-d')
     if ($NoRecreate) { $arguments.Add('--no-recreate') }
+    elseif ($ForceRecreate) { $arguments.Add('--force-recreate') }
     if (-not $PSCmdlet.ShouldProcess($Path, ('docker compose {0}' -f ($arguments.ToArray() -join ' ')))) { return $false }
-    $result = Invoke-GwCompose -Runtime $Runtime -Path $Path -ArgumentList $arguments.ToArray() -Interactive:$ShowProgress
+    $result = Invoke-GwCompose -Runtime $Runtime -Path $Path -ArgumentList $arguments.ToArray() -Interactive:$ShowProgress -TimeoutSeconds $TimeoutSeconds
     if ($result.ExitCode -ne 0) {
         foreach ($line in $result.Output) { Write-GwConsole -Message $line -Status 'FAIL' }
         return $false
     }
     return $true
 }
-
 function Stop-GwStack {
     <#
     .SYNOPSIS
@@ -466,6 +481,38 @@ function Get-GwContainerState {
     return $null
 }
 
+function Get-GwContainerStartTime {
+    <#
+    .SYNOPSIS
+    Returns the time a container was last started, as the engine wrote it.
+    .DESCRIPTION
+    'docker inspect --format {{.State.StartedAt}}' gives an RFC 3339 timestamp in the engine's
+    own clock, the same clock 'docker logs --since' filters by. The login follower starts its
+    window for "login rejected" events there, so a rejection that happened before anyone was
+    watching (the restart policy or a start task brought the container up) is still found,
+    while events of an earlier start of the same container are not counted again.
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .PARAMETER ContainerName
+    Container to inspect.
+    .OUTPUTS
+    System.String (RFC 3339), or null when the container does not exist or never started.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
+        [Parameter(Mandatory = $true)][string]$ContainerName
+    )
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('inspect', '--format', '{{.State.StartedAt}}', $ContainerName) -TimeoutSeconds 30
+    if ($result.ExitCode -ne 0) { return $null }
+    foreach ($line in $result.Output) {
+        $text = $line.Trim()
+        if ($text -cmatch '\A\d{4}-\d\d-\d\dT[0-9:.]+(Z|[+-]\d\d:\d\d)\z' -and $text -notlike '0001-*') { return $text }
+    }
+    return $null
+}
+
 function Get-GwEngineTime {
     <#
     .SYNOPSIS
@@ -498,8 +545,9 @@ function Test-GwLoginFailure {
     Tells whether the gateway reported a rejected login since a given time.
     .DESCRIPTION
     The image prints one JSON event per line on stdout; a rejected username or password shows
-    as the events login_failed or login_failed_dialog (the phase stays 'login'). The kit looks
-    for exactly those two event names in 'docker logs --since <time> --tail 400'. Stdout never
+    as the events login_failed or login_failed_dialog (the phase stays 'login'); an image that
+    remembers a rejection reports login_rejected_latched on every later start. The kit looks
+    for exactly those three event names in 'docker logs --since <time> --tail 400'. Stdout never
     carries a credential by the image's log contract, and the lines are matched, not printed.
     .PARAMETER Runtime
     Object from Get-GwRuntime.
@@ -521,7 +569,7 @@ function Test-GwLoginFailure {
     $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('logs', '--since', $Since, '--tail', '400', $ContainerName) -TimeoutSeconds 30
     if ($result.ExitCode -ne 0) { return $false }
     foreach ($line in $result.Output) {
-        if ($line -match '"event"\s*:\s*"login_failed(_dialog)?"') { return $true }
+        if ($line -match '"event"\s*:\s*"(login_failed(_dialog)?|login_rejected_latched)"') { return $true }
     }
     return $false
 }
@@ -531,9 +579,10 @@ function Get-GwPhaseMessage {
     Translates a phase token into plain language and says whether to keep waiting.
     .DESCRIPTION
     Kind is Progress (keep following), Success (logged in) or Stop (a person must act; the
-    follower ends). Only 'logged-in' is Success. Any token the kit does not know is Progress
-    with an "unknown state" text: it can never count as healthy, and the follower's timeout
-    bounds the wait.
+    follower ends). Only 'logged-in' is Success. 'existing-session' is Progress: with the
+    template's EXISTING_SESSION_DETECTED_ACTION=primary IBC takes the session over by itself.
+    Any token the kit does not know is Progress with an "unknown state" text: it can never
+    count as healthy, and the follower's timeout bounds the wait.
     .PARAMETER Phase
     Token from Get-GwGatewayPhase.
     .PARAMETER ApiPort
@@ -564,10 +613,10 @@ function Get-GwPhaseMessage {
         }
         'restarting' { $text = 'The gateway is doing its own restart (daily restart, or a new 2FA prompt after a timeout). Waiting...' }
         'existing-session' {
-            $kind = 'Stop'
-            $outcome = 'ExistingSession'
-            $text = ('Another session is using this IBKR username (Trader Workstation, the mobile app or another gateway). ' +
-                'Log that session out, or use a second username for the gateway, then run setup.ps1 again.')
+            # Not terminal: the compose file sets EXISTING_SESSION_DETECTED_ACTION=primary, so
+            # IBC answers this dialog itself and the gateway carries on.
+            $text = ('Another session is using this IBKR username (Trader Workstation, the mobile app or another gateway); ' +
+                'the gateway is taking it over. Waiting... If this does not clear, log the other session out or use a second username.')
         }
         'needs-human' {
             $kind = 'Stop'
@@ -610,15 +659,16 @@ function Wait-GwGatewayLogin {
     Polls the phase token and prints one plain-language line per change. Read-only: it only
     runs 'docker exec ... cat', 'docker logs' and 'docker inspect'. It never starts, restarts
     or recreates anything and never touches 2FA; the operator approves on the phone.
-    Each poll decides in this order: logged-in, read on two consecutive polls (the phase file
-    outlives the container, so one reading right after a start may be left over from the
-    previous run), ends with LoggedIn; a rejected login reported on
-    stdout ends with LoginFailed, on the first such event and before any other exit (also when
-    the gateway process has already exited, so the caller can stop the stack before Docker's
-    restart policy sends the credentials again); a container that is not running ends with
-    ContainerNotRunning; a phase that needs a person ends with NeedsHuman, ExistingSession,
-    Stopped or TestMode; the deadline ends with Timeout. An unknown token is never success:
-    the follower keeps waiting until the deadline.
+    A token that would end the follow (logged-in, needs-human, stopping, stopped, exited,
+    test-mode) counts only when it is read on two consecutive polls: the phase file lives on a
+    volume that outlives the container, so one reading right after a start may be left over
+    from the previous run. Each poll then decides in this order: confirmed logged-in ends with
+    LoggedIn; a rejected login reported on stdout ends with LoginFailed, on the first such
+    event and before any other exit (also when the gateway process has already exited, so the
+    caller can stop the stack before Docker's restart policy sends the credentials again); a
+    container that is not running ends with ContainerNotRunning; a confirmed token that needs
+    a person ends with NeedsHuman, Stopped or TestMode; the deadline ends with Timeout.
+    'existing-session' and any unknown token are progress: never success, bounded by the deadline.
     .PARAMETER Runtime
     Object from Get-GwRuntime.
     .PARAMETER ContainerName
@@ -631,8 +681,8 @@ function Wait-GwGatewayLogin {
     .PARAMETER PollSeconds
     Pause between polls.
     .PARAMETER Since
-    Start of the window for login_failed events, as RFC 3339 text; pass the engine's time
-    (Get-GwEngineTime) taken before the stack was started. Defaults to the Windows time now.
+    Start of the window for rejected-login events, as RFC 3339 text in the engine's clock;
+    pass the container's start time (Get-GwContainerStartTime). Defaults to the Windows time now.
     .OUTPUTS
     PSCustomObject: Outcome, Phase (last token seen, or empty), ElapsedSeconds, Message.
     #>
@@ -651,7 +701,7 @@ function Wait-GwGatewayLogin {
     $deadline = $started.AddSeconds($TimeoutSeconds)
     $lastShown = $null
     $lastPhase = ''
-    $confirmations = 0
+    $pendingTerminal = ''
     $logsHint = 'See the events with: docker logs {0}' -f $ContainerName
     $finish = {
         param([string]$Outcome, [string]$Message)
@@ -663,23 +713,20 @@ function Wait-GwGatewayLogin {
         if ($null -ne $phase) { $lastPhase = $phase }
         $info = $null
         if ($null -ne $phase) { $info = Get-GwPhaseMessage -Phase $phase -ApiPort $ApiPort -ContainerName $ContainerName }
+        $terminal = ($null -ne $info -and $info.Kind -ne 'Progress')
+        $confirmed = ($terminal -and $pendingTerminal -ceq $phase)
+        $pendingTerminal = ''
+        if ($terminal) { $pendingTerminal = $phase }
+        $success = ($terminal -and $info.Kind -eq 'Success')
 
-        if ($null -ne $info -and $info.Kind -eq 'Success') {
-            # The phase file lives on a volume that outlives the container, so right after a
-            # start it can still hold 'logged-in' from the previous run until the entrypoint
-            # writes 'starting'. Success therefore needs the token on two consecutive polls.
-            if ($confirmations -ge 1) {
-                Write-GwConsole -Message $info.Text -Status 'PASS'
-                return (& $finish $info.Outcome $info.Text)
-            }
-            $confirmations++
-            Wait-GwDelay -Seconds $PollSeconds
-            continue
+        if ($success -and $confirmed) {
+            Write-GwConsole -Message $info.Text -Status 'PASS'
+            return (& $finish $info.Outcome $info.Text)
         }
-        $confirmations = 0
 
         # A rejected login outranks every other state, including "exited" and "not running".
-        if (Test-GwLoginFailure -Runtime $Runtime -ContainerName $ContainerName -Since $Since) {
+        # (Not asked on a first, unconfirmed 'logged-in': that reading may be stale.)
+        if (-not $success -and (Test-GwLoginFailure -Runtime $Runtime -ContainerName $ContainerName -Since $Since)) {
             $message = ('IBKR rejected the username or password. The kit does not try again: repeated failed logins can lock the account. ' +
                 'Check the credentials, then run setup.ps1 -ResetSecrets.')
             Write-GwConsole -Message $message -Status 'FAIL'
@@ -700,15 +747,17 @@ function Wait-GwGatewayLogin {
                 $lastShown = '<waiting>'
             }
         }
-        else {
-            if ($lastShown -ne $phase) {
-                $status = 'INFO'
-                if ($info.Kind -eq 'Stop') { $status = 'FAIL' }
-                elseif ($phase -eq '2fa-pending') { $status = 'WARN' }
-                Write-GwConsole -Message $info.Text -Status $status
-                $lastShown = $phase
+        elseif ($terminal) {
+            if ($confirmed) {
+                Write-GwConsole -Message $info.Text -Status 'FAIL'
+                return (& $finish $info.Outcome $info.Text)
             }
-            if ($info.Kind -eq 'Stop') { return (& $finish $info.Outcome $info.Text) }
+        }
+        elseif ($lastShown -ne $phase) {
+            $status = 'INFO'
+            if ($phase -eq '2fa-pending' -or $phase -eq 'existing-session') { $status = 'WARN' }
+            Write-GwConsole -Message $info.Text -Status $status
+            $lastShown = $phase
         }
 
         if ((Get-GwUtcNow) -ge $deadline) {

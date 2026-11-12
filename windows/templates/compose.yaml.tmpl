@@ -13,6 +13,9 @@ services:
     container_name: __CONTAINER_NAME__
     # unless-stopped: comes back after a Docker or Windows restart, stays down after an explicit
     # stop. Nothing restarts a running gateway: a restart forces a new login with 2FA.
+    # Every start of the container is one login attempt. That is why setup.ps1 and start.ps1
+    # stop the stack explicitly when IBKR rejected the login: a stopped container is not
+    # started again by this policy (see the README, "If IBKR rejects the login").
     restart: unless-stopped
     read_only: true
     cap_drop:

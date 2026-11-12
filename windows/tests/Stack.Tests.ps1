@@ -276,7 +276,7 @@ Describe 'Get-GwPhaseMessage' {
         @{ phase = '2fa-pending'; kind = 'Progress'; text = 'Approve the IBKR Mobile prompt on your phone now' }
         @{ phase = 'logged-in'; kind = 'Success'; text = 'Logged in\. API ready on 127\.0\.0\.1:4002' }
         @{ phase = 'restarting'; kind = 'Progress'; text = 'restart' }
-        @{ phase = 'existing-session'; kind = 'Stop'; text = 'session' }
+        @{ phase = 'existing-session'; kind = 'Progress'; text = 'taking it over' }
         @{ phase = 'needs-human'; kind = 'Stop'; text = 'person' }
         @{ phase = 'stopping'; kind = 'Stop'; text = 'stop' }
         @{ phase = 'stopped'; kind = 'Stop'; text = 'stop' }
@@ -365,11 +365,30 @@ Describe 'Wait-GwGatewayLogin' {
         $result.Message | Should -Match 'docker logs ctr'
     }
 
-    It 'stops at once on existing-session' {
-        $script:phases.Enqueue('existing-session')
-        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'ExistingSession'
+    It 'keeps following through existing-session: with the template''s "primary" action IBC takes the session over itself' {
+        foreach ($phase in @('login', 'existing-session', 'existing-session', 'login', 'logged-in')) { $script:phases.Enqueue($phase) }
+        $result = Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2
+        $result.Outcome | Should -Be 'LoggedIn'
+        Should -Invoke -ModuleName BrokerSre.Gateway Write-GwConsole -Times 1 -Exactly -ParameterFilter { $Message -match 'taking it over' }
     }
 
+    It 'ends with Timeout, not with a terminal state, when the existing session never clears' {
+        $script:phases.Enqueue('existing-session')
+        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 20 -PollSeconds 5).Outcome | Should -Be 'Timeout'
+    }
+
+    It 'does not trust a single <stale> reading: a token left by the previous run is replaced by starting' -ForEach @(
+        @{ stale = 'stopped' }, @{ stale = 'stopping' }, @{ stale = 'exited' }
+    ) {
+        foreach ($phase in @($stale, 'starting', 'login', 'needs-human')) { $script:phases.Enqueue($phase) }
+        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'NeedsHuman'
+    }
+
+    It 'treats the image''s login_rejected_latched event as a rejected login' {
+        $script:phases.Enqueue('needs-human')
+        $script:logLines = @('{"ts":"2026-11-12T01:00:02.000Z","src":"entrypoint","level":"error","event":"login_rejected_latched","msg":"login_rejected_latched"}')
+        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'LoginFailed'
+    }
     It 'stops on <phase> with outcome <outcome>' -ForEach @(
         @{ phase = 'stopping'; outcome = 'Stopped' }
         @{ phase = 'stopped'; outcome = 'Stopped' }
@@ -464,6 +483,21 @@ Describe 'Wait-GwGatewayLogin' {
     }
 }
 
+Describe 'Get-GwContainerStartTime' {
+    It 'returns the time the container was last started, as the engine wrote it' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('2026-11-12T05:01:02.44782648Z') }
+        Get-GwContainerStartTime -Runtime $script:desktop -ContainerName 'ctr' | Should -Be '2026-11-12T05:01:02.44782648Z'
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwDocker -Times 1 -Exactly -ParameterFilter { ($ArgumentList -join ' ') -eq 'inspect --format {{.State.StartedAt}} ctr' }
+    }
+
+    It 'returns null for a missing container and for the zero time of a container that never started' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -ExitCode 1 -Output @('Error: No such object: ctr') }
+        Get-GwContainerStartTime -Runtime $script:desktop -ContainerName 'ctr' | Should -BeNullOrEmpty
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('0001-01-01T00:00:00Z') }
+        Get-GwContainerStartTime -Runtime $script:desktop -ContainerName 'ctr' | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-GwEngineTime' {
     It 'returns the engine clock as text' {
         Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('2026-11-12T00:59:58.123456789Z') }
@@ -512,6 +546,16 @@ Describe 'Start-GwStack, Stop-GwStack and Remove-GwStack' {
     It 'starts with compose up -d' {
         Start-GwStack -Runtime $script:desktop -Path 'C:\gw' -Confirm:$false | Should -BeTrue
         $script:composeCalls | Should -Be @('compose -f C:\gw\compose.yaml up -d')
+    }
+
+    It 'adds --force-recreate when asked: compose does not recreate a container when only a secret file changed' {
+        Start-GwStack -Runtime $script:desktop -Path 'C:\gw' -ForceRecreate -Confirm:$false | Out-Null
+        $script:composeCalls | Should -Be @('compose -f C:\gw\compose.yaml up -d --force-recreate')
+    }
+
+    It 'gives a captured compose up a long deadline, because it may have to pull the image' {
+        Start-GwStack -Runtime $script:desktop -Path 'C:\gw' -NoRecreate -Confirm:$false | Out-Null
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwDocker -Times 1 -Exactly -ParameterFilter { $TimeoutSeconds -ge 900 }
     }
 
     It 'adds --no-recreate when asked, so a running gateway is never replaced' {

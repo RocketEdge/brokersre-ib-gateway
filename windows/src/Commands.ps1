@@ -249,9 +249,9 @@ function Write-GwGatewayFolder {
         Write-GwConsole -Message 'API clients may place orders (READ_ONLY_API=no). The kit itself never places, changes or cancels an order.' -Status 'WARN'
     }
     if ($PSCmdlet.ShouldProcess((Get-GwKitStatePath -Path $Folder), 'Write kit-state.json')) {
-        # A recorded rejected login survives until the credentials are entered again.
+        # A recorded rejected login survives until both secret files were written again.
         $rejected = ''
-        if (-not $secretsWritten) { $rejected = [string](Get-GwPropertyValue -InputObject (Get-GwKitState -Path $Folder) -Name 'LoginRejectedUtc' -Default '') }
+        if (-not $secretsWritten) { $rejected = Get-GwLoginRejection -Path $Folder }
         Save-GwKitState -Path $Folder -State ([pscustomobject][ordered]@{
                 Runtime          = [string]$Detected.Mode
                 Distro           = [string]$Detected.Distro
@@ -260,11 +260,54 @@ function Write-GwGatewayFolder {
                 ProjectName      = $Setting.ProjectName
                 ApiPort          = $Setting.ApiPort
                 ImageRef         = $ImageRef
-                LoginRejectedUtc = (ConvertTo-GwTimestampText -Value $rejected)
+                LoginRejectedUtc = $rejected
             })
     }
     return (& $finish '')
 }
+
+function Invoke-GwRejectedLoginStop {
+    <#
+    .SYNOPSIS
+    Records that IBKR rejected the login (or the gateway needs a person) and stops the stack.
+    .DESCRIPTION
+    Shared by setup.ps1 and start.ps1. The record (Save-GwLoginRejection) makes both refuse to
+    start the stack until the credentials are entered again. The stop is 'docker compose
+    stop': with restart "unless-stopped" Docker would otherwise start the container again and
+    the gateway would send the same credentials once more; a stopped container stays stopped,
+    also across a restart of Docker or Windows. The stop runs in a finally block, so it
+    happens even when the record cannot be written (the error is then thrown after the stop).
+    Nothing is asked: the caller has already decided, and start.ps1 runs unattended.
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .PARAMETER Path
+    Gateway folder.
+    .OUTPUTS
+    System.Boolean: true when the stack was stopped. An error while recording is thrown.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $stopped = $false
+    try { Save-GwLoginRejection -Path $Path | Out-Null }
+    finally {
+        $stopped = Stop-GwStack -Runtime $Runtime -Path $Path -Confirm:$false
+        if ($stopped) {
+            Write-GwConsole -Status 'WARN' -Message ('The gateway was stopped so nothing is sent to IBKR again. ' +
+                'The kit will not start it until you enter the credentials with: setup.ps1 -ResetSecrets')
+        }
+        else {
+            $composeFile = Join-Path (Resolve-GwFullPath -Path $Path) 'compose.yaml'
+            $manual = 'The gateway could not be stopped. Stop it now so the rejected credentials are not sent again: docker compose -f "{0}" stop' -f $composeFile
+            Write-GwConsole -Status 'FAIL' -Message $manual
+        }
+    }
+    return $stopped
+}
+
 function Invoke-GwSetup {
     <#
     .SYNOPSIS
@@ -282,11 +325,19 @@ function Invoke-GwSetup {
     5. Renders compose.yaml from the template. An existing, different compose.yaml is never
        replaced unless -Force is given (a backup is kept), so a re-run cannot silently switch
        paper to live or recreate a running gateway.
-    6. 'docker compose up -d' (skipped with -NoStart).
+    6. 'docker compose up -d' (skipped with -NoStart). When the credentials were written in
+       this run the container is replaced ('--force-recreate'): compose does not recreate a
+       container when only the content of a secret file changed, so the gateway would keep
+       running with the old credentials and the new ones would never be tried.
     7. Follows the login through the phase file and tells the operator when to approve 2FA.
-       A rejected login is recorded in kit-state.json and stops the stack once, so neither
-       Docker's restart policy, nor the start tasks, nor a plain re-run of setup send the same
-       credentials again; only -ResetSecrets clears the record.
+       The window for "login rejected" events starts when the container's current run
+       started, so a rejection that happened before this run (the restart policy or a start
+       task brought the container up, nobody was watching) is found too. A rejected login, or
+       a gateway that reports it needs a person, is recorded in kit-state.json and the stack
+       is stopped (the stop happens even if the record cannot be written). After that neither
+       the start tasks nor a plain re-run of setup start the stack; only -ResetSecrets clears
+       the record. What the kit cannot prevent is described in the README ("If IBKR rejects
+       the login").
     8. Prints a Python and a C# connection snippet.
     Idempotent. Under -WhatIf nothing is created, changed, asked or started.
     .PARAMETER Path
@@ -399,7 +450,7 @@ function Invoke-GwSetup {
         return (& $done 0 'NotStarted')
     }
 
-    $rejectedEarlier = [string](Get-GwPropertyValue -InputObject (Get-GwKitState -Path $folder) -Name 'LoginRejectedUtc' -Default '')
+    $rejectedEarlier = Get-GwLoginRejection -Path $folder
     if ($rejectedEarlier -ne '' -and -not $WhatIfPreference) {
         $refusal = ('IBKR rejected these credentials at {0}. The kit does not send them again: repeated failed logins can lock the account. ' +
             'Enter them again with: setup.ps1 -ResetSecrets') -f $rejectedEarlier
@@ -409,12 +460,14 @@ function Invoke-GwSetup {
 
     Write-GwConsole -Message ''
     Write-GwConsole -Message 'Step 6 of 8: starting the gateway (the first start downloads the image, about 1 GB)'
-    # The window for "login failed" events starts at the engine's clock: docker filters its
-    # logs by the VM clock, which can lag the Windows clock after a resume from sleep.
-    $since = ''
-    if (-not $WhatIfPreference) { $since = [string](Get-GwEngineTime -Runtime $detected) }
-    if ($since -eq '') { $since = ConvertTo-GwTimestampText -Value (Get-GwUtcNow) }
-    $started = Start-GwStack -Runtime $detected -Path $folder -ShowProgress
+    # Fallback start of the window for "login rejected" events, taken before the start: the
+    # engine's clock (docker filters its logs by the VM clock, which can lag the Windows clock
+    # after a resume from sleep), then the Windows clock.
+    $fallbackSince = ''
+    if (-not $WhatIfPreference) { $fallbackSince = [string](Get-GwEngineTime -Runtime $detected) }
+    if ($fallbackSince -eq '') { $fallbackSince = ConvertTo-GwTimestampText -Value (Get-GwUtcNow) }
+    # New credentials need a new container: 'up -d' alone leaves a running one untouched.
+    $started = Start-GwStack -Runtime $detected -Path $folder -ShowProgress -ForceRecreate:$written.SecretsWritten
     if ($WhatIfPreference) {
         Write-GwConsole -Message 'Preview only (-WhatIf): nothing was created, changed, asked or started.'
         return (& $done 0 'WhatIf')
@@ -426,21 +479,15 @@ function Invoke-GwSetup {
 
     Write-GwConsole -Message ''
     Write-GwConsole -Message 'Step 7 of 8: logging in (have your phone with IBKR Mobile ready)'
+    # The window starts where the container's current run started. When 'up -d' found the
+    # container already running, that is before this run, so a login IBKR rejected while
+    # nobody was watching is found now instead of "Logging in..." until the timeout.
+    $since = [string](Get-GwContainerStartTime -Runtime $detected -ContainerName $setting.ContainerName)
+    if ($since -eq '') { $since = $fallbackSince }
     $login = Wait-GwGatewayLogin -Runtime $detected -ContainerName $setting.ContainerName -ApiPort $setting.ApiPort -TimeoutSeconds $LoginTimeoutSeconds -Since $since
-    if ($login.Outcome -eq 'LoginFailed') {
-        # Record it first, so the start tasks and a plain re-run refuse to send the same
-        # credentials; then stop explicitly, because with restart "unless-stopped" Docker would
-        # otherwise start the container again.
-        $state = Get-GwKitState -Path $folder
-        $state | Add-Member -NotePropertyName 'LoginRejectedUtc' -NotePropertyValue (ConvertTo-GwTimestampText -Value (Get-GwUtcNow)) -Force
-        Save-GwKitState -Path $folder -State $state
-        if (Stop-GwStack -Runtime $detected -Path $folder -Confirm:$false) {
-            Write-GwConsole -Message 'The gateway was stopped so the rejected credentials are not sent again.' -Status 'WARN'
-        }
-        else {
-            Write-GwConsole -Status 'FAIL' -Message ('The gateway could not be stopped. Stop it now so the rejected credentials are not sent again: docker compose -f "{0}" stop' -f $composePath)
-        }
-        return (& $done 2 'LoginFailed')
+    if ($login.Outcome -eq 'LoginFailed' -or $login.Outcome -eq 'NeedsHuman') {
+        Invoke-GwRejectedLoginStop -Runtime $detected -Path $folder | Out-Null
+        return (& $done 2 $login.Outcome)
     }
     if ($login.Outcome -ne 'LoggedIn') { return (& $done 2 $login.Outcome) }
     Write-GwConsole -Message ''
@@ -682,9 +729,18 @@ function Invoke-GwStart {
     .DESCRIPTION
     Uses the runtime recorded by setup, waits (bounded) for that engine to answer and runs
     'docker compose up -d --no-recreate': a stopped stack is started, a running gateway is never
-    replaced or restarted. After a login IBKR rejected (recorded by setup) it starts nothing
-    until the credentials are entered again. It never prompts and never touches 2FA; after a Windows restart the
-    gateway logs in by itself and IBKR sends the 2FA prompt to the operator's phone.
+    replaced or restarted. While a rejected login is on record it starts nothing until the
+    credentials are entered again.
+    After the start it watches the login for -FollowSeconds, read-only, exactly as setup does,
+    with the window for "login rejected" events starting when the container's current run
+    started. That covers the case nobody is at the keyboard for: the password was changed or
+    expired at IBKR, Windows restarted, and the container came up by Docker's restart policy
+    or by this task. When IBKR rejected the login, or the gateway reports that it needs a
+    person, the function records it, stops the stack ('docker compose stop'; a stopped
+    container is not started again by Docker) and returns 1, so the credentials are not sent
+    again at the next start or restart. A login that merely waits for 2FA is left alone.
+    It never prompts and never touches 2FA; after a Windows restart the gateway logs in by
+    itself and IBKR sends the 2FA prompt to the operator's phone.
     With -KeepAlive and Docker Engine in WSL the function then holds one wsl.exe session open
     ('sleep infinity') and returns only when that session ends, because WSL shuts an idle
     distribution down even while dockerd runs. Each run leaves lines in <Path>\kit.log (size
@@ -695,8 +751,12 @@ function Invoke-GwStart {
     Docker Engine in WSL only: keep a session open after starting.
     .PARAMETER WaitSeconds
     How long to wait for the engine.
+    .PARAMETER FollowSeconds
+    How long to watch the login after the start; 0 does not watch (a rejected login is then
+    noticed only by the next run of start.ps1 or setup.ps1). Default 900.
     .OUTPUTS
-    PSCustomObject: ExitCode (0 started, 1 not started).
+    PSCustomObject: ExitCode (0 started; 1 not started, or stopped again because the login was
+    rejected or the gateway did not come up).
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -705,7 +765,8 @@ function Invoke-GwStart {
     param(
         [string]$Path = 'C:\BrokerSRE\gateway',
         [switch]$KeepAlive,
-        [ValidateRange(5, 3600)][int]$WaitSeconds = 600
+        [ValidateRange(5, 3600)][int]$WaitSeconds = 600,
+        [ValidateRange(0, 86400)][int]$FollowSeconds = 900
     )
     $folder = Resolve-GwFullPath -Path $Path
     $log = Join-Path $folder 'kit.log'
@@ -714,7 +775,7 @@ function Invoke-GwStart {
         Write-GwConsole -Message ('No kit-state.json in {0}: run setup.ps1 for this folder first.' -f $folder) -Status 'FAIL'
         return [pscustomobject]@{ ExitCode = 1 }
     }
-    $rejected = [string](Get-GwPropertyValue -InputObject $state -Name 'LoginRejectedUtc' -Default '')
+    $rejected = Get-GwLoginRejection -Path $folder
     if ($rejected -ne '') {
         # Starting the stack would send credentials IBKR has already rejected.
         Write-GwLog -Path $log -Message ('start: not started, IBKR rejected the stored credentials at {0}; run setup.ps1 -ResetSecrets' -f $rejected)
@@ -728,13 +789,46 @@ function Invoke-GwStart {
         Write-GwConsole -Message 'The container engine did not answer in time; nothing was started.' -Status 'FAIL'
         return [pscustomobject]@{ ExitCode = 1 }
     }
-    $started = Start-GwStack -Runtime $runtime -Path $folder -NoRecreate -Confirm:$false
+    # 1200 s: 'up' may have to pull the image. Engine wait + this + the follow stay inside the
+    # one-hour limit of the sign-in task. On a timeout the whole process tree is ended.
+    $started = Start-GwStack -Runtime $runtime -Path $folder -NoRecreate -TimeoutSeconds 1200 -Confirm:$false
     if (-not $started) {
         Write-GwLog -Path $log -Message 'start: docker compose up -d --no-recreate failed'
         return [pscustomobject]@{ ExitCode = 1 }
     }
     Write-GwLog -Path $log -Message 'start: stack started (a running gateway is left as it is); IBKR will ask for 2FA if a login is needed'
     Write-GwConsole -Message 'The stack is up. If the gateway had to log in, approve the IBKR Mobile prompt on your phone.' -Status 'PASS'
+
+    $containerName = [string](Get-GwPropertyValue -InputObject $state -Name 'ContainerName' -Default '')
+    if ($FollowSeconds -gt 0 -and $containerName -ne '') {
+        $apiPort = 0
+        [void][int]::TryParse([string](Get-GwPropertyValue -InputObject $state -Name 'ApiPort' -Default '0'), [ref]$apiPort)
+        # From the container's own start: a login IBKR rejected before this run is found too.
+        $since = [string](Get-GwContainerStartTime -Runtime $runtime -ContainerName $containerName)
+        if ($since -eq '') { $since = [string](Get-GwEngineTime -Runtime $runtime) }
+        if ($since -eq '') { $since = ConvertTo-GwTimestampText -Value (Get-GwUtcNow) }
+        $login = Wait-GwGatewayLogin -Runtime $runtime -ContainerName $containerName -ApiPort $apiPort -TimeoutSeconds $FollowSeconds -Since $since
+        switch ([string]$login.Outcome) {
+            'LoggedIn' { Write-GwLog -Path $log -Message 'start: the gateway is logged in' }
+            'Timeout' {
+                Write-GwLog -Path $log -Message ('start: not logged in after {0} s (last state: {1}); the gateway keeps running and was left alone' -f $FollowSeconds, $login.Phase)
+            }
+            { $_ -eq 'LoginFailed' -or $_ -eq 'NeedsHuman' } {
+                $why = 'IBKR rejected the stored credentials'
+                if ($_ -eq 'NeedsHuman') { $why = 'the gateway reports that it needs a person (state needs-human)' }
+                $stopped = $false
+                try { $stopped = Invoke-GwRejectedLoginStop -Runtime $runtime -Path $folder }
+                finally {
+                    Write-GwLog -Path $log -Message ('start: {0}; stack stopped: {1}; nothing is started again until you run setup.ps1 -ResetSecrets' -f $why, $stopped)
+                }
+                return [pscustomobject]@{ ExitCode = 1 }
+            }
+            default {
+                Write-GwLog -Path $log -Message ('start: the gateway did not come up ({0}, last state: {1}); see docker logs {2}' -f $login.Outcome, $login.Phase, $containerName)
+                return [pscustomobject]@{ ExitCode = 1 }
+            }
+        }
+    }
     if ($KeepAlive -and $runtime.Mode -eq 'WslEngine') {
         Write-GwLog -Path $log -Message ('start: holding a session open in {0} so the distribution is not shut down as idle' -f $runtime.Distro)
         $session = Invoke-GwWsl -ArgumentList @('-d', [string]$runtime.Distro, '--exec', 'sleep', 'infinity') -Interactive

@@ -283,6 +283,41 @@ Describe 'Kit state file' {
     }
 }
 
+Describe 'Rejected-login record' {
+    BeforeEach {
+        $script:recordFolder = Join-Path $TestDrive ('record-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:recordFolder | Out-Null
+        Mock -ModuleName BrokerSre.Gateway Get-GwUtcNow { return (New-Object DateTime(2026, 11, 12, 3, 8, 31, [DateTimeKind]::Utc)) }
+    }
+
+    It 'returns an empty string when setup has not run or nothing is recorded' {
+        Get-GwLoginRejection -Path $script:recordFolder | Should -Be ''
+        Save-GwKitState -Path $script:recordFolder -State ([pscustomobject]@{ Runtime = 'DockerDesktop'; TradingMode = 'paper' })
+        Get-GwLoginRejection -Path $script:recordFolder | Should -Be ''
+    }
+
+    It 'records the current UTC time and keeps every other property of the state' {
+        Save-GwKitState -Path $script:recordFolder -State ([pscustomobject]@{ Runtime = 'DockerDesktop'; TradingMode = 'live'; ApiPort = 4001 })
+        Save-GwLoginRejection -Path $script:recordFolder | Should -Be '2026-11-12T03:08:31Z'
+        $state = Get-GwKitState -Path $script:recordFolder
+        $state.TradingMode | Should -Be 'live'
+        $state.ApiPort | Should -Be 4001
+        [System.IO.File]::ReadAllText((Join-Path $script:recordFolder 'kit-state.json')) | Should -Match '"LoginRejectedUtc":\s*"2026-11-12T03:08:31Z"'
+    }
+
+    It 'reads the record back as the stored text, not as a date in the local culture' {
+        # PowerShell 7 parses the ISO string into a DateTime; a string cast gave '11/12/2026 03:08:31'.
+        Save-GwKitState -Path $script:recordFolder -State ([pscustomobject]@{ Runtime = 'DockerDesktop' })
+        Save-GwLoginRejection -Path $script:recordFolder | Out-Null
+        Get-GwLoginRejection -Path $script:recordFolder | Should -BeExactly '2026-11-12T03:08:31Z'
+    }
+
+    It 'throws instead of creating a state file when setup has not run in the folder' {
+        { Save-GwLoginRejection -Path $script:recordFolder } | Should -Throw '*No kit-state.json*'
+        Test-Path -LiteralPath (Join-Path $script:recordFolder 'kit-state.json') | Should -BeFalse
+    }
+}
+
 Describe 'Write-GwLog' {
     It 'appends timestamped lines' {
         $path = Join-Path $TestDrive 'kit.log'

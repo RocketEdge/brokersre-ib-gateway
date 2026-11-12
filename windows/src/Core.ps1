@@ -601,6 +601,57 @@ function Save-GwKitState {
     Write-GwFileAtomic -Path (Get-GwKitStatePath -Path $Path) -Text ($json.Replace("`r`n", "`n") + "`n")
 }
 
+function Get-GwLoginRejection {
+    <#
+    .SYNOPSIS
+    Returns when IBKR last rejected the stored credentials, as recorded in kit-state.json.
+    .DESCRIPTION
+    The record (LoginRejectedUtc) is what keeps setup.ps1 and start.ps1 from sending the same
+    credentials again; only writing both secret files again clears it. The value is returned
+    as the text that was stored: PowerShell 7 parses an ISO timestamp in JSON into a DateTime,
+    and a plain string cast would turn that into '11/12/2026 01:00:00', which was then shown
+    and written back. ConvertTo-GwTimestampText gives the same text under both editions.
+    .PARAMETER Path
+    Gateway folder.
+    .OUTPUTS
+    System.String: 'yyyy-MM-ddTHH:mm:ssZ', or an empty string when nothing is recorded (or
+    setup has not run in the folder).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $state = Get-GwKitState -Path $Path
+    if ($null -eq $state) { return '' }
+    return (ConvertTo-GwTimestampText -Value (Get-GwPropertyValue -InputObject $state -Name 'LoginRejectedUtc' -Default ''))
+}
+
+function Save-GwLoginRejection {
+    <#
+    .SYNOPSIS
+    Records in kit-state.json that IBKR rejected the stored credentials now.
+    .DESCRIPTION
+    Sets LoginRejectedUtc to the current UTC time and rewrites the state file atomically. From
+    then on setup.ps1 (without -ResetSecrets) and start.ps1 refuse to start the stack. A
+    failure to write is thrown: the caller stops the stack in a finally block, so the
+    credentials are not sent again even when the record could not be saved.
+    .PARAMETER Path
+    Gateway folder (setup.ps1 must have run there).
+    .OUTPUTS
+    System.String: the recorded time.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $state = Get-GwKitState -Path $Path
+    if ($null -eq $state) {
+        throw (New-Object System.InvalidOperationException(('No kit-state.json in {0}: the rejected login could not be recorded.' -f (Resolve-GwFullPath -Path $Path))))
+    }
+    $stamp = ConvertTo-GwTimestampText -Value (Get-GwUtcNow)
+    $state | Add-Member -NotePropertyName 'LoginRejectedUtc' -NotePropertyValue $stamp -Force
+    Save-GwKitState -Path $Path -State $state
+    return $stamp
+}
+
 function Write-GwLog {
     <#
     .SYNOPSIS

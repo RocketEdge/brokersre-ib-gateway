@@ -30,6 +30,11 @@ BeforeAll {
         if ($ArgumentList[0] -eq 'run') { return (& $script:probeHandler $ArgumentList) }
         if ($joined -match ' up -d') { return (Get-TestNativeResult -ExitCode $script:upExitCode -Output @('started')) }
         if ($joined -match ' stop$') { return (Get-TestNativeResult -ExitCode $script:stopExitCode) }
+        if ($joined -match ' down') { return (Get-TestNativeResult -ExitCode $script:downExitCode) }
+        if ($joined -match 'State\.StartedAt') {
+            if ($script:startedAt -eq '') { return (Get-TestNativeResult -ExitCode 1 -Output @('Error: No such object')) }
+            return (Get-TestNativeResult -Output @($script:startedAt))
+        }
         if ($ArgumentList[0] -eq 'info') { return (& $script:infoHandler) }
         return (Get-TestNativeResult)
     }
@@ -78,6 +83,8 @@ Describe 'Commands' {
         $script:infoHandler = { Get-TestNativeResult -Output @('29.9.3') }
         $script:upExitCode = 0
         $script:stopExitCode = 0
+        $script:downExitCode = 0
+        $script:startedAt = ''
         $script:waitSince = ''
         $script:loginOutcome = 'LoggedIn'
         $script:waitCalls = 0
@@ -318,7 +325,7 @@ Describe 'Commands' {
             $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
             $result.ExitCode | Should -Be 0
             $result.Outcome | Should -Be 'LoggedIn'
-            @($script:dockerCalls | Where-Object { $_ -match ' up -d$' }).Count | Should -Be 1
+            @($script:dockerCalls | Where-Object { $_ -match ' up -d( --force-recreate)?$' }).Count | Should -Be 1
             $script:waitCalls | Should -Be 1
             ($script:console -join "`n") | Should -Match 'from ib_async import IB'
             ($script:console -join "`n") | Should -Match 'eConnect\("127\.0\.0\.1", 4002, 1\)'
@@ -329,7 +336,7 @@ Describe 'Commands' {
             $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
             $result.ExitCode | Should -Be 2
             $result.Outcome | Should -Be 'LoginFailed'
-            @($script:dockerCalls | Where-Object { $_ -match ' up -d$' }).Count | Should -Be 1
+            @($script:dockerCalls | Where-Object { $_ -match ' up -d( --force-recreate)?$' }).Count | Should -Be 1
             @($script:dockerCalls | Where-Object { $_ -match ' stop$' }).Count | Should -Be 1
             @($script:dockerCalls | Where-Object { $_ -match ' restart' }).Count | Should -Be 0
             $script:waitCalls | Should -Be 1
@@ -370,15 +377,56 @@ Describe 'Commands' {
             ($script:console -join "`n") | Should -Not -Match 'The gateway was stopped so'
         }
 
-        It 'starts the login-failure window at the engine clock, not the Windows clock' {
+        It 'starts the login-failure window at the container''s own start time, so a rejection before this run is seen' {
+            $script:startedAt = '2026-11-11T22:15:00.123456789Z'
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:waitSince | Should -Be '2026-11-11T22:15:00.123456789Z'
+        }
+
+        It 'falls back to the engine clock, then to the Windows clock, when the start time is not available' {
             $script:infoHandler = { Get-TestNativeResult -Output @('2026-11-12T00:00:00.500000000Z') }
             Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
             $script:waitSince | Should -Be '2026-11-12T00:00:00.500000000Z'
+            $other = Join-Path $TestDrive ('gw-' + [guid]::NewGuid().ToString('N'))
+            $script:infoHandler = { Get-TestNativeResult -Output @('29.9.3') }
+            Invoke-GwSetup -Path $other -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:waitSince | Should -Be '2026-11-12T01:00:00Z'
         }
 
-        It 'falls back to the Windows clock when the engine does not report its time' {
+        It 'recreates the container after new credentials were written: compose would otherwise keep the old ones' {
             Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
-            $script:waitSince | Should -Be '2026-11-12T01:00:00Z'
+            @($script:dockerCalls | Where-Object { $_ -match ' up -d --force-recreate$' }).Count | Should -Be 1
+            $script:dockerCalls.Clear()
+            Invoke-GwSetup -Path $script:folder -Confirm:$false | Out-Null
+            @($script:dockerCalls | Where-Object { $_ -match ' up -d$' }).Count | Should -Be 1
+            @($script:dockerCalls | Where-Object { $_ -match 'force-recreate' }).Count | Should -Be 0
+        }
+
+        It 'records and stops when the gateway reports needs-human: a person must act before anything is sent again' {
+            $script:loginOutcome = 'NeedsHuman'
+            $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 2
+            (Get-GwLoginRejection -Path $script:folder) | Should -Be '2026-11-12T01:00:00Z'
+            @($script:dockerCalls | Where-Object { $_ -match ' stop$' }).Count | Should -Be 1
+        }
+
+        It 'still stops the stack when recording the rejection fails' {
+            $script:loginOutcome = 'LoginFailed'
+            Mock -ModuleName BrokerSre.Gateway Save-GwLoginRejection { throw (New-Object System.IO.IOException('disk full')) }
+            { Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false } | Should -Throw
+            @($script:dockerCalls | Where-Object { $_ -match ' stop$' }).Count | Should -Be 1
+        }
+
+        It 'keeps the recorded time as the same text under both PowerShell editions' {
+            $script:loginOutcome = 'LoginFailed'
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            Invoke-GwSetup -Path $script:folder -NoStart -Confirm:$false | Out-Null
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'kit-state.json')) | Should -Match '"LoginRejectedUtc":\s*"2026-11-12T01:00:00Z"'
+            Invoke-GwStart -Path $script:folder | Out-Null
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'kit.log')) | Should -Match 'rejected the stored credentials at 2026-11-12T01:00:00Z'
+            $script:console.Clear()
+            Invoke-GwSetup -Path $script:folder -Confirm:$false | Out-Null
+            ($script:console -join "`n") | Should -Match 'at 2026-11-12T01:00:00Z'
         }
 
         It 'leaves the gateway running and returns 2 when the wait times out' {
@@ -577,8 +625,49 @@ Describe 'Commands' {
             }
             $result = Invoke-GwStart -Path $script:folder
             $result.ExitCode | Should -Be 0
-            $script:dockerCalls[$script:dockerCalls.Count - 1] | Should -Be ('compose -f {0} up -d --no-recreate' -f (Join-Path $script:folder 'compose.yaml'))
+            $script:dockerCalls | Should -Contain ('compose -f {0} up -d --no-recreate' -f (Join-Path $script:folder 'compose.yaml'))
             [System.IO.File]::ReadAllText((Join-Path $script:folder 'kit.log')) | Should -Match 'stack started'
+        }
+
+        It 'follows the login from the container''s start time, so a rejection that nobody watched is found' {
+            $script:startedAt = '2026-11-11T22:15:00Z'
+            Invoke-GwStart -Path $script:folder | Out-Null
+            $script:waitCalls | Should -Be 1
+            $script:waitSince | Should -Be '2026-11-11T22:15:00Z'
+        }
+
+        It 'records a rejected login found after an unattended start, stops the stack and returns 1' {
+            $script:startedAt = '2026-11-11T22:15:00Z'
+            $script:loginOutcome = 'LoginFailed'
+            $result = Invoke-GwStart -Path $script:folder
+            $result.ExitCode | Should -Be 1
+            (Get-GwLoginRejection -Path $script:folder) | Should -Be '2026-11-12T01:00:00Z'
+            $script:dockerCalls[$script:dockerCalls.Count - 1] | Should -Match ' stop$'
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'kit.log')) | Should -Match 'setup\.ps1 -ResetSecrets'
+            $script:dockerCalls.Clear()
+            (Invoke-GwStart -Path $script:folder).ExitCode | Should -Be 1
+            @($script:dockerCalls | Where-Object { $_ -match ' up ' }).Count | Should -Be 0
+        }
+
+        It 'does the same for needs-human, and leaves the gateway alone while 2FA is merely pending' {
+            $script:loginOutcome = 'NeedsHuman'
+            (Invoke-GwStart -Path $script:folder).ExitCode | Should -Be 1
+            @($script:dockerCalls | Where-Object { $_ -match ' stop$' }).Count | Should -Be 1
+            $other = Join-Path $TestDrive ('gw-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $other | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $other 'compose.yaml'), "services: {}`n")
+            Save-GwKitState -Path $other -State ([pscustomobject]@{
+                    Runtime = 'DockerDesktop'; Distro = ''; TradingMode = 'paper'; ContainerName = 'c'; ProjectName = 'p'; ApiPort = 4002; ImageRef = 'i'
+                })
+            $script:dockerCalls.Clear()
+            $script:loginOutcome = 'Timeout'
+            (Invoke-GwStart -Path $other).ExitCode | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -match ' stop$' }).Count | Should -Be 0
+        }
+
+        It 'does not follow when asked not to' {
+            Invoke-GwStart -Path $script:folder -FollowSeconds 0 | Out-Null
+            $script:waitCalls | Should -Be 0
         }
 
         It 'gives up after the deadline without starting anything and returns 1' {
