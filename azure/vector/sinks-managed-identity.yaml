@@ -1,0 +1,112 @@
+# Sink template for an Azure VM: the three row streams of vector.yaml go to the Azure Monitor
+# Logs Ingestion API of YOUR data collection rule, authenticated with the VM's system-assigned
+# managed identity (token from the instance metadata service; no secret exists).
+#
+# entrypoint.sh renders this file when AZURE_AUTH=managed-identity: it replaces the __NAME__
+# placeholders with validated values and writes /var/tmp/vector-config/sinks.yaml.
+# Keep in step with sinks-certificate.yaml: the two files differ ONLY in the header and in the
+# `auth` blocks (azure/tests/run.sh fails when anything else differs). For a user-assigned
+# identity add `user_assigned_managed_identity_id: <client id>` to each auth block.
+#
+# Option names verified against Vector 0.61.0 (src/sinks/azure_logs_ingestion, azure_common).
+# Limits behind the numbers (Azure Monitor service limits, read 2026-11-12):
+#   - one API call is at most 1 MB and is sent uncompressed; Vector measures batch.max_bytes on
+#     the in-memory event, which for these rows is larger than the JSON text unless a string is
+#     full of quotes or backslashes (2 bytes each in JSON). Events and metrics: short tokens
+#     and numbers, 900,000 bytes. Raw lines: free text, so 450,000 bytes keeps even a batch of
+#     pure quote characters under 1 MB (control characters are removed by raw_out).
+#   - a rejected call is retried for 401/403/404 as well: a role assignment or a new rule
+#     takes minutes to propagate, and losing rows meanwhile would be silent. 413 (too large)
+#     and 400 (malformed) are NOT retried, they would never succeed; the batch is dropped and
+#     counted (component_errors_total / component_discarded_events_total on stdout).
+#   - disk buffers: 268,435,488 bytes each is Vector's minimum. Events and metrics block the
+#     reader when the buffer is full (the files on the log volume are the backlog); raw lines
+#     are dropped instead (drop_newest) so a flood of raw text can never hold back the rows
+#     the alerts depend on.
+# acknowledgements: a file position is checkpointed only after its rows are on disk in the
+# buffer or accepted by Azure, so a crash re-reads lines instead of losing them.
+
+sinks:
+  azure_events:
+    type: azure_logs_ingestion
+    inputs:
+      - events_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IbGwEvents_CL
+    auth:
+      azure_credential_kind: managed_identity
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 900000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]
+
+  azure_metrics:
+    type: azure_logs_ingestion
+    inputs:
+      - metrics_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IbGwMetrics_CL
+    auth:
+      azure_credential_kind: managed_identity
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 900000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]
+
+  azure_raw:
+    type: azure_logs_ingestion
+    inputs:
+      - raw_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IBGatewayLogs_CL
+    auth:
+      azure_credential_kind: managed_identity
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 450000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: drop_newest
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]

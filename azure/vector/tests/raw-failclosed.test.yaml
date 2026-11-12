@@ -1,0 +1,14 @@
+# Unit tests for the raw-log gate when the configuration is inconsistent. Run by
+# azure/tests/run.sh twice: with IBGW_RAW_MODE=redacted but WITHOUT IBGW_REDACT_USERNAME (the
+# entrypoint never produces this state; the mapping must still refuse to ship), and with an
+# IBGW_RAW_MODE value the mapping does not know.
+tests:
+  - name: raw - redacted mode without a user name to redact ships nothing
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "2026-11-12 01:02:03:456 IBC: Login has completed for CANARY_USER_zq7"
+    no_outputs_from:
+      - raw_out

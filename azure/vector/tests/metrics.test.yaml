@@ -1,0 +1,99 @@
+# Unit tests for the metrics mapping (transform metrics_out in ../vector.yaml).
+# Run by azure/tests/run.sh with IBGW_INSTANCE=test-instance and HOST_LABEL=test-host.
+tests:
+  - name: metrics - a full sample maps to every IbGwMetrics_CL column
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: >-
+            {"ts":"2026-11-12T01:02:30.000Z","src":"metrics","boot_id":"0123456789abcdef","seq":7,
+            "phase":"logged-in","mem_working_set_bytes":1500000000,"mem_limit_bytes":2147483648,
+            "oom_kills":0,"cpu_usage_usec":123456789,"cpu_throttled_usec":0,"pids":88,
+            "java_rss_bytes":1400000000,"java_threads":71,"open_fds":312,
+            "api_close_wait_sockets":0,"disk_free_bytes_logs":5000000000,
+            "disk_free_bytes_settings":900000000}
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.timestamp, t'2026-11-12T01:02:30Z')
+              assert_eq!(.Instance, "test-instance")
+              assert_eq!(.Host, "test-host")
+              assert_eq!(.BootId, "0123456789abcdef")
+              assert_eq!(.Seq, 7)
+              assert_eq!(.Phase, "logged-in")
+              assert_eq!(.MemWorkingSetBytes, 1500000000)
+              assert_eq!(.MemLimitBytes, 2147483648)
+              assert_eq!(.OomKills, 0)
+              assert_eq!(.CpuUsageUsec, 123456789)
+              assert_eq!(.CpuThrottledUsec, 0)
+              assert_eq!(.Pids, 88)
+              assert_eq!(.JavaRssBytes, 1400000000)
+              assert_eq!(.JavaThreads, 71)
+              assert_eq!(.OpenFds, 312)
+              assert_eq!(.CloseWaitSockets, 0)
+              assert_eq!(.DiskFreeBytesLogs, 5000000000)
+              assert_eq!(.DiskFreeBytesSettings, 900000000)
+              assert_eq!(keys(.), ["BootId", "CloseWaitSockets", "CpuThrottledUsec", "CpuUsageUsec", "DiskFreeBytesLogs", "DiskFreeBytesSettings", "Host", "Instance", "JavaRssBytes", "JavaThreads", "MemLimitBytes", "MemWorkingSetBytes", "OomKills", "OpenFds", "Phase", "Pids", "Seq", "timestamp"])
+
+  - name: metrics - a key that was not measured stays empty, never 0
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: '{"ts":"2026-11-12T01:03:00.000Z","src":"metrics","boot_id":"0123456789abcdef","seq":8,"phase":"starting","mem_working_set_bytes":900000000}'
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.MemWorkingSetBytes, 900000000)
+              assert_eq!(.JavaThreads, null)
+              assert!(!exists(.JavaThreads), "JavaThreads must be absent, not 0")
+              assert!(!exists(.MemLimitBytes), "MemLimitBytes must be absent, not 0")
+              assert!(!exists(.OomKills), "OomKills must be absent, not 0")
+              assert!(!exists(.OpenFds), "OpenFds must be absent, not 0")
+              assert!(!exists(.CloseWaitSockets), "CloseWaitSockets must be absent, not 0")
+              assert_eq!(keys(.), ["BootId", "Host", "Instance", "MemWorkingSetBytes", "Phase", "Seq", "timestamp"])
+
+  - name: metrics - a malformed line is dropped
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: 'mem_working_set_bytes=1'
+    no_outputs_from:
+      - metrics_out
+
+  - name: metrics - a line without a parseable ts is dropped
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: '{"src":"metrics","boot_id":"0123456789abcdef","seq":9,"phase":"logged-in","pids":3}'
+    no_outputs_from:
+      - metrics_out
+
+  - name: metrics - a float is truncated to an integer and a non-number stays empty
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: '{"ts":"2026-11-12T01:03:30.000Z","src":"metrics","boot_id":"0123456789abcdef","seq":10,"phase":"logged-in","cpu_usage_usec":1234.9,"pids":"many","open_fds":null,"unknown_future_key":5}'
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.CpuUsageUsec, 1234)
+              assert!(!exists(.Pids), "a non-numeric value must be absent")
+              assert!(!exists(.OpenFds), "a null value must be absent")
+              assert!(!exists(.unknown_future_key), "unknown keys are ignored")
+              assert_eq!(keys(.), ["BootId", "CpuUsageUsec", "Host", "Instance", "Phase", "Seq", "timestamp"])

@@ -1,0 +1,156 @@
+# Unit tests for the events mapping (transform events_out in ../vector.yaml).
+# Run by azure/tests/run.sh with IBGW_INSTANCE=test-instance and HOST_LABEL=test-host.
+# Every account id and user name below is a canary, not a real identifier.
+tests:
+  - name: events - a full v2 line maps to every IbGwEvents_CL column
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          source_type: file
+          message: >-
+            {"ts":"2026-11-12T01:02:03.456Z","src":"ibc","level":"warn","event":"twofa_initiated",
+            "msg":"second factor requested","boot_id":"0123456789abcdef","seq":42,
+            "phase":"2fa-pending","code":1100,"account_tail":"567",
+            "attempt":2,"image_version":"10.50.1g-r20261101"}
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.timestamp, t'2026-11-12T01:02:03.456Z')
+              assert_eq!(.Instance, "test-instance")
+              assert_eq!(.Host, "test-host")
+              assert_eq!(.BootId, "0123456789abcdef")
+              assert_eq!(.Seq, 42)
+              assert_eq!(.Src, "ibc")
+              assert_eq!(.Level, "warn")
+              assert_eq!(.Event, "twofa_initiated")
+              assert_eq!(.Phase, "2fa-pending")
+              assert_eq!(.Code, 1100)
+              assert_eq!(.AccountTail, "567")
+              assert_eq!(.Msg, "second factor requested")
+              assert_eq!(.Props, {"attempt": 2, "image_version": "10.50.1g-r20261101"})
+              assert_eq!(keys(.), ["AccountTail", "BootId", "Code", "Event", "Host", "Instance", "Level", "Msg", "Phase", "Props", "Seq", "Src", "timestamp"])
+
+  - name: events - a minimal v1 line leaves the optional columns empty, never 0
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:04.000Z","src":"entrypoint","level":"info","event":"container_start","msg":"container_start","boot_id":"0123456789abcdef","seq":1}'
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Event, "container_start")
+              assert_eq!(.Seq, 1)
+              assert!(!exists(.Phase), "Phase must be absent")
+              assert!(!exists(.Code), "Code must be absent, not 0")
+              assert!(!exists(.AccountTail), "AccountTail must be absent")
+              assert!(!exists(.Props), "Props must be absent when the line has no extra key")
+              assert!(!exists(.file), "source fields must not be shipped")
+              assert!(!exists(.message), "the raw line must not be shipped")
+
+  - name: events - a malformed line is dropped
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:05.000Z","src":"entrypoint","lev'
+    no_outputs_from:
+      - events_out
+
+  - name: events - a JSON value that is not an object is dropped
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '["not","an","object"]'
+    no_outputs_from:
+      - events_out
+
+  - name: events - a line without a parseable ts is dropped
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"yesterday","src":"ibc","level":"info","event":"login_completed","msg":"x","boot_id":"0123456789abcdef","seq":3}'
+    no_outputs_from:
+      - events_out
+
+  - name: events - fields of the wrong type become empty, never 0 or a guess
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:06.000Z","src":7,"level":"info","event":"login_completed","msg":"x","boot_id":"0123456789abcdef","seq":"forty-two","code":"n/a"}'
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Event, "login_completed")
+              assert!(!exists(.Seq), "a non-integer seq must be absent")
+              assert!(!exists(.Code), "a non-integer code must be absent")
+              assert!(!exists(.Src), "a non-string src must be absent")
+
+  - name: events - an account id in msg or in an extra key leaves only its last three characters
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:07.000Z","src":"ibc","level":"info","event":"login_completed","msg":"logged in as DU1234567 and U7654321","boot_id":"0123456789abcdef","seq":4,"detail":{"account":"F0001234","note":"DF98765 ok"}}'
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Msg, "logged in as [ACCT:…567] and [ACCT:…321]")
+              assert_eq!(.Props, {"detail": {"account": "[ACCT:…234]", "note": "[ACCT:…765] ok"}})
+              shipped = encode_json(.)
+              assert!(!contains(shipped, "DU1234567"), "full account id shipped")
+              assert!(!contains(shipped, "U7654321"), "full account id shipped")
+              assert!(!contains(shipped, "F0001234"), "full account id shipped")
+              assert!(!contains(shipped, "DF98765"), "full account id shipped")
+
+  - name: events - an account_tail longer than three characters is cut to its last three
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:08.000Z","src":"ibc","level":"info","event":"login_completed","msg":"x","boot_id":"0123456789abcdef","seq":5,"account_tail":"DU1234567"}'
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.AccountTail, "567")
+              assert!(!contains(encode_json(.), "DU1234567"), "full account id shipped")
+
+  - name: events - an account id right after a line break inside an extra key is redacted too
+    inputs:
+      - insert_at: events_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:09.000Z","src":"ibc","level":"info","event":"login_completed","msg":"first\nU7654321","boot_id":"0123456789abcdef","seq":6,"dialog":["line one\nU7654321", 7, {"deep":"x\tDU1234567"}]}'
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              shipped = encode_json(.)
+              assert!(!contains(shipped, "U7654321"), "full account id shipped")
+              assert!(!contains(shipped, "DU1234567"), "full account id shipped")
+              assert!(contains(shipped, "[ACCT:…321]"), "tail missing")
+              assert!(contains(shipped, "[ACCT:…567]"), "tail missing")

@@ -1,0 +1,157 @@
+# Unit tests for raw-log shipping WITH user-name redaction (transform raw_out in ../vector.yaml).
+# Run by azure/tests/run.sh with IBGW_RAW_MODE=redacted, IBGW_REDACT_USERNAME=CANARY_USER_zq7,
+# IBGW_INSTANCE=test-instance and HOST_LABEL=test-host. Every identifier below is a canary.
+tests:
+  - name: raw - the user name and account ids are redacted before the line leaves the host
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "2026-11-12 01:02:03:456 IBC: user CANARY_USER_zq7 (canary_user_zq7, CANARY_USER_ZQ7) accounts DU1234567 U7654321 F0001234 DF98765 done"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "2026-11-12 01:02:03:456 IBC: user [USER] ([USER], [USER]) accounts [ACCT:…567] [ACCT:…321] [ACCT:…234] [ACCT:…765] done")
+              assert_eq!(.FilePath, "/var/log/ibgateway/ibc/ibc.log")
+              assert_eq!(.Computer, "test-host")
+              assert_eq!(.Instance, "test-instance")
+              assert_eq!(.Truncated, false)
+              assert!(is_timestamp(.timestamp), "timestamp must be the read time")
+              assert!(!exists(.Level), "a line without a level marker has no Level")
+              assert!(!exists(.Code), "a line without a code has no Code")
+              assert!(!exists(.message), "the unredacted line must not be shipped")
+              shipped = downcase(encode_json(.))
+              assert!(!contains(shipped, "canary_user_zq7"), "user name shipped")
+              assert_eq!(keys(.), ["Computer", "FilePath", "Instance", "RawData", "Truncated", "timestamp"])
+
+  - name: raw - identifiers that only look like account ids are left alone
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "build U1234 and XDU1234567 and U1234567890 stay, U12345 goes"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "build U1234 and XDU1234567 and U1234567890 stay, [ACCT:…345] goes")
+
+  # One input per test: Vector passes a condition when ANY output event satisfies it.
+  - name: raw - an error level and a code are derived when the line states them
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "2026-11-12 01:02:03 ERROR connection lost, errorCode=1100 (Connectivity between IB and TWS has been lost)"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Level, "error")
+              assert_eq!(.Code, 1100)
+
+  - name: raw - a warning level is derived and no code is invented
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "WARNING: a deprecated option was used on port 4002"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Level, "warn")
+              assert!(!exists(.Code), "no code in this line")
+
+  - name: raw - a line longer than 32768 bytes is cut and flagged
+    inputs:
+      - insert_at: raw_out
+        type: vrl
+        source: |
+          chunk = "0123456789abcdef"
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          .message = chunk + chunk + "TAIL CANARY_USER_zq7"
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(length(string!(.RawData)), 32768)
+              assert_eq!(.Truncated, true)
+              assert!(!contains(string!(.RawData), "TAIL"), "the tail must be cut")
+
+  - name: raw - a multi-byte line is cut to at most 32768 bytes and stays valid text
+    inputs:
+      - insert_at: raw_out
+        type: vrl
+        source: |
+          chunk = "éàü€éàü€éàü€éàü€"
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          chunk = chunk + chunk
+          .message = chunk
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert!(length(string!(.RawData)) <= 32768, "RawData is longer than 32768 bytes")
+              assert!(length(string!(.RawData)) > 8000, "RawData was cut far more than needed")
+              assert_eq!(.Truncated, true)
+              assert!(!contains(encode_json(.RawData), "\\ufffd"), "a character was cut in half")
+
+  - name: raw - control characters are replaced by a space and a tab is kept
+    inputs:
+      - insert_at: raw_out
+        type: vrl
+        source: |
+          .message = "bell" + decode_base64!("Bw==") + "escape" + decode_base64!("Gw==") + "[0m tab" + decode_base64!("CQ==") + "kept"
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "bell escape [0m tab" + decode_base64!("CQ==") + "kept")
+
+  - name: raw - a blank line is dropped
+    inputs:
+      - insert_at: raw_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "   "
+    no_outputs_from:
+      - raw_out
