@@ -319,10 +319,13 @@ async def test_stopping_is_graceful_disconnects_the_probe_and_frees_the_port(
     tmp_path: Path,
 ) -> None:
     harness = Harness(tmp_path, {}, webhook=True)
-    await harness.start()
-    harness.volume.phase("logged-in")
-    await until(lambda: harness.ib.is_connected())
-    await harness.shutdown()
+    try:
+        await harness.start()
+        harness.volume.phase("logged-in")
+        await until(lambda: harness.ib.is_connected())
+    finally:
+        # Also after a failed assertion: nothing may keep running into the next test.
+        await harness.shutdown()
     assert harness.ib.is_connected() is False
     assert harness.app.http_listening is False
     with pytest.raises(OSError):  # noqa: PT011 - any refusal: nothing listens any more
@@ -333,10 +336,12 @@ async def test_a_notification_queued_just_before_stopping_is_still_delivered(
     tmp_path: Path,
 ) -> None:
     harness = Harness(tmp_path, {}, webhook=True)
-    await harness.start()
-    harness.volume.phase("2fa-pending")
-    await until(lambda: len(harness.app.notifier_snapshot().active_alerts) == 1)
-    await harness.shutdown()
+    try:
+        await harness.start()
+        harness.volume.phase("2fa-pending")
+        await until(lambda: len(harness.app.notifier_snapshot().active_alerts) == 1)
+    finally:
+        await harness.shutdown()
     assert harness.kinds() == [("twofa_pending", "firing")]
 
 

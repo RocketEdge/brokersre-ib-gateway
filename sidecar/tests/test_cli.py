@@ -7,6 +7,7 @@ import json
 import logging
 import tarfile
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -287,7 +288,9 @@ def test_run_starts_serves_and_stops_cleanly_when_told_to(tmp_path: Path) -> Non
     )
     thread.start()
     try:
-        for _ in range(400):
+        # Bounded by time, not by attempts: on Windows one refused connect takes two seconds.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             if run_cli("healthcheck", env=env)[0] == 0:
                 break
             stop.wait(0.025)
@@ -298,6 +301,7 @@ def test_run_starts_serves_and_stops_cleanly_when_told_to(tmp_path: Path) -> Non
     finally:
         stop.set()
         thread.join(15)
+    assert not thread.is_alive(), "the run command did not stop within 15 s"
     assert result == [0]
     events = [json.loads(line)["event"] for line in out.getvalue().splitlines()]
     assert events[0] == "sidecar_started"

@@ -46,6 +46,9 @@ pythonpath = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers --strict-config"
+# A test that hangs for a minute gets the stack of every thread dumped (the run goes on):
+# without that, a hang leaves nothing to diagnose.
+faulthandler_timeout = 60
 filterwarnings = ["error"]
 markers = [
   "posix: needs POSIX file semantics (inodes, modes); skipped on Windows hosts",
