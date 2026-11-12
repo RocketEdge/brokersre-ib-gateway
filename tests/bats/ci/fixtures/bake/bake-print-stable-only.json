@@ -1,0 +1,39 @@
+{
+  "group": {
+    "default": {
+      "targets": [
+        "stable"
+      ]
+    }
+  },
+  "target": {
+    "stable": {
+      "context": ".",
+      "dockerfile": "Dockerfile",
+      "args": {
+        "IBC_RELEASE_TAG": "3.24.2-rocketedge.1",
+        "IBC_SHA256": "cc097ca1dfa75413a5fbe02e4743050af15f3308eb6a97c769b3cff9850c80c5",
+        "IBC_VERSION": "3.24.2",
+        "IB_GATEWAY_CHANNEL": "stable",
+        "IB_GATEWAY_SHA256_ARM": "cbd1e3f9368dcc9d517e23dd72cf10db4d045e58b46882d01ab528a0d1f8e343",
+        "IB_GATEWAY_SHA256_X64": "13dc8bb05cbcec8d1b0bb0b25748447cf85863fb4b94361f57fcd350f35c7a9c",
+        "IB_GATEWAY_VERSION": "10.50.1g",
+        "UBUNTU_DIGEST": "sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c"
+      },
+      "labels": {
+        "org.opencontainers.image.base.digest": "sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c",
+        "org.opencontainers.image.created": "2026-11-12T00:00:00Z",
+        "org.opencontainers.image.revision": "fixture"
+      },
+      "tags": [
+        "ghcr.io/rocketedge/brokersre-ib-gateway:10.50.1g",
+        "ghcr.io/rocketedge/brokersre-ib-gateway:10.50",
+        "ghcr.io/rocketedge/brokersre-ib-gateway:stable"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    }
+  }
+}
