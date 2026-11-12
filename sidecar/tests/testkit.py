@@ -7,6 +7,8 @@ Nothing in the suite sleeps or reads the wall clock: components take a ``Clock``
 from __future__ import annotations
 
 import asyncio
+import socket
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -130,3 +132,36 @@ def gateway_event(name: str, at: datetime) -> GatewayEvent:
 def metrics_sample(at: datetime, **values: float) -> MetricsSample:
     """Build a ``MetricsSample`` with the given measured values."""
     return MetricsSample(ts=at, boot_id="00000000000000aa", seq=1, phase="logged-in", values=values)
+
+
+def free_port() -> int:
+    """Return a TCP port that was free on 127.0.0.1 a moment ago."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+        return port
+
+
+async def http_get(port: int, path: str) -> tuple[int, dict[str, str], bytes]:
+    """GET ``path`` from 127.0.0.1:``port`` and return status, lower-cased headers and body."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(), 5)
+    finally:
+        writer.close()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("ascii").split("\r\n")
+    headers = {
+        name.lower(): value.strip() for name, value in (line.split(":", 1) for line in lines[1:])
+    }
+    return int(lines[0].split(" ")[1]), headers, body
+
+
+async def until(condition: Callable[[], bool], timeout_s: float = 5.0) -> None:
+    """Wait (yielding to the loop) until ``condition`` holds; fail after ``timeout_s``."""
+    async with asyncio.timeout(timeout_s):
+        # Polling is the point here: the condition is arbitrary test state, not an event.
+        while not condition():  # noqa: ASYNC110
+            await asyncio.sleep(0.005)

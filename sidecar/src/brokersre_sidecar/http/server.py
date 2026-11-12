@@ -116,6 +116,11 @@ class HttpServer:
         """Connections currently being served."""
 
     @property
+    def listening(self) -> bool:
+        """True between a successful ``start`` and ``close``."""
+        return self._server is not None
+
+    @property
     def port(self) -> int:
         """The bound port (the configured port before ``start``)."""
         if self._server is not None and self._server.sockets:

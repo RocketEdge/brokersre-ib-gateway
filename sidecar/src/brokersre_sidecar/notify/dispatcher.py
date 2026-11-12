@@ -130,6 +130,9 @@ class Dispatcher:
             try:
                 await self._deliver(channel, box, message)
             except asyncio.CancelledError:
+                # Stopped mid-send: keep the message for the flush at shutdown (delivery is
+                # at-least-once; a duplicate is better than a lost alert).
+                box.items.appendleft(message)
                 raise
             except BaseException:
                 self._record_failure(box, "internal_error")

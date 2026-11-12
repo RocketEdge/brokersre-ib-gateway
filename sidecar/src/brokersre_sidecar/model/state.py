@@ -104,6 +104,11 @@ class GatewayState:
         self._last_oom_at: datetime | None = None
         self._rejected_lines = 0
 
+    @property
+    def phase(self) -> str | None:
+        """The current phase token (``"unknown"`` for an unrecognised file, None when absent)."""
+        return self._phase
+
     def observe_phase(self, reading: PhaseReading | None) -> None:
         """Record one reading of the phase file.
 
