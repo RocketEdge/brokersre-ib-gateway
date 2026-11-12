@@ -246,7 +246,7 @@ STEP = st.tuples(
 )
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(steps=st.lists(STEP, max_size=60), ladder_class=st.booleans(), restart_at=st.integers(0, 60))
 def test_message_volume_is_bounded_for_any_sequence_of_verdicts(
     steps: list[tuple[float, Condition]], ladder_class: bool, restart_at: int

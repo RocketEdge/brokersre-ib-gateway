@@ -6,6 +6,7 @@ Nothing in the suite sleeps or reads the wall clock: components take a ``Clock``
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -47,9 +48,11 @@ class FakeClock:
 
 
 class RecordingSleep:
-    """An awaitable ``sleep`` replacement that returns at once and advances a ``FakeClock``.
+    """An awaitable ``sleep`` replacement that takes no real time and advances a ``FakeClock``.
 
-    ``calls`` lists every requested delay, so a test can assert on back-off schedules.
+    ``calls`` lists every requested delay, so a test can assert on back-off schedules. It
+    yields to the event loop once, as a real sleep does, so a retry loop under test cannot
+    starve the other tasks of the test.
     """
 
     def __init__(self, clock: FakeClock | None = None) -> None:
@@ -57,10 +60,11 @@ class RecordingSleep:
         self._clock = clock
 
     async def __call__(self, seconds: float) -> None:
-        """Record the delay and advance the fake clock by it."""
+        """Record the delay, advance the fake clock by it and yield once."""
         self.calls.append(seconds)
         if self._clock is not None:
             self._clock.advance(seconds)
+        await asyncio.sleep(0)
 
 
 def iso(instant: datetime) -> str:

@@ -14,16 +14,26 @@ from brokersre_sidecar.model.state import (
     GatewaySnapshot,
     GatewayState,
 )
+from brokersre_sidecar.model.status import (
+    STATUS_SCHEMA,
+    StatusDocument,
+    build_status,
+    status_json_schema,
+)
 
 __all__ = [
     "BOOT_WINDOW",
     "MEMORY_HIGH_RATIO",
     "METRIC_KEYS",
+    "STATUS_SCHEMA",
     "GatewayEvent",
     "GatewayFeed",
     "GatewaySnapshot",
     "GatewayState",
     "MetricsSample",
+    "StatusDocument",
+    "build_status",
     "parse_event",
     "parse_metrics",
+    "status_json_schema",
 ]

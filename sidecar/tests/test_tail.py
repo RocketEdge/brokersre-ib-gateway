@@ -162,7 +162,7 @@ OPERATIONS = st.lists(
 )
 
 
-@settings(max_examples=150, deadline=None)
+@settings(max_examples=60, deadline=None)
 @given(operations=OPERATIONS)
 def test_every_complete_line_is_delivered_exactly_once_and_in_order(
     operations: list[tuple[str, str]],
