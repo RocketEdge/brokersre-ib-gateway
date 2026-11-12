@@ -32,7 +32,9 @@ teardown() {
 @test "2FA, login, restart, existing-session and failure events are recognised in order" {
   run bash -c "'${BROKERSRE_LIB}/classify-ibc-log.sh' < '${FIXTURE}' | jq -r .event"
   [ "$status" -eq 0 ]
-  expected=$'ibc_version\nlogin_dialog\ntwofa_initiated\ntwofa_dialog\nlogin_completed\ndaily_restart\nlogin_completed\nexisting_session\nrelogin_required\nlogin_failed_dialog\nlogin_failed'
+  # One event per thing that happened: the Re-login dialog and IBC's "Re-login to session" are
+  # one re-login, and IBC's stop message ("Login has completed: exiting via ...") is no login.
+  expected=$'ibc_version\nlogin_dialog\ntwofa_initiated\ntwofa_dialog\nlogin_completed\ndaily_restart\nlogin_completed\nexisting_session\nrelogin_required\nlogin_failed_dialog\nlogin_failed\nlogin_completed'
   [ "$output" == "$expected" ]
 }
 
@@ -46,7 +48,7 @@ teardown() {
 @test "the phase file ends at the last phase-bearing event" {
   bash -c "'${BROKERSRE_LIB}/classify-ibc-log.sh' < '${FIXTURE}'" >/dev/null
   run cat "${LOG_DIR}/state/phase"
-  [ "$output" == "login" ]
+  [ "$output" == "logged-in" ]
 }
 
 @test "a 2FA dialog sets phase 2fa-pending and login completion sets logged-in" {
@@ -118,11 +120,54 @@ classify() {
   [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
 }
 
-@test "re-login is recognised from the dialog and from IBC's own line" {
-  run classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Re-login is required; event=Opened'
+@test "a Re-login dialog and IBC's handling of it are one event (ReloginDialogHandler logs both)" {
+  run classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Re-login is required; event=Opened' \
+    '2026-11-11 23:23:04:160 IBC: Re-login to session'
   [ "$output" == "relogin_required" ]
-  run classify '2026-11-11 23:23:05:000 IBC: Re-login to session'
-  [ "$output" == "relogin_required" ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "login" ]
+}
+
+# The four tests below come from reading IBC 3.24.2's source, not from a real log (L01): the
+# first versions of these rows matched text IBC writes in another situation, or never writes.
+
+@test "IBC's stop message is not a completed login (StopTask: 'Login has completed: exiting via ...')" {
+  mkdir -p "${LOG_DIR}/state"
+  echo stopping >"${LOG_DIR}/state/phase"
+  run classify '2026-11-11 23:59:00:000 IBC: Login has completed: exiting via [File, Close] menu'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "stopping" ]
+}
+
+@test "no classified line moves the phase out of stopping, stopped or exited" {
+  mkdir -p "${LOG_DIR}/state"
+  for phase in stopping stopped exited; do
+    echo "${phase}" >"${LOG_DIR}/state/phase"
+    run classify '2026-11-11 23:59:00:000 IBC: Login has completed' \
+      '2026-11-11 23:59:00:100 IBC: Second Factor Authentication initiated' \
+      '2026-11-11 23:59:00:200 IBC: version: 3.24.2'
+    # The events are still reported: only the phase belongs to the entrypoint from here on.
+    [ "$output" == $'login_completed\ntwofa_initiated\nibc_version' ]
+    [ "$(cat "${LOG_DIR}/state/phase")" == "${phase}" ] || {
+      echo "phase ${phase} became $(cat "${LOG_DIR}/state/phase")"
+      return 1
+    }
+  done
+}
+
+@test "the daily restart is recognised from the start script's own line (no timestamp, no IBC prefix)" {
+  run classify 'autorestart file found at /home/ibgateway/Jts/settings/abcdefgh/autorestart: authentication will not be required'
+  [ "$output" == "daily_restart" ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "restarting" ]
+}
+
+@test "the start script's other autorestart lines are not a restart" {
+  run classify 'Finding autorestart file' \
+    'WARNING: deleting extra autorestart file found at /home/ibgateway/Jts/settings/x/autorestart' \
+    'WARNING: deleting first autorestart file found' \
+    '2026-11-02 00:15:00:000 IBC: autorestart file found'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "a second-factor timeout is an event of its own" {

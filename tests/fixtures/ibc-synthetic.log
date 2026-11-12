@@ -7,9 +7,13 @@
 2026-11-01 09:00:05:010 IBC: detected dialog entitled: Second Factor Authentication; event=Opened
 2026-11-01 09:03:05:000 IBC: detected dialog entitled: Second Factor Authentication; event=Closed
 2026-11-01 09:03:07:000 IBC: Login has completed
-2026-11-02 00:15:00:000 IBC: autorestart file found
+Finding autorestart file
+autorestart file found at /home/ibgateway/Jts/settings/abcdefgh/autorestart: authentication will not be required
 2026-11-02 00:15:40:000 IBC: Login has completed
 2026-11-03 10:00:00:000 IBC: detected dialog entitled: Existing session detected; event=Opened
 2026-11-03 10:00:00:500 IBC: detected dialog entitled: Re-login is required; event=Opened
+2026-11-03 10:00:00:510 IBC: Re-login to session
 2026-11-04 10:00:00:000 IBC: detected dialog entitled: Unrecognized Username or Password; event=Opened
 2026-11-04 10:00:00:100 IBC: Login failed
+2026-11-05 09:00:00:000 IBC: Login has completed
+2026-11-05 18:00:00:000 IBC: Login has completed: exiting via [File, Close] menu
