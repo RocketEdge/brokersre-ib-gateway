@@ -28,9 +28,9 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck --version | head -2
-          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh examples/*.sh
+          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
       - name: shfmt (diff only)
-        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/compose tests/bats/run-in-image.sh examples/wait-for-gateway.sh
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/compose tests/recipes tests/bats/run-in-image.sh examples/wait-for-gateway.sh
       - name: versions.json sanity
         run: |
           jq -e '.schema_version == 1' versions.json
@@ -151,6 +151,16 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4.39.3
         with:
           sarif_file: trivy.sarif
+
+  # The log-shipper recipes under docs/recipes: `vector validate`, then an offline run against a
+  # stand-in receiver. Needs only Docker; it does not use the gateway image and contacts no
+  # log service.
+  recipes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Log-shipper recipes (Vector, validate, then an offline run against a stand-in)
+        run: tests/recipes/run.sh
 
   # The sample clients under examples/ are read-only and are tested against stand-ins: no job
   # here has IBKR credentials or contacts IBKR.
