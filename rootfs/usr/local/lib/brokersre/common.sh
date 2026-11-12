@@ -98,9 +98,11 @@ set_ports() {
   export API_PORT SOCAT_PORT
 }
 
-# set_phase <phase>: record the gateway lifecycle phase for the agent (shared log volume).
+# set_phase <phase>: record the gateway lifecycle phase on the shared log volume. This is the
+# entrypoint's write: it is never held back (the entrypoint is what ends the gateway), and it
+# is serialised with the IBC classifier's writes (phase_write in log.sh).
 set_phase() {
-  printf '%s\n' "$1" >"${LOG_DIR}/state/phase.tmp" && mv -f "${LOG_DIR}/state/phase.tmp" "${LOG_DIR}/state/phase"
+  phase_write "$1"
 }
 
 # current_phase: print the phase token from the phase file, or `unknown` when the file is

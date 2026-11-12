@@ -41,10 +41,14 @@ emit() { bash -c "source '${BROKERSRE_LIB}/log.sh'; log_event \"\$@\"" _ "$@"; }
 }
 
 @test "events written by many processes at once get unique, gap-free sequence numbers" {
+  local -a writers=()
   for i in $(seq 1 25); do
-    emit ibc info "event_${i}" "x" >/dev/null &
+    emit ibc info "event_${i}" "x" >/dev/null 3>&- &
+    writers+=("$!")
   done
-  wait
+  # Wait for these processes by pid: a bare `wait` also waits for the watchdog bats starts
+  # when BATS_TEST_TIMEOUT is set, and then never returns.
+  wait "${writers[@]}"
   [ "$(wc -l <"${LOG_DIR}/events/events.jsonl")" == "25" ]
   [ "$(jq -r .seq "${LOG_DIR}/events/events.jsonl" | sort -n | tr '\n' ' ')" == "$(seq 1 25 | tr '\n' ' ')" ]
   # In the file the numbers are also in order: the file order is the sequence order.
@@ -121,4 +125,94 @@ emit_data() { bash -c "source '${BROKERSRE_LIB}/log.sh'; log_event_data \"\$@\""
 line2' c ''"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.a == "x\"y" and .b == "line1\nline2" and .c == ""' >/dev/null
+}
+
+# ---------------------------------------------------------------------------------------------
+# phase_write: the phase file has two writers (the entrypoint and the IBC classifier) and four
+# readers (health check, relay gate, sampler, every consumer outside the container). A reader
+# must never see an empty or half-written file, and once the entrypoint has begun to stop the
+# gateway no late line of IBC's output may move the phase back.
+# ---------------------------------------------------------------------------------------------
+
+phase_fn() { bash -c "source '${BROKERSRE_LIB}/log.sh'; phase_write \"\$@\"" _ "$@"; }
+
+@test "phase_write publishes the token and leaves no temporary file behind" {
+  run phase_fn logged-in
+  [ "$status" -eq 0 ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
+  [ -z "$(find "${LOG_DIR}/state" -name 'phase.tmp*')" ]
+}
+
+@test "phase_write creates the state directory when it is missing" {
+  [ ! -d "${LOG_DIR}/state" ]
+  run phase_fn starting
+  [ "$status" -eq 0 ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "starting" ]
+}
+
+@test "phase_write --unless-ending leaves stopping, stopped and exited alone and says so" {
+  mkdir -p "${LOG_DIR}/state"
+  for phase in stopping stopped exited; do
+    echo "${phase}" >"${LOG_DIR}/state/phase"
+    run phase_fn logged-in --unless-ending
+    [ "$status" -eq 3 ]
+    [ "$(cat "${LOG_DIR}/state/phase")" == "${phase}" ]
+  done
+}
+
+@test "phase_write --unless-ending writes in every other phase, and without a phase file" {
+  run phase_fn login --unless-ending
+  [ "$status" -eq 0 ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "login" ]
+  for phase in starting login 2fa-pending logged-in restarting existing-session needs-human test-mode; do
+    echo "${phase}" >"${LOG_DIR}/state/phase"
+    run phase_fn restarting --unless-ending
+    [ "$status" -eq 0 ]
+    [ "$(cat "${LOG_DIR}/state/phase")" == "restarting" ]
+  done
+}
+
+@test "the entrypoint's own write is never refused (it is the one that ends the gateway)" {
+  mkdir -p "${LOG_DIR}/state"
+  echo stopping >"${LOG_DIR}/state/phase"
+  run phase_fn stopped
+  [ "$status" -eq 0 ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "stopped" ]
+}
+
+@test "two writers at once never publish an empty or mixed phase file" {
+  mkdir -p "${LOG_DIR}/state"
+  echo starting >"${LOG_DIR}/state/phase"
+  # Two writers alternate between long and short tokens as fast as they can while a reader
+  # samples the file. Every sample must be one whole token.
+  bash -c "source '${BROKERSRE_LIB}/log.sh'; for i in \$(seq 1 150); do phase_write existing-session; phase_write login; done" >/dev/null 2>&1 3>&- &
+  writer_a=$!
+  bash -c "source '${BROKERSRE_LIB}/log.sh'; for i in \$(seq 1 150); do phase_write 2fa-pending --unless-ending; phase_write logged-in --unless-ending; done" >/dev/null 2>&1 3>&- &
+  writer_b=$!
+  bad=0
+  samples=0
+  while kill -0 "${writer_a}" 2>/dev/null || kill -0 "${writer_b}" 2>/dev/null; do
+    value="$(cat "${LOG_DIR}/state/phase" 2>/dev/null)" || value="<unreadable>"
+    samples=$((samples + 1))
+    case "${value}" in
+      starting | existing-session | login | 2fa-pending | logged-in) ;;
+      *)
+        bad=$((bad + 1))
+        echo "bad sample: '${value}'"
+        ;;
+    esac
+  done
+  wait "${writer_a}" "${writer_b}"
+  [ "${samples}" -gt 0 ]
+  [ "${bad}" -eq 0 ]
+  [ -z "$(find "${LOG_DIR}/state" -name 'phase.tmp*')" ]
+}
+
+@test "a state directory that cannot hold a lock file does not cost the phase" {
+  mkdir -p "${LOG_DIR}/state"
+  # A directory where the lock file should be: opening the lock fails, the write must not.
+  mkdir "${LOG_DIR}/state/.phase.lock"
+  run phase_fn logged-in
+  [ "$status" -eq 0 ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
 }

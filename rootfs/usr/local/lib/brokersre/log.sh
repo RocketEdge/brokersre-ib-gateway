@@ -48,6 +48,57 @@ ts_now() {
   TZ=UTC printf '%(%Y-%m-%dT%H:%M:%S)T.%sZ' "${secs}" "${micros:0:3}"
 }
 
+# phase_write_now PHASE MODE DIR: the write itself; call it through phase_write only.
+# Returns 0 when written, 3 when MODE is --unless-ending and the gateway is ending, 1 when
+# the file could not be written (the temporary file is removed).
+phase_write_now() {
+  local phase="$1" mode="$2" dir="$3" current="" tmp="$3/phase.tmp.${BASHPID}"
+  if [ "${mode}" = "--unless-ending" ] && [ -r "${dir}/phase" ]; then
+    read -r current <"${dir}/phase" || true
+    case "${current}" in
+      stopping | stopped | exited) return 3 ;;
+    esac
+  fi
+  if printf '%s\n' "${phase}" >"${tmp}" 2>/dev/null && mv -f "${tmp}" "${dir}/phase" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "${tmp}" 2>/dev/null
+  return 1
+}
+
+# phase_write PHASE [--unless-ending]: publish the gateway's lifecycle phase.
+#
+# The phase file (${LOG_DIR}/state/phase, one token and a newline) has two writers, the
+# entrypoint and the IBC classifier, and readers that act on it: the health check, the relay
+# gate, the sampler, the sidecar and every consumer outside the container. Contract:
+#   - a reader never sees an empty or half-written file: each write goes to a temporary file
+#     of its own (named after the writing process) and is renamed over the phase file;
+#   - writers are serialised by a lock on ${LOG_DIR}/state/.phase.lock, so "read the current
+#     phase, then write" is one step;
+#   - with --unless-ending (the classifier's mode) nothing is written while the phase is
+#     stopping, stopped or exited: once the entrypoint has begun to end the gateway, a late
+#     line of IBC's output must not move the phase back. IBC itself logs "Login has completed:
+#     exiting via ..." while it stops, and a phase that went back to logged-in would open the
+#     relay again on a gateway that is going away;
+#   - the phase is never lost to the lock: when the lock file cannot be opened, or the lock is
+#     not obtained within 2 s, the write goes ahead without it.
+# Returns 0 when written, 3 when held back by --unless-ending, 1 when the file could not be
+# written.
+phase_write() {
+  local phase="$1" mode="${2:-}" dir="${LOG_DIR:-/var/log/ibgateway}/state" status=0
+  local lock="${LOG_DIR:-/var/log/ibgateway}/state/.phase.lock"
+  mkdir -p "${dir}" 2>/dev/null || true
+  if { : 9>>"${lock}"; } 2>/dev/null; then
+    (
+      flock -w 2 9 2>/dev/null || true
+      phase_write_now "${phase}" "${mode}" "${dir}"
+    ) 9>>"${lock}" || status=$?
+  else
+    phase_write_now "${phase}" "${mode}" "${dir}" || status=$?
+  fi
+  return "${status}"
+}
+
 # log_event_persist DIR BOOT BODY: under an exclusive lock, give the event the next sequence
 # number of this boot, append it to DIR/events.jsonl (rotating the file by size first) and
 # print the same line to stdout.

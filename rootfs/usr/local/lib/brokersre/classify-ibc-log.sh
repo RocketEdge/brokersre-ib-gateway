@@ -23,6 +23,8 @@
 #     The entrypoint keeps the container up in that phase, so a restart policy cannot loop
 #     through further logins. This never answers or bypasses a second factor: it only stops
 #     asking.
+#   - the classifier never moves the phase out of stopping, stopped or exited (write_phase):
+#     the event is still emitted, the phase stays with the entrypoint.
 #   - exit status is 0 at end of input.
 set -u
 LIB="$(dirname "${BASH_SOURCE[0]}")"
@@ -61,8 +63,11 @@ fi
 # IBC logs Activated and Focused for the same window right after it.
 window_opened_re='IBC: detected (dialog|frame) entitled: (.*); event=Opened$'
 
+# write_phase PHASE: the classifier's phase write. Held back while the gateway is ending
+# (phase stopping, stopped or exited): from then on the phase belongs to the entrypoint, and
+# IBC's last lines ("Login has completed: exiting via ...") must not move it back.
 write_phase() {
-  printf '%s\n' "$1" >"${LOG_DIR}/state/phase.tmp" && mv -f "${LOG_DIR}/state/phase.tmp" "${LOG_DIR}/state/phase"
+  phase_write "$1" --unless-ending || true
 }
 
 # window_is_known TITLE: true when the title is empty or matches a whole line of the known list.
