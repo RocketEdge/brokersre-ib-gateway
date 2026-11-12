@@ -70,16 +70,45 @@ teardown() {
   [ "$output" = $'action=none\ncves=' ]
 }
 
-@test "two reports (both platforms of one image): a finding in either one requests the rebuild" {
-  run "$SCRIPT" stable "${FX}/gateway-os-clean.json" "${FX}/debian-os-one-fixable-high.json"
+@test "two reports (linux/amd64 and linux/arm64): a finding in either one requests the rebuild" {
+  run "$SCRIPT" stable "${FX}/gateway-os-clean.json" "${FX}/debian-os-one-fixable-high-arm64.json"
   [ "$status" -eq 0 ]
   [ "$output" = $'action=rebuild\ncves=CVE-2026-109518' ]
 }
 
 @test "two reports naming the same CVE: it is listed once" {
-  run "$SCRIPT" stable "${FX}/debian-os-mix.json" "${FX}/debian-os-one-fixable-high.json"
+  run "$SCRIPT" stable "${FX}/debian-os-mix.json" "${FX}/debian-os-one-fixable-high-arm64.json"
   [ "$status" -eq 0 ]
   [ "$output" = $'action=rebuild\ncves=CVE-2023-4911,CVE-2026-109518,CVE-2026-33845' ]
+}
+
+@test "a clean linux/arm64 report of the published image: nothing to do" {
+  # gateway-arm64-full.json: every severity, unfixed included; none is CRITICAL/HIGH with a fix.
+  run "$SCRIPT" stable "${FX}/gateway-arm64-full.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'action=none\ncves=' ]
+}
+
+@test "two reports of one architecture are refused: the other platform was not scanned" {
+  # The same clean amd64 report twice would otherwise read as "both platforms are clean".
+  run --separate-stderr "$SCRIPT" stable "${FX}/gateway-os-clean.json" "${FX}/gateway-os-clean.json"
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"linux/amd64"* ]]
+  run "$SCRIPT" stable "${FX}/gateway-os-clean.json" "${FX}/debian-os-one-fixable-high.json"
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"action="* ]]
+}
+
+@test "a report that does not say which platform it covers is refused" {
+  jq 'del(.Metadata.ImageConfig)' "${FX}/gateway-os-clean.json" > "${WORK}/no-platform.json"
+  run "$SCRIPT" stable "${WORK}/no-platform.json"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"platform"* ]]
+  [[ "$output" != *"action="* ]]
+  jq '.Metadata.ImageConfig.architecture = "amd64\nlinux/arm64"' "${FX}/gateway-os-clean.json" > "${WORK}/forged-platform.json"
+  run "$SCRIPT" stable "${WORK}/forged-platform.json"
+  [ "$status" -eq 2 ]
 }
 
 @test "a report without an OS-package result is refused: absence of a scan is not a clean scan" {

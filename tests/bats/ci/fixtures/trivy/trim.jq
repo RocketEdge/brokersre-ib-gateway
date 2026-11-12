@@ -5,17 +5,21 @@
 # per report). This filter keeps the report's shape and drops that bulk; it never invents a
 # field or a value. Usage: jq -f trim.jq full-report.json > fixture.json
 #
-# Kept: SchemaVersion, Trivy.Version, CreatedAt, ArtifactName, ArtifactType, Metadata.OS, and per
-# result Target, Class, Type and, for every vulnerability, the id, package, path, purl, versions,
-# status, severity and title. A result without findings keeps no Vulnerabilities key, exactly as
-# Trivy writes it.
+# Kept: SchemaVersion, Trivy.Version, CreatedAt, ArtifactName, ArtifactType, Metadata.OS, the
+# image's operating system and architecture (Metadata.ImageConfig: which platform was scanned),
+# and per result Target, Class, Type and, for every vulnerability, the id, package, path, purl,
+# versions, status, severity and title. A result without findings keeps no Vulnerabilities key,
+# exactly as Trivy writes it.
 {
   SchemaVersion,
   Trivy,
   CreatedAt,
   ArtifactName,
   ArtifactType,
-  Metadata: {OS: .Metadata.OS},
+  Metadata: {
+    OS: .Metadata.OS,
+    ImageConfig: {architecture: .Metadata.ImageConfig.architecture, os: .Metadata.ImageConfig.os}
+  },
   Results: [
     .Results[]?
     | {Target, Class, Type}

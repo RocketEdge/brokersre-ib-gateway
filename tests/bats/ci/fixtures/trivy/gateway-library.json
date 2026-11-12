@@ -10,6 +10,10 @@
     "OS": {
       "Family": "ubuntu",
       "Name": "26.04"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
     }
   },
   "Results": [

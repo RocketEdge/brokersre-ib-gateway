@@ -9,7 +9,8 @@
 #   rebuild-decision.sh <channel> <trivy-report.json> [<trivy-report.json> ...]
 #   channel        stable | latest (the channel the reports belong to; named in every refusal)
 #   report         a Trivy JSON report (SchemaVersion 2) of a container image that covers OS
-#                  packages; give one per platform of the same image (linux/amd64, linux/arm64)
+#                  packages and names the platform it scanned; give one per platform of the
+#                  same image (linux/amd64, linux/arm64)
 #   stdout         two lines, GITHUB_OUTPUT-ready:
 #                    action=none|rebuild
 #                    cves=<vulnerability ids, each once, sorted (C locale), comma separated>
@@ -26,7 +27,12 @@
 #     would produce the same packages; findings in language packages (IBKR's bundled jars,
 #     docs/limitations.md L08) are left out because an OS rebuild cannot change them.
 #   * refused (exit 2), never `none`: a report that is missing, empty, not JSON, not a Trivy
-#     image report, or without any OS-package result. An unreadable scan is not a clean scan.
+#     image report, without any OS-package result, or without the platform it scanned
+#     (Metadata.ImageConfig.os and .architecture). An unreadable scan is not a clean scan.
+#     Two reports of the same platform are refused as well: the scans are told which platform
+#     to read through an environment variable, and if that ever stopped working both reports
+#     would describe the runner's platform and "both clean" would mean "one platform never
+#     scanned". scripts/check-report-arch.sh checks each report against the platform asked for.
 #     A vulnerability id that is not a plain token is refused too: the ids are written to
 #     GITHUB_OUTPUT and into an issue, and a line break in one would forge an output line.
 # No side effects; reads nothing but its arguments. Needs jq.
@@ -51,11 +57,13 @@ case "${channel}" in
 esac
 command -v jq >/dev/null 2>&1 || refuse "jq is required"
 
-# jq program (slurp mode): prints one id per fixable CRITICAL/HIGH finding in OS packages, and
-# fails with the reason when the input is not exactly one Trivy image report that covers OS
-# packages. The id check has no anchors on purpose: a negated class also catches a line break,
-# which `^...$` would let through (they match per line).
-fixable_os_ids='
+# jq program (slurp mode): prints `P <os>/<architecture>` once, then `V <id>` per fixable
+# CRITICAL/HIGH finding in OS packages; fails with the reason when the input is not exactly one
+# Trivy image report that covers OS packages and names its platform. The token checks have no
+# anchors on purpose: a negated class also catches a line break, which `^...$` would let
+# through (they match per line).
+report_program='
+  def word: type == "string" and . != "" and (test("[^a-z0-9]") | not);
   if length != 1 then error("expected exactly one JSON document")
   else .[0]
   | if type != "object" then error("not a JSON object")
@@ -64,28 +72,37 @@ fixable_os_ids='
     elif (.Results | type) != "array" then error("no Results array")
     elif ([.Results[] | select(.Class == "os-pkgs")] | length) == 0
       then error("no OS package result (class os-pkgs): the scan did not cover OS packages")
+    elif (.Metadata.ImageConfig.os | word | not) or (.Metadata.ImageConfig.architecture | word | not)
+      then error("the report does not name the platform it scanned (Metadata.ImageConfig.os and .architecture)")
     else
-      .Results[] | select(.Class == "os-pkgs") | (.Vulnerabilities // [])[]
-      | select((.Severity == "CRITICAL" or .Severity == "HIGH") and ((.FixedVersion // "") != ""))
-      | .VulnerabilityID
-      | if type != "string" or . == "" or test("[^A-Za-z0-9._:-]")
-          then error("unexpected vulnerability id (not a plain token)")
-        else . end
+      "P \(.Metadata.ImageConfig.os)/\(.Metadata.ImageConfig.architecture)",
+      ( .Results[] | select(.Class == "os-pkgs") | (.Vulnerabilities // [])[]
+        | select((.Severity == "CRITICAL" or .Severity == "HIGH") and ((.FixedVersion // "") != ""))
+        | .VulnerabilityID
+        | if type != "string" or . == "" or test("[^A-Za-z0-9._:-]")
+            then error("unexpected vulnerability id (not a plain token)")
+          else "V \(.)" end )
     end
   end'
 
 ids=""
+declare -A seen_platform=()
 for report in "$@"; do
   if [ ! -f "${report}" ] || [ ! -r "${report}" ]; then
     refuse "${channel}: report '${report}' is not a readable file"
   fi
   [ -s "${report}" ] || refuse "${channel}: report '${report}' is empty"
-  if ! found="$(jq -s -r "${fixable_os_ids}" "${report}" 2>/dev/null)"; then
+  if ! lines="$(jq -s -r "${report_program}" "${report}" 2>/dev/null)"; then
     # Second run only to fetch jq's reason; the first one keeps stdout free of error text.
-    reason="$(jq -s -r "${fixable_os_ids}" "${report}" 2>&1 >/dev/null | tail -n 1 || true)"
+    reason="$(jq -s -r "${report_program}" "${report}" 2>&1 >/dev/null | tail -n 1 || true)"
     refuse "${channel}: report '${report}' is not usable: ${reason}"
   fi
-  ids+="${found}"$'\n'
+  platform="$(sed -n 's/^P //p' <<<"${lines}")"
+  if [ -n "${seen_platform["${platform}"]:-}" ]; then
+    refuse "${channel}: '${report}' and '${seen_platform["${platform}"]}' both cover ${platform}; give one report per platform, or another platform was never scanned"
+  fi
+  seen_platform["${platform}"]="${report}"
+  ids+="$(sed -n 's/^V //p' <<<"${lines}")"$'\n'
 done
 
 cves="$(printf '%s' "${ids}" | LC_ALL=C sort -u | sed '/^$/d' | paste -sd, -)"
