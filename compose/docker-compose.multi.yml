@@ -1,0 +1,166 @@
+# Several gateways on one host: live and paper together, or one gateway per IBKR username.
+#
+# IBKR allows one brokerage session per username and this image runs one session per
+# container, so every session is its own service with its own username, its own secrets, its
+# own two volumes and its own host port. Two services must NEVER hold the same username: IBKR
+# would end one of the two sessions (phase `existing-session`). Check before starting:
+#   scripts/check-compose-usernames.sh compose/secrets
+#
+# Start (a service starts only when its profile is named; without a profile nothing starts):
+#   docker compose -f compose/docker-compose.multi.yml --profile live --profile paper up -d
+# Secrets (one directory per instance, README of this directory):
+#   compose/secrets/live/ib-username   compose/secrets/live/ib-password
+#   compose/secrets/paper/ib-username  compose/secrets/paper/ib-password
+# Host ports (relay of each gateway, bound to PRIVATE_IP, loopback by default):
+#   live 4001, paper 4002; one more username: uncomment the three blocks marked `# >>>`.
+#
+# Pin the image by DIGEST in production: IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...
+# This file is started as shipped by tests/compose/run.sh, so every setting here is tested.
+
+# Its own project name: the single-gateway example in this directory would otherwise share
+# the project `compose` and each stack would report the other's containers as orphans.
+name: ibgw-multi
+
+# Everything a gateway service needs that is NOT specific to one session. Both services merge
+# this block, so they cannot drift apart; it mirrors docker-compose.example.yml line by line
+# (tests/compose/run.sh compares the two).
+x-gateway: &gateway
+  image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    # A tmpfs is root-owned 0755 unless told otherwise and the gateway runs as uid 1000; the
+    # entrypoint refuses to start (event dirs_not_writable) when a path is not writable.
+    - /tmp:size=64m
+    - /run/brokersre:size=16m,uid=1000,gid=1000,mode=0750
+  security_opt:
+    - no-new-privileges:true
+  # Nothing in the image needs a Linux capability (uid 1000, ports above 1024).
+  cap_drop:
+    - ALL
+  # On `docker compose stop/down` the entrypoint asks IBC to log out and waits up to 60 s.
+  stop_grace_period: 90s
+  # IB Gateway with many subscriptions runs out of file descriptors at the common default of 1024.
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  # Bounds for a runaway, PER GATEWAY: two gateways need twice the memory on the host.
+  pids_limit: 2048
+  mem_limit: ${IBGW_MEM_LIMIT:-2g}
+  # The container's stdout carries only the JSON events; cap it so it cannot fill the host.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+  healthcheck:
+    test: ["CMD", "/usr/local/lib/brokersre/healthcheck.sh"]
+    interval: 15s
+    timeout: 5s
+    start_period: 300s
+    retries: 3
+
+# Settings every gateway shares. TRADING_MODE, IBGW_INSTANCE and READ_ONLY_API are set per
+# service below. Inside every container the secrets have the same paths; which files they are
+# is decided by the service's `secrets:` list.
+x-gateway-environment: &gateway-environment
+  TWS_USERID_FILE: /run/secrets/ib-username
+  TWS_PASSWORD_FILE: /run/secrets/ib-password
+  TWOFA_TIMEOUT_ACTION: restart
+  RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+  TWOFA_EXIT_INTERVAL: "60"
+  AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-11:45 PM}   # exchange-local; outside IBKR reset windows
+  TIME_ZONE: ${TIME_ZONE:-America/New_York}
+  EXISTING_SESSION_DETECTED_ACTION: primary
+  IBC_COMMAND_SERVER_PORT: "7462"               # loopback inside each container; no clash between gateways
+  IBC_LAUNCH: ${IBC_LAUNCH:-yes}                # "no" starts everything except IBC (offline tests)
+
+services:
+  ib-gateway-live:
+    <<: *gateway
+    profiles: ["live"]
+    environment:
+      <<: *gateway-environment
+      IBGW_INSTANCE: live                       # label in the container_start event and for a sidecar
+      TRADING_MODE: live
+      READ_ONLY_API: ${LIVE_READ_ONLY_API:-yes} # "no" only if this gateway must take orders
+    secrets:
+      - source: live-ib-username
+        target: ib-username
+      - source: live-ib-password
+        target: ib-password
+    volumes:
+      - ibgw-live-settings:/home/ibgateway/Jts/settings
+      - ibgw-live-logs:/var/log/ibgateway
+    ports:
+      # Bind the relay to the private NIC your strategy host can reach; never 0.0.0.0 on a public host.
+      - "${PRIVATE_IP:-127.0.0.1}:${IBGW_LIVE_PORT:-4001}:4003"   # live API via the relay (4003)
+
+  ib-gateway-paper:
+    <<: *gateway
+    profiles: ["paper"]
+    environment:
+      <<: *gateway-environment
+      IBGW_INSTANCE: paper
+      TRADING_MODE: paper
+      READ_ONLY_API: ${PAPER_READ_ONLY_API:-yes}
+    secrets:
+      - source: paper-ib-username
+        target: ib-username
+      - source: paper-ib-password
+        target: ib-password
+    volumes:
+      - ibgw-paper-settings:/home/ibgateway/Jts/settings
+      - ibgw-paper-logs:/var/log/ibgateway
+    ports:
+      - "${PRIVATE_IP:-127.0.0.1}:${IBGW_PAPER_PORT:-4002}:4004"  # paper API via the relay (4004)
+
+  # >>> one more username (1 of 3): remove the comment signs, then replace `desk-a` and 4011
+  # ib-gateway-desk-a:
+  #   <<: *gateway
+  #   profiles: ["desk-a"]
+  #   environment:
+  #     <<: *gateway-environment
+  #     IBGW_INSTANCE: desk-a
+  #     TRADING_MODE: live                        # with paper, the relay port below is 4004
+  #     READ_ONLY_API: "yes"
+  #   secrets:
+  #     - source: desk-a-ib-username
+  #       target: ib-username
+  #     - source: desk-a-ib-password
+  #       target: ib-password
+  #   volumes:
+  #     - ibgw-desk-a-settings:/home/ibgateway/Jts/settings
+  #     - ibgw-desk-a-logs:/var/log/ibgateway
+  #   ports:
+  #     - "${PRIVATE_IP:-127.0.0.1}:4011:4003"
+  # <<< one more username (1 of 3)
+
+# The files are read relative to this compose file: compose/secrets/<instance>/ib-username and
+# compose/secrets/<instance>/ib-password. IBGW_SECRETS_DIR points elsewhere.
+secrets:
+  live-ib-username:
+    file: ${IBGW_SECRETS_DIR:-./secrets}/live/ib-username
+  live-ib-password:
+    file: ${IBGW_SECRETS_DIR:-./secrets}/live/ib-password
+  paper-ib-username:
+    file: ${IBGW_SECRETS_DIR:-./secrets}/paper/ib-username
+  paper-ib-password:
+    file: ${IBGW_SECRETS_DIR:-./secrets}/paper/ib-password
+  # >>> one more username (2 of 3)
+  # desk-a-ib-username:
+  #   file: ${IBGW_SECRETS_DIR:-./secrets}/desk-a/ib-username
+  # desk-a-ib-password:
+  #   file: ${IBGW_SECRETS_DIR:-./secrets}/desk-a/ib-password
+  # <<< one more username (2 of 3)
+
+volumes:
+  ibgw-live-settings:
+  ibgw-live-logs:
+  ibgw-paper-settings:
+  ibgw-paper-logs:
+  # >>> one more username (3 of 3)
+  # ibgw-desk-a-settings:
+  # ibgw-desk-a-logs:
+  # <<< one more username (3 of 3)
