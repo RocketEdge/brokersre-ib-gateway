@@ -196,7 +196,7 @@ Describe 'Get-GwAclOtherIdentity' {
 
 Describe 'Get-GwSecretFileFinding' {
     BeforeAll {
-        function New-ByteFile {
+        function Save-ByteFile {
             param([string]$Name, [byte[]]$Byte)
             $path = Join-Path $TestDrive $Name
             [System.IO.File]::WriteAllBytes($path, $Byte)
@@ -205,7 +205,7 @@ Describe 'Get-GwSecretFileFinding' {
     }
 
     It 'reports nothing for a clean UTF-8 secret' {
-        $path = New-ByteFile -Name 'clean' -Byte ([byte[]](0x61, 0xC3, 0xA9, 0x24))
+        $path = Save-ByteFile -Name 'clean' -Byte ([byte[]](0x61, 0xC3, 0xA9, 0x24))
         @(Get-GwSecretFileFinding -Path $path).Count | Should -Be 0
     }
 
@@ -214,38 +214,38 @@ Describe 'Get-GwSecretFileFinding' {
     }
 
     It 'reports Empty for a zero-length file' {
-        $path = New-ByteFile -Name 'empty' -Byte ([byte[]]@())
+        $path = Save-ByteFile -Name 'empty' -Byte ([byte[]]@())
         Get-GwSecretFileFinding -Path $path | Should -Be @('Empty')
     }
 
     It 'reports Utf8Bom' {
-        $path = New-ByteFile -Name 'bom' -Byte ([byte[]](0xEF, 0xBB, 0xBF, 0x61))
+        $path = Save-ByteFile -Name 'bom' -Byte ([byte[]](0xEF, 0xBB, 0xBF, 0x61))
         Get-GwSecretFileFinding -Path $path | Should -Be @('Utf8Bom')
     }
 
     It 'reports Utf16 for a little-endian mark, a big-endian mark and for markless UTF-16' {
-        Get-GwSecretFileFinding -Path (New-ByteFile -Name 'u16le' -Byte ([byte[]](0xFF, 0xFE, 0x61, 0x00))) | Should -Be @('Utf16')
-        Get-GwSecretFileFinding -Path (New-ByteFile -Name 'u16be' -Byte ([byte[]](0xFE, 0xFF, 0x00, 0x61))) | Should -Be @('Utf16')
-        Get-GwSecretFileFinding -Path (New-ByteFile -Name 'u16raw' -Byte ([byte[]](0x61, 0x00, 0x62, 0x00))) | Should -Be @('Utf16')
+        Get-GwSecretFileFinding -Path (Save-ByteFile -Name 'u16le' -Byte ([byte[]](0xFF, 0xFE, 0x61, 0x00))) | Should -Be @('Utf16')
+        Get-GwSecretFileFinding -Path (Save-ByteFile -Name 'u16be' -Byte ([byte[]](0xFE, 0xFF, 0x00, 0x61))) | Should -Be @('Utf16')
+        Get-GwSecretFileFinding -Path (Save-ByteFile -Name 'u16raw' -Byte ([byte[]](0x61, 0x00, 0x62, 0x00))) | Should -Be @('Utf16')
     }
 
     It 'reports CarriageReturn for CRLF, which the container does not strip' {
-        $path = New-ByteFile -Name 'crlf' -Byte ([byte[]](0x61, 0x0D, 0x0A))
+        $path = Save-ByteFile -Name 'crlf' -Byte ([byte[]](0x61, 0x0D, 0x0A))
         Get-GwSecretFileFinding -Path $path | Should -Be @('CarriageReturn', 'TrailingLineFeed')
     }
 
     It 'reports TrailingLineFeed alone for a single final LF' {
-        $path = New-ByteFile -Name 'lf' -Byte ([byte[]](0x61, 0x0A))
+        $path = Save-ByteFile -Name 'lf' -Byte ([byte[]](0x61, 0x0A))
         Get-GwSecretFileFinding -Path $path | Should -Be @('TrailingLineFeed')
     }
 
     It 'reports EmbeddedLineFeed for a line break inside the value' {
-        $path = New-ByteFile -Name 'multi' -Byte ([byte[]](0x61, 0x0A, 0x62))
+        $path = Save-ByteFile -Name 'multi' -Byte ([byte[]](0x61, 0x0A, 0x62))
         Get-GwSecretFileFinding -Path $path | Should -Be @('EmbeddedLineFeed')
     }
 
     It 'reports InvalidUtf8 for ANSI-encoded accented characters' {
-        $path = New-ByteFile -Name 'ansi' -Byte ([byte[]](0x70, 0xE9, 0x71))
+        $path = Save-ByteFile -Name 'ansi' -Byte ([byte[]](0x70, 0xE9, 0x71))
         Get-GwSecretFileFinding -Path $path | Should -Be @('InvalidUtf8')
     }
 }

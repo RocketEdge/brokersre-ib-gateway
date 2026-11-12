@@ -505,6 +505,23 @@ function Get-GwUtcNow {
     return [DateTime]::UtcNow
 }
 
+function Wait-GwDelay {
+    <#
+    .SYNOPSIS
+    Pauses for a number of seconds.
+    .DESCRIPTION
+    Every polling loop of the kit sleeps through this function, so tests replace it with a fake
+    clock and a loop that waits minutes in production finishes in milliseconds under test.
+    .PARAMETER Seconds
+    Length of the pause.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][ValidateRange(0, 3600)][int]$Seconds)
+    Start-Sleep -Seconds $Seconds
+}
+
 function Read-GwSecureInput {
     <#
     .SYNOPSIS
