@@ -8,8 +8,9 @@
 # extra package, no privilege), so the reason is on the shared log volume and in `docker logs`.
 #
 # Usage:
-#   sampler.sh           run the loop until SIGTERM or SIGINT, then exit 0 (the entrypoint starts
-#                        it in the background)
+#   sampler.sh           run the loop until SIGTERM or SIGINT, then take one last sample and
+#                        exit 0 (the entrypoint starts it in the background and, when IBC has
+#                        exited or the container stops, signals it and waits for it)
 #   source sampler.sh    define the functions only; nothing runs (the unit tests do this)
 #
 # Contract:
@@ -34,6 +35,12 @@
 #       memory_high (warn) / memory_ok (info)    working set above MEM_HIGH_PCT of the limit
 #                                                for MEM_HIGH_FOR_S
 #     event messages hold numbers, paths and the phase token only;
+#   - on SIGTERM or SIGINT the sampler finishes the sample it may be taking, takes ONE last
+#     sample (line, seq and events as for any other) and exits 0. The last sample is what
+#     reports an OOM kill of the Gateway JVM: IBC then exits and the container with it, long
+#     before the next regular sample. It leaves out the four disk figures, because df is the
+#     one source that can hang and a stop must not wait for a mount; a second signal changes
+#     nothing;
 #   - a missing source, an unwritable volume or a vanished JVM never ends the loop, and nothing
 #     here restarts or signals the Gateway: the sampler reports, a human acts.
 #
@@ -53,9 +60,13 @@
 # Side effects of sourcing: LOG_DIR and TWS_SETTINGS_PATH get the image's defaults when they are
 # unset, and the sampler's state variables (SAMPLER_*) are initialised.
 #
-# NOTE: the figures are read when a sample is taken, so a kill that ends the container before
-# the next sample is not reported. That is the usual case when the OOM killer takes the Gateway
-# JVM: IBC exits, the entrypoint exits and the cgroup with its counter is gone.
+# NOTE: the last sample is only taken when the caller signals the sampler and WAITS for it. An
+# entrypoint that exits without that wait loses the OOM kill that ended the Gateway, because
+# the cgroup and its counter go away with the container.
+# NOTE: the stop is quick but not hard-bounded here; the caller bounds its wait and then sends
+# SIGKILL. What can take long: a sample in progress when the signal arrives is finished first
+# (each of its two df calls is cut off after 5 s, 7 s when df ignores SIGTERM); an event waits
+# up to 5 s for the events lock (log.sh); a log volume that hangs blocks the append.
 # NOTE: every figure is read in a child process. When the container's process limit is used up
 # no sample can be taken until a process slot is free again (the samples before show `pids`
 # climbing).
@@ -338,8 +349,10 @@ json_add() {
   if [ -n "$3" ]; then json_target+=",\"$2\":$3"; fi
 }
 
-# sample_once: print one sample as a JSON line (the format in the header of this file).
+# sample_once [no-disk]: print one sample as a JSON line (the format in the header of this file).
 #
+# With the argument `no-disk`, df is not run and the four disk keys are left out: the last
+# sample before the sampler exits must not wait for a mount that hangs.
 # Inputs: SAMPLER_SEQ (samples taken so far; the line carries SAMPLER_SEQ + 1), the sources
 # under CGROUP_ROOT and PROC_ROOT, LOG_DIR, TWS_SETTINGS_PATH and the variables the read_*
 # functions use. Output: exactly one line on stdout and status 0. Changes nothing, so it can
@@ -349,7 +362,7 @@ json_add() {
 # is then simply left out, but a line without its fixed keys would be worse than no line, so
 # nothing is printed and the status is 1.
 sample_once() {
-  local line ts boot phase java_pid disk_logs disk_settings
+  local line ts boot phase java_pid disk_logs="" disk_settings=""
   ts="$(ts_now)" || ts=""
   boot="$(read_boot_id)" || boot=""
   phase="$(read_phase)" || phase=""
@@ -369,8 +382,10 @@ sample_once() {
     json_add line open_fds "$(read_open_fds "${java_pid}")"
   fi
   json_add line api_close_wait_sockets "$(read_api_close_wait)"
-  disk_logs="$(read_disk "${LOG_DIR}")"
-  disk_settings="$(read_disk "${TWS_SETTINGS_PATH}")"
+  if [ "${1:-}" != "no-disk" ]; then
+    disk_logs="$(read_disk "${LOG_DIR}")"
+    disk_settings="$(read_disk "${TWS_SETTINGS_PATH}")"
+  fi
   json_add line disk_free_bytes_logs "${disk_logs% *}"
   json_add line disk_free_bytes_settings "${disk_settings% *}"
   json_add line disk_total_bytes_logs "${disk_logs#* }"
@@ -422,9 +437,11 @@ append_sample() {
 #                               threshold in the current run (empty: it is not above)
 #   SAMPLER_MEM_HIGH_REPORTED   1 after memory_high, until memory_ok
 #   SAMPLER_SLEEP_PID           pid of the pause between two samples (empty: not pausing)
+#   SAMPLER_STOPPING            1 once SIGTERM or SIGINT asked the loop to end
 # Called when this file is sourced and again by sampler_main, so the functions never meet an
 # unset variable under `set -u`.
 sampler_init_state() {
+  SAMPLER_STOPPING=0
   SAMPLER_SEQ=0
   SAMPLER_OOM_KILLS=""
   declare -gA SAMPLER_DISK_LOW=()
@@ -588,15 +605,16 @@ evaluate_events() {
   evaluate_memory "${working_set}" "${limit}" "${now}"
 }
 
-# sampler_tick: take one sample, append it to ${LOG_DIR}/metrics/metrics.jsonl and emit the
-# events that follow from it. One iteration of the loop.
+# sampler_tick [no-disk]: take one sample, append it to ${LOG_DIR}/metrics/metrics.jsonl and
+# emit the events that follow from it. One iteration of the loop; `no-disk` is passed on to
+# sample_once (the last sample).
 #
 # Always returns 0. SAMPLER_SEQ advances even when the line could not be written (the gap in
 # seq then shows the loss), and the events are evaluated either way: they also go to stdout,
 # which matters most when the volume is full.
 sampler_tick() {
   local line
-  line="$(sample_once)" || line=""
+  line="$(sample_once "${1:-}")" || line=""
   SAMPLER_SEQ=$((SAMPLER_SEQ + 1))
   if [[ "${line}" != "{"*"}" ]]; then return 0; fi
   append_sample "${LOG_DIR}/metrics/metrics.jsonl" "${line}" || true
@@ -604,32 +622,55 @@ sampler_tick() {
   return 0
 }
 
-# sampler_stop: end the sampler at once with status 0 (the TERM and INT handler). The pause
-# between two samples is killed too, so no `sleep` outlives the sampler.
-sampler_stop() {
+# sampler_request_stop: the TERM and INT handler. It only records the request and ends the
+# pause between two samples; the loop then takes the last sample and exits.
+#
+# Why so little: the shell runs a handler between two commands of whatever it was doing, which
+# may be the middle of a sample. Sampling here would enter a sample twice, with the state half
+# updated. Setting one flag and killing one `sleep` cannot disturb a sample in progress (it
+# touches neither REPLY nor BASH_REMATCH), and doing it twice is the same as doing it once, so
+# a second signal changes nothing.
+sampler_request_stop() {
+  SAMPLER_STOPPING=1
   if [ -n "${SAMPLER_SLEEP_PID}" ]; then kill "${SAMPLER_SLEEP_PID}" 2>/dev/null || true; fi
-  exit 0
 }
 
-# sampler_main: sample every SAMPLE_INTERVAL_S seconds (default 30) until SIGTERM or SIGINT.
+# sampler_pause SECONDS: wait SECONDS, or until a stop is requested.
 #
-# The pause is `sleep` in the background plus `wait`, so the signal handler runs at once
-# instead of after the pause. The interval is the pause between two samples; a sample takes a
-# few tens of milliseconds, which is the only drift.
+# `sleep` runs in the background and the shell waits for it: a handler runs at once during
+# `wait`, but only after a foreground command has ended. A stop request may arrive before the
+# pid of the sleep is recorded, when the handler has nothing to kill; that is why the flag is
+# looked at once more after the pid is known. In every other order the handler kills the sleep
+# itself. Either way the wait ends at once and no `sleep` outlives the sampler.
+sampler_pause() {
+  sleep "$1" &
+  SAMPLER_SLEEP_PID=$!
+  if [ "${SAMPLER_STOPPING}" -ne 0 ]; then kill "${SAMPLER_SLEEP_PID}" 2>/dev/null || true; fi
+  wait "${SAMPLER_SLEEP_PID}" 2>/dev/null || true
+  SAMPLER_SLEEP_PID=""
+}
+
+# sampler_main: sample every SAMPLE_INTERVAL_S seconds (default 30) until SIGTERM or SIGINT,
+# then take one last sample without the disk figures and return 0.
+#
+# The interval is the pause between two samples; a sample takes a few tens of milliseconds,
+# which is the only drift. A stop request during a sample lets that sample finish; the last
+# sample follows in either case, because only a sample taken after the request is sure to see
+# what happened just before it (an OOM kill that made IBC exit). Exactly one last sample is
+# taken however many signals arrive: it runs here, after the loop, never in the handler.
 sampler_main() {
   local interval
   uint_or "${SAMPLE_INTERVAL_S:-}" 30
   interval="${REPLY}"
   if [ "${interval}" -lt 1 ]; then interval=30; fi
   sampler_init_state
-  trap sampler_stop TERM INT
-  while true; do
+  trap sampler_request_stop TERM INT
+  while [ "${SAMPLER_STOPPING}" -eq 0 ]; do
     sampler_tick
-    sleep "${interval}" &
-    SAMPLER_SLEEP_PID=$!
-    wait "${SAMPLER_SLEEP_PID}" 2>/dev/null || true
-    SAMPLER_SLEEP_PID=""
+    if [ "${SAMPLER_STOPPING}" -eq 0 ]; then sampler_pause "${interval}"; fi
   done
+  sampler_tick no-disk
+  return 0
 }
 
 sampler_init_state

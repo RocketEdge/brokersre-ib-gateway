@@ -32,11 +32,15 @@ setup() {
 }
 
 teardown() {
-  local pid
+  local pid children child
   for pid in "${SAMPLER_PID:-}" "${WATCHDOG_PID:-}" "${FAKE_JVM_PID:-}"; do
     if [ -n "${pid}" ]; then
-      pkill -P "${pid}" 2>/dev/null || true
-      kill "${pid}" 2>/dev/null || true
+      # SIGKILL, and wait, before the scratch directory goes: a sampler stopped with SIGTERM
+      # takes a last sample, which would write into the directory while it is being removed.
+      children="$(pgrep -P "${pid}" || true)"
+      kill -KILL "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      for child in ${children}; do kill "${child}" 2>/dev/null || true; done
     fi
   done
   chmod -R u+rwx "${WORK}" 2>/dev/null || true
@@ -177,6 +181,32 @@ start_fake_jvm() {
 }
 
 metrics_lines() { wc -l <"${METRICS}"; }
+
+# wait_for_pause: wait until the running sampler has taken a sample and sleeps until the next.
+wait_for_pause() {
+  wait_until 20 pgrep -P "${SAMPLER_PID}" -x sleep
+}
+
+# set_oom_kills N: rewrite the cgroup's memory.events with oom_kill N, as the kernel would
+# after its OOM killer took a process.
+set_oom_kills() {
+  printf 'low 0\nhigh 0\nmax 5\noom 7\noom_kill %s\noom_group_kill 9\n' "$1" >"${CGROUP_ROOT}/memory.events"
+}
+
+# fake_df SECONDS: put a `df` in front of the real one that records every call in
+# ${WORK}/df-calls and takes SECONDS longer. df is the one source that can be slow (a mount
+# that hangs), so the tests make it slow and count its calls.
+fake_df() {
+  local real_df
+  real_df="$(command -v df)"
+  mkdir -p "${WORK}/bin"
+  printf '#!/bin/bash\necho call >>"%s"\nsleep %s\nexec "%s" "$@"\n' "${WORK}/df-calls" "$1" "${real_df}" \
+    >"${WORK}/bin/df"
+  chmod +x "${WORK}/bin/df"
+  export PATH="${WORK}/bin:${PATH}"
+}
+
+df_calls() { wc -l <"${WORK}/df-calls"; }
 
 # --- the sample line ---------------------------------------------------------------------
 
@@ -725,6 +755,96 @@ metrics_lines() { wc -l <"${METRICS}"; }
   wait_until 20 pgrep -P "${SAMPLER_PID}" -x sleep
   pgrep -P "${SAMPLER_PID}" -f '^sleep 30$' >/dev/null
   [ "$(metrics_lines)" -eq 1 ]
+}
+
+# --- the last sample: what a stop request leaves behind -------------------------------------
+
+@test "SIGTERM during the pause gives one last sample that continues seq, then exit 0 within 2 s" {
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  [ "$(metrics_lines)" -eq 1 ]
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "${STOP_MS}" -le 2000 ]
+  jq -e . "${METRICS}" >/dev/null
+  [ "$(jq -r .seq "${METRICS}" | tr '\n' ' ')" == "1 2 " ]
+}
+
+@test "the last sample has every figure except the disk figures" {
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  stop_sampler
+  head -1 "${METRICS}" | jq -e 'has("disk_free_bytes_logs") and has("disk_total_bytes_settings")' >/dev/null
+  [ "$(tail -1 "${METRICS}" | jq -c 'del(.ts)')" == '{"src":"metrics","boot_id":"0123456789abcdef","seq":2,"phase":"logged-in","mem_working_set_bytes":750000,"mem_limit_bytes":2000000,"oom_kills":2,"cpu_usage_usec":47930,"cpu_throttled_usec":1234,"pids":57,"java_rss_bytes":524288000,"java_threads":63,"open_fds":5,"api_close_wait_sockets":3}' ]
+}
+
+@test "the last sample never runs df, so a mount that hangs cannot delay the stop" {
+  fake_df 0
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  [ "$(df_calls)" -eq 2 ]
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "$(metrics_lines)" -eq 2 ]
+  [ "$(df_calls)" -eq 2 ]
+}
+
+@test "an OOM kill the loop has not sampled yet is reported by the last sample" {
+  set_oom_kills 0
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  [ "$(events)" == "" ]
+  set_oom_kills 1
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "${STOP_MS}" -le 5000 ]
+  [ "$(events)" == "oom_kill " ]
+  [ "$(event_field oom_kill level)" == "error" ]
+  [ "$(event_field oom_kill msg)" == "1 OOM kill(s) in this container since the previous sample (1 since container start); memory limit 2000000 bytes" ]
+  [ "$(jq -r .oom_kills "${METRICS}" | tr '\n' ' ')" == "0 1 " ]
+}
+
+@test "the last sample reports kills since container start when no sample could count them before" {
+  rm "${CGROUP_ROOT}/memory.events"
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  set_oom_kills 2
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "$(events)" == "oom_kill " ]
+  [ "$(event_field oom_kill msg)" == "2 OOM kill(s) in this container since container start; memory limit 2000000 bytes" ]
+}
+
+@test "two SIGTERMs in a row give one last sample, not two" {
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_for_pause
+  kill -TERM "${SAMPLER_PID}"
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "$(jq -r .seq "${METRICS}" | tr '\n' ' ')" == "1 2 " ]
+  [ "$(events)" == "oom_kill " ]
+}
+
+@test "SIGTERM during a sample lets that sample finish, then takes the last one: none is entered twice" {
+  fake_df 1
+  export SAMPLE_INTERVAL_S=47
+  start_sampler
+  wait_until 20 pgrep -f "${WORK}/bin/df"
+  [ ! -e "${METRICS}" ]
+  stop_sampler
+  [ "${STOP_STATUS}" -eq 0 ]
+  [ "${STOP_MS}" -le 5000 ]
+  jq -e . "${METRICS}" >/dev/null
+  [ "$(jq -r .seq "${METRICS}" | tr '\n' ' ')" == "1 2 " ]
+  [ "$(jq -c 'has("disk_free_bytes_logs")' "${METRICS}" | tr '\n' ' ')" == "true false " ]
+  [ "$(events)" == "oom_kill " ]
+  [ "$(df_calls)" -eq 2 ]
 }
 
 # --- the real kernel interfaces of the image ------------------------------------------------
