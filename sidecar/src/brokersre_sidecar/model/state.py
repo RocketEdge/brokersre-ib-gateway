@@ -73,8 +73,10 @@ class GatewaySnapshot:
             is absent (not measured).
         phase_since: Since when the phase has held (a lower bound right after the sidecar
             started), or None.
-        unreadable_for_s: Seconds (monotonic) for which the volume or its phase file has
-            been unreadable without interruption; None while both are readable.
+        unreadable_for_s: Seconds (monotonic) for which the phase has been unknown without
+            interruption: the volume is not mounted, the phase file is missing or
+            unreadable, or it holds a token this sidecar does not know. None while a
+            known phase is read.
         boot_id: Boot id of the newest boot seen, or None (a gateway without log contract v2).
         boots_30m: Number of distinct boots that first appeared in the last 30 minutes, or
             None when no boot id was ever seen.
@@ -182,7 +184,12 @@ class GatewayState:
             if self._unreadable_since is None:
                 self._unreadable_since = self._clock.monotonic()
             return
-        self._unreadable_since = None
+        if not reading.known:
+            # Readable but not understood: as blind as without the file.
+            if self._unreadable_since is None:
+                self._unreadable_since = self._clock.monotonic()
+        else:
+            self._unreadable_since = None
         if reading.token != self._phase:
             self._phase = reading.token
             self._phase_since = min(reading.modified, self._clock.now())

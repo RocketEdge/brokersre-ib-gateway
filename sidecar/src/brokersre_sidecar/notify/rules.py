@@ -77,6 +77,8 @@ class RuleConfig:
             condition active this long.
         clock_skew_max_s: Tolerated clock difference in seconds.
         silent_after_s: Seconds without an observed feed line that count as silence.
+        volume_missing_after_s: Seconds without a readable, known phase before the
+            sidecar says that it cannot see the gateway.
     """
 
     api_unhealthy_after_s: float = 300.0
@@ -84,6 +86,7 @@ class RuleConfig:
     event_hold_s: float = 900.0
     clock_skew_max_s: float = 1.0
     silent_after_s: float = 300.0
+    volume_missing_after_s: float = 300.0
 
 
 _ACTIVE = Condition.ACTIVE
@@ -159,6 +162,7 @@ class RuleEngine:
             ),
             AlertClass.CLOCK_SKEW: self._clock_skew(probe),
             AlertClass.GATEWAY_SILENT: self._silent(gateway),
+            AlertClass.VOLUME_MISSING: self._volume_missing(gateway),
         }
 
     @staticmethod
@@ -353,6 +357,29 @@ class RuleEngine:
         if skew_exceeds(probe.clock_skew_s, self._config.clock_skew_max_s):
             return Evaluation(_ACTIVE, f"IBKR time minus host time is {probe.clock_skew_s:.1f} s")
         return _INACTIVE
+
+    def _volume_missing(self, gateway: GatewaySnapshot) -> Evaluation:
+        """Active when the sidecar has not been able to see the gateway for too long.
+
+        Without a known phase every phase rule is undecidable and nothing else can
+        alert, so the blindness itself is the alert. Below the threshold the verdict is
+        unknown (a volume that appears a moment after the sidecar started is normal);
+        it is inactive exactly while a known phase is read.
+        """
+        blind_for = gateway.unreadable_for_s
+        if blind_for is None:
+            return _INACTIVE
+        if blind_for < self._config.volume_missing_after_s:
+            return _UNKNOWN
+        if not gateway.volume_present:
+            what = "the gateway's log volume is not mounted"
+        elif gateway.phase is None:
+            what = "the phase file state/phase is missing or unreadable"
+        else:
+            what = "the phase file holds a token this sidecar does not know"
+        return Evaluation(
+            _ACTIVE, f"{what} for {blind_for:.0f} s; nothing about the gateway is measured"
+        )
 
     def _silent(self, gateway: GatewaySnapshot) -> Evaluation:
         """Active when a running gateway wrote nothing the sidecar observed for too long."""

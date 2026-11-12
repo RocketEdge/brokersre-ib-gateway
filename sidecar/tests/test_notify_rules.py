@@ -412,3 +412,30 @@ def test_a_pending_second_factor_is_handed_over_to_the_stop_alert() -> None:
         mono=1000.0,
     )
     assert result[AlertClass.TWOFA_PENDING].superseded_by is AlertClass.GATEWAY_STOPPED
+
+
+BLIND = "nothing about the gateway is measured"
+
+
+def test_a_volume_that_cannot_be_read_becomes_an_alert_after_five_minutes() -> None:
+    unmounted = {"phase": None, "volume_present": False}
+    early = unmounted | {"unreadable_for_s": 299.0}
+    assert evaluate(gateway=early)[AlertClass.VOLUME_MISSING] is UNKNOWN
+    late = unmounted | {"unreadable_for_s": 300.0}
+    assert evaluate(gateway=late)[AlertClass.VOLUME_MISSING] is ACTIVE
+    assert details(gateway=late)[AlertClass.VOLUME_MISSING] == (
+        f"the gateway's log volume is not mounted for 300 s; {BLIND}"
+    )
+    assert evaluate()[AlertClass.VOLUME_MISSING] is INACTIVE
+
+
+def test_a_missing_phase_file_and_an_unknown_token_are_named_as_such() -> None:
+    missing = {"phase": None, "volume_present": True, "unreadable_for_s": 600.0}
+    assert details(gateway=missing)[AlertClass.VOLUME_MISSING] == (
+        f"the phase file state/phase is missing or unreadable for 600 s; {BLIND}"
+    )
+    unknown = {"phase": "unknown", "volume_present": True, "unreadable_for_s": 600.0}
+    assert evaluate(gateway=unknown)[AlertClass.VOLUME_MISSING] is ACTIVE
+    assert details(gateway=unknown)[AlertClass.VOLUME_MISSING] == (
+        f"the phase file holds a token this sidecar does not know for 600 s; {BLIND}"
+    )

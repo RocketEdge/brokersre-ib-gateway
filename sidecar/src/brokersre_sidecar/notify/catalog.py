@@ -134,6 +134,14 @@ _SPECS = (
         "container is running and that the log volume is mounted.",
     ),
     AlertSpec(
+        AlertClass.VOLUME_MISSING,
+        Severity.ERROR,
+        "The sidecar cannot read the gateway's log volume",
+        "Mount the gateway's log volume read-only at GATEWAY_LOG_DIR in the sidecar and "
+        "check that the gateway writes state/phase there. Until then nothing about the "
+        "gateway is measured and no other alert can fire.",
+    ),
+    AlertSpec(
         AlertClass.HEARTBEAT,
         Severity.INFO,
         "Daily heartbeat",

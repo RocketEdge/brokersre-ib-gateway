@@ -78,6 +78,7 @@ class AlertClass(StrEnum):
     DISK_LOW = "disk_low"
     CLOCK_SKEW = "clock_skew"
     GATEWAY_SILENT = "gateway_silent"
+    VOLUME_MISSING = "volume_missing"
     HEARTBEAT = "heartbeat"
 
 

@@ -17,7 +17,7 @@ from brokersre_sidecar.notify.ladder import LadderEngine, Outbound
 from brokersre_sidecar.notify.message import MessageFactory
 from brokersre_sidecar.notify.rules import RuleEngine
 from brokersre_sidecar.notify.store import NotifierStore
-from brokersre_sidecar.vocab import UNKNOWN_PHASE, MessageKind
+from brokersre_sidecar.vocab import UNKNOWN_PHASE, MessageKind, ProbeStatus
 
 _LOGGER = logging.getLogger(__name__)
 _TRACKED = (MessageKind.FIRING, MessageKind.ESCALATION)
@@ -105,7 +105,11 @@ class Notifier:
             message = self._factory.build(
                 due.kind,
                 due.alert_class,
-                detail=due.detail,
+                detail=(
+                    _not_measured(gateway, probe)
+                    if due.kind is MessageKind.HEARTBEAT
+                    else due.detail
+                ),
                 escalation_step=due.escalation_step,
                 since=due.since,
                 phase=gateway.phase,
@@ -165,3 +169,19 @@ class Notifier:
             state_persistence=self._persistence,
             state_persistence_reason=self._persistence_reason,
         )
+
+
+def _not_measured(gateway: GatewaySnapshot, probe: ProbeSnapshot) -> str:
+    """Say what a heartbeat cannot vouch for; empty when everything is measured.
+
+    A heartbeat means "the sidecar runs and no alert is active". That is reassuring only as
+    far as the sidecar can see, so the message names every blind spot: an API that is not
+    probed right now (with the probe's own reason) and a gateway that writes no feeds. A
+    sidecar that cannot read the phase at all sends no heartbeat (see ``LadderEngine.step``).
+    """
+    gaps: list[str] = []
+    if probe.status is ProbeStatus.NOT_MEASURED:
+        gaps.append(f"the API ({probe.reason})")
+    if not gateway.feeds_seen:
+        gaps.append("the gateway's event and metrics feeds (none seen)")
+    return "Not measured: " + "; ".join(gaps) if gaps else ""

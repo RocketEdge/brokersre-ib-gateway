@@ -353,3 +353,20 @@ def test_rejected_lines_are_counted() -> None:
     state.note_rejected_line()
     state.note_rejected_line()
     assert state.snapshot().rejected_lines == 2
+
+
+def test_a_phase_token_the_sidecar_does_not_know_counts_as_not_readable() -> None:
+    # A newer gateway may write a token this sidecar has never heard of: every phase rule
+    # is then undecidable, exactly as with a missing file.
+    clock = FakeClock()
+    state = GatewayState(clock)
+    state.observe_volume(True)
+    state.observe_phase(reading("login", T0))
+    clock.advance(5)
+    state.observe_phase(reading("unknown", T0))
+    clock.advance(40)
+    snapshot = state.snapshot()
+    assert snapshot.phase == "unknown"
+    assert snapshot.unreadable_for_s == 40.0
+    state.observe_phase(reading("logged-in", T0))
+    assert state.snapshot().unreadable_for_s is None

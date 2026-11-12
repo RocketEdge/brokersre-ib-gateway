@@ -220,6 +220,7 @@ in `ibgw_notify_failures_total`.
 | `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
 | `clock_skew` | warning | The host clock provably differs from IBKR time by more than 1 second. | Fix time synchronisation on the host. |
 | `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped. | Check that the gateway container runs and the volume is mounted. |
+| `volume_missing` | error | For 5 minutes the sidecar could not read a known phase: the log volume is not mounted, `state/phase` is missing or unreadable, or it holds a token this sidecar does not know. Nothing else can alert in that state. | Mount the gateway's log volume read-only at `GATEWAY_LOG_DIR`; check that the gateway writes `state/phase`. |
 | `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while no alert is active. | Nothing. A missing heartbeat means the sidecar is down or an alert is active. |
 | `resolved` (a message kind) | info | A condition that was notified has cleared. | Nothing. |
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import timedelta
+from datetime import time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +46,14 @@ class Collector:
 class World:
     """A notifier wired to hand-set snapshots, collecting channels and a state directory."""
 
-    def __init__(self, state_dir: Path | None, clock: FakeClock | None = None) -> None:
+    def __init__(
+        self,
+        state_dir: Path | None,
+        clock: FakeClock | None = None,
+        heartbeat: time | None = None,
+    ) -> None:
         self.clock = clock or FakeClock()
+        self.heartbeat = heartbeat
         self.gateway: dict[str, Any] = {}
         self.probe: dict[str, Any] = {}
         self.ready = True
@@ -69,6 +75,7 @@ class World:
                     escalation_channels=("pagerduty",),
                     escalate_after_s=600.0,
                     escalate_again_after_s=1800.0,
+                    heartbeat_time=self.heartbeat,
                 )
             ),
             factory=MessageFactory("desk-1", "Etc/UTC", None, SecretRegistry()),
@@ -301,3 +308,54 @@ async def test_an_alert_that_was_never_delivered_clears_without_a_resolved(tmp_p
     await world.tick(10)
     assert dead.attempts == attempts  # nothing more was sent: no "resolved" into the void
     assert world.notifier.snapshot().active_alerts == ()
+
+
+async def test_the_heartbeat_says_what_it_cannot_vouch_for(tmp_path: Path) -> None:
+    world = World(tmp_path, heartbeat=time(0, 0))
+    world.gateway = {"phase": "login", "feeds_seen": False, "quiet_for_s": None}
+    world.probe = {
+        "status": ProbeStatus.NOT_MEASURED,
+        "reason": "gateway phase is login; the API is probed only while it is logged-in",
+    }
+    await world.tick()
+    (beat,) = world.teams.sent
+    assert beat.kind == "heartbeat"
+    assert beat.detail == (
+        "Not measured: the API (gateway phase is login; the API is probed only while it is "
+        "logged-in); the gateway's event and metrics feeds (none seen)"
+    )
+
+
+async def test_the_heartbeat_of_a_fully_measured_gateway_has_nothing_to_add(
+    tmp_path: Path,
+) -> None:
+    world = World(tmp_path, heartbeat=time(0, 0))
+    await world.tick()
+    (beat,) = world.teams.sent
+    assert (beat.kind, beat.detail) == ("heartbeat", "")
+
+
+async def test_a_blind_sidecar_sends_no_heartbeat_but_an_alert_after_five_minutes(
+    tmp_path: Path,
+) -> None:
+    # The reviewer's reproduction: with the volume unmounted every rule is undecidable, no
+    # alert fires, and the heartbeat used to say "no alert is active".
+    world = World(tmp_path, heartbeat=time(0, 0))
+    world.gateway = {"phase": None, "volume_present": False, "unreadable_for_s": 10.0}
+    world.probe = {"status": ProbeStatus.NOT_MEASURED}
+    await world.tick()
+    assert world.teams.sent == []
+    world.gateway["unreadable_for_s"] = 310.0
+    await world.tick(300)
+    (alert,) = world.teams.sent
+    assert (alert.alert_class, alert.kind, alert.severity) == ("volume_missing", "firing", "error")
+    assert alert.title == "The sidecar cannot read the gateway's log volume"
+    assert alert.detail == (
+        "the gateway's log volume is not mounted for 310 s; nothing about the gateway is measured"
+    )
+    # Readable again: the alert resolves, and only then the day's heartbeat follows.
+    world.gateway = {}
+    world.probe = {}
+    await world.tick(60)
+    await world.tick(1)
+    assert [message.kind for message in world.teams.sent] == ["firing", "resolved", "heartbeat"]
