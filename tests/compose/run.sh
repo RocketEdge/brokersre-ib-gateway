@@ -16,6 +16,12 @@
 #   does not fail the test.
 # Exit code: 0 when every test passed. Each test prints PASS/FAIL with its reason.
 set -uo pipefail
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a credential is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
 # Git Bash on Windows rewrites POSIX-looking arguments into Windows paths; keep docker's
 # container-side paths literal and convert only host paths explicitly (no-op on Linux).
 export MSYS_NO_PATHCONV=1
@@ -225,7 +231,7 @@ else
   fail "host ports" "live: $(docker port "${live_container}" 2>&1 | tr '\n' ' ') paper: $(docker port "${paper_container}" 2>&1 | tr '\n' ' ')"
 fi
 if [ "$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "${live_container}" 2>/dev/null | tr ' ' '\n' | grep -c .)" = "2" ] \
-  && ! docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "${live_container}" "${paper_container}" 2>/dev/null | tr ' ' '\n' | grep . | sort | uniq -d | grep -q .; then
+  && ! docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "${live_container}" "${paper_container}" 2>/dev/null | tr ' ' '\n' | grep . | sort | uniq -d | quiet_grep .; then
   pass "the two running gateways mount four different volumes"
 else
   fail "volumes" "$(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "${live_container}" "${paper_container}" 2>&1 | tr '\n' ' ')"
@@ -275,7 +281,7 @@ else
   fail "client up" "$(compose_client ps 2>&1 | tail -3)"
 fi
 # In test mode nothing answers the API behind the relay, so the strategy must wait.
-if wait_for 30 bash -c "docker logs ${strategy_container} 2>&1 | grep -q 'not ready'" && ! docker logs "${strategy_container}" 2>&1 | grep -q 'strategy placeholder'; then
+if wait_for 30 bash -c "docker logs ${strategy_container} 2>&1 | grep -q 'not ready'" && ! docker logs "${strategy_container}" 2>&1 | quiet_grep 'strategy placeholder'; then
   pass "the strategy waits while the gateway's API does not answer (it has not started its command)"
 else
   fail "strategy wait" "$(docker logs "${strategy_container}" 2>&1 | tail -3)"
@@ -284,7 +290,7 @@ fi
 # the loopback port the relay forwards to. /tmp is a noexec tmpfs, hence `bash <file>`.
 docker exec -i "${gateway_container}" bash -c 'cat >/tmp/fake-api.sh' <"${repo_root}/tests/compose/fake-api.sh"
 docker exec -d "${gateway_container}" socat TCP-LISTEN:4002,bind=127.0.0.1,reuseaddr,fork "EXEC:bash /tmp/fake-api.sh"
-if wait_for 60 bash -c "docker logs ${strategy_container} 2>&1 | grep -q 'strategy placeholder'" && docker logs "${strategy_container}" 2>&1 | grep -q 'ready: ib-gateway:4004 answered the API handshake'; then
+if wait_for 60 bash -c "docker logs ${strategy_container} 2>&1 | grep -q 'strategy placeholder'" && docker logs "${strategy_container}" 2>&1 | quiet_grep 'ready: ib-gateway:4004 answered the API handshake'; then
   pass "once the API answers through the relay, the strategy reaches it by service name and starts its command"
 else
   fail "strategy start" "$(docker logs "${strategy_container}" 2>&1 | tail -3)"
