@@ -1,0 +1,557 @@
+# Core helpers of the BrokerSRE Windows host kit: result objects, console output, atomic UTF-8
+# file writes, INI text editing, small converters, the kit state file and the bounded kit log.
+# Pure PowerShell and .NET; nothing here calls an external command. Works on Windows PowerShell
+# 5.1 and PowerShell 7, so no ternary, no '&&', no '??' and no non-ASCII characters (5.1 reads a
+# script without byte-order mark as ANSI).
+
+function New-GwCheckResult {
+    <#
+    .SYNOPSIS
+    Creates the result object every prerequisite and doctor check returns.
+    .DESCRIPTION
+    One shape for every check keeps the table view, the JSON view and the exit code logic in one
+    place. Status is restricted to four values: PASS (measured and fine), WARN (measured, works
+    today, will hurt later), FAIL (measured and broken) and SKIP (could not be measured; the
+    reason is in Detail). A check that cannot measure must return SKIP, never PASS.
+    .PARAMETER Name
+    Short stable identifier of the check, for example 'SleepOnAc'. Used as a key in JSON.
+    .PARAMETER Status
+    PASS, WARN, FAIL or SKIP.
+    .PARAMETER Detail
+    What was observed, in plain language. Never contains a secret.
+    .PARAMETER Fix
+    What the operator should do; empty when nothing needs doing.
+    .OUTPUTS
+    PSCustomObject with the properties Name, Status, Detail and Fix, in that order.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Builds an in-memory object; nothing on the host changes.')]
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][ValidateSet('PASS', 'WARN', 'FAIL', 'SKIP')][string]$Status,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Detail,
+        [AllowEmptyString()][string]$Fix = ''
+    )
+    return [pscustomobject][ordered]@{
+        Name   = $Name
+        Status = $Status
+        Detail = $Detail
+        Fix    = $Fix
+    }
+}
+
+function Write-GwConsole {
+    <#
+    .SYNOPSIS
+    Writes one line for the person at the keyboard.
+    .DESCRIPTION
+    The single place where the kit talks to the console. It uses the information stream
+    (Write-Host), never the success stream, so 'doctor.ps1 -Json > file' captures JSON only and
+    functions can still return objects. Colour follows the check status when one is given.
+    .PARAMETER Message
+    Text to show. Callers never pass a secret here.
+    .PARAMETER Status
+    Optional PASS, WARN, FAIL, SKIP or INFO; selects the colour.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Deliberate: operator-facing text goes to the information stream so that pipeline output stays machine-readable.')]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message,
+        [ValidateSet('PASS', 'WARN', 'FAIL', 'SKIP', 'INFO')][string]$Status = 'INFO'
+    )
+    $colour = $null
+    switch ($Status) {
+        'PASS' { $colour = [ConsoleColor]::Green }
+        'WARN' { $colour = [ConsoleColor]::Yellow }
+        'FAIL' { $colour = [ConsoleColor]::Red }
+        'SKIP' { $colour = [ConsoleColor]::DarkGray }
+    }
+    if ($null -eq $colour) { Write-Host $Message }
+    else { Write-Host $Message -ForegroundColor $colour }
+}
+
+function Get-GwPropertyValue {
+    <#
+    .SYNOPSIS
+    Reads a property that may not exist, without tripping strict mode.
+    .DESCRIPTION
+    Objects parsed from JSON carry only the keys that were present. Under Set-StrictMode a
+    plain '$object.Missing' throws, so every optional read goes through this function.
+    .PARAMETER InputObject
+    Any object, or null.
+    .PARAMETER Name
+    Property name (case-insensitive, as PowerShell properties are).
+    .PARAMETER Default
+    Value returned when the object is null or has no such property. Defaults to null.
+    .OUTPUTS
+    The property value, or the default.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name,
+        $Default = $null
+    )
+    if ($null -eq $InputObject) { return $Default }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
+
+function Resolve-GwFullPath {
+    <#
+    .SYNOPSIS
+    Turns a PowerShell path into an absolute file-system path without requiring it to exist.
+    .DESCRIPTION
+    .NET file APIs resolve relative paths against the process directory, which is not the
+    PowerShell location. Every path handed to System.IO goes through this function first.
+    .PARAMETER Path
+    Relative or absolute path; it may not exist yet.
+    .OUTPUTS
+    System.String, absolute path.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+function Write-GwFileAtomic {
+    <#
+    .SYNOPSIS
+    Writes text to a file as UTF-8 without byte-order mark, atomically.
+    .DESCRIPTION
+    Writes a temporary file in the same directory and then replaces the target in one step, so
+    a crash or a power cut never leaves a half-written compose file, journal or secret. The text
+    is written exactly as given: no byte-order mark and no newline are added. Windows
+    PowerShell 5.1 cmdlets (Out-File, Set-Content -Encoding UTF8, '>') add a mark or write
+    UTF-16, which is why this function uses System.IO.File with UTF8Encoding($false).
+    When the target exists it is replaced with File.Replace, which keeps the target's ACL.
+    .PARAMETER Path
+    Target file. Its directory must exist.
+    .PARAMETER Text
+    Content to write. Line endings are the caller's (the kit uses LF).
+    .OUTPUTS
+    None. Side effect: the file at Path holds exactly the UTF-8 bytes of Text.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
+    )
+    $target = Resolve-GwFullPath -Path $Path
+    $directory = Split-Path -Parent $target
+    $temporary = Join-Path $directory ('.{0}.{1}.tmp' -f (Split-Path -Leaf $target), [guid]::NewGuid().ToString('N'))
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    try {
+        [System.IO.File]::WriteAllText($temporary, $Text, $encoding)
+        if ([System.IO.File]::Exists($target)) {
+            [System.IO.File]::Replace($temporary, $target, [NullString]::Value)
+        }
+        else {
+            [System.IO.File]::Move($temporary, $target)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) }
+    }
+}
+
+function Read-GwTextFile {
+    <#
+    .SYNOPSIS
+    Reads a UTF-8 text file; returns null when it does not exist.
+    .DESCRIPTION
+    Get-Content in Windows PowerShell 5.1 decodes a file without byte-order mark as ANSI, so the
+    kit reads through System.IO.File with UTF-8 (a mark, when present, is consumed).
+    .PARAMETER Path
+    File to read.
+    .OUTPUTS
+    System.String with the whole content, or null for a missing file.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $target = Resolve-GwFullPath -Path $Path
+    if (-not [System.IO.File]::Exists($target)) { return $null }
+    return [System.IO.File]::ReadAllText($target, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Split-GwIniLine {
+    <#
+    .SYNOPSIS
+    Splits INI text into lines with LF semantics.
+    .DESCRIPTION
+    Normalises CRLF to LF and drops the final empty element produced by a trailing newline, so
+    that joining the lines with LF and appending one LF reproduces a normalised file.
+    .PARAMETER Text
+    INI text, possibly empty.
+    .OUTPUTS
+    System.String[] (empty for empty text).
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return [string[]]@() }
+    $normalised = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+    if ($normalised.EndsWith("`n")) { $normalised = $normalised.Substring(0, $normalised.Length - 1) }
+    return [string[]]($normalised -split "`n")
+}
+
+function Find-GwIniKey {
+    <#
+    .SYNOPSIS
+    Locates a section and a key inside INI lines.
+    .DESCRIPTION
+    Shared by the read, set and remove helpers so they agree on what a section header, a key
+    line and a comment are. Section and key names compare case-insensitively (the documented
+    .wslconfig example itself mixes 'localhostForwarding' and 'localhostforwarding'). Lines
+    starting with '#' or ';' are comments.
+    .PARAMETER Line
+    Lines from Split-GwIniLine.
+    .PARAMETER Section
+    Section name without brackets.
+    .PARAMETER Key
+    Key name.
+    .OUTPUTS
+    PSCustomObject: SectionIndex (header line or -1), KeyIndex (key line or -1), InsertIndex
+    (where a new key of this section belongs, or -1), Value (text right of '=' or null).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [AllowEmptyCollection()][string[]]$Line = @(),
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    # An empty array returned by a function arrives here as null; normalise before counting.
+    if ($null -eq $Line) { $Line = [string[]]@() }
+    $sectionIndex = -1
+    $keyIndex = -1
+    $insertIndex = -1
+    $value = $null
+    $inSection = $false
+    for ($index = 0; $index -lt $Line.Count; $index++) {
+        $text = $Line[$index]
+        if ($text -match '^\s*\[([^\]]+)\]\s*$') {
+            if ($inSection) { break }
+            if ($Matches[1].Trim() -ieq $Section) {
+                $inSection = $true
+                $sectionIndex = $index
+                $insertIndex = $index + 1
+            }
+            continue
+        }
+        if (-not $inSection) { continue }
+        if ($text.Trim().Length -gt 0) { $insertIndex = $index + 1 }
+        if ($text -match '^\s*([^#;=\s][^=]*?)\s*=\s*(.*?)\s*$') {
+            if ($Matches[1] -ieq $Key) {
+                $keyIndex = $index
+                $value = $Matches[2]
+            }
+        }
+    }
+    return [pscustomobject]@{ SectionIndex = $sectionIndex; KeyIndex = $keyIndex; InsertIndex = $insertIndex; Value = $value }
+}
+
+function Get-GwIniValue {
+    <#
+    .SYNOPSIS
+    Reads one value from INI text such as %UserProfile%\.wslconfig.
+    .PARAMETER Text
+    INI text; empty or null means "no file".
+    .PARAMETER Section
+    Section name without brackets, case-insensitive.
+    .PARAMETER Key
+    Key name, case-insensitive.
+    .OUTPUTS
+    System.String with the value (may be empty), or null when section or key is absent.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    $lines = [string[]]@(Split-GwIniLine -Text $Text)
+    $found = Find-GwIniKey -Line $lines -Section $Section -Key $Key
+    if ($found.KeyIndex -lt 0) { return $null }
+    return [string]$found.Value
+}
+
+function Set-GwIniValue {
+    <#
+    .SYNOPSIS
+    Returns INI text with one key set, leaving every other line untouched.
+    .DESCRIPTION
+    Text in, text out: nothing is written to disk here, so the function has no side effect and
+    the caller decides about backup and ShouldProcess. An existing key is replaced in place, a
+    new key is appended after the last non-blank line of its section, and a missing section is
+    appended at the end. Comments and unknown keys survive, which matters because .wslconfig
+    belongs to the operator, not to the kit. Output always uses LF and ends with one LF.
+    .PARAMETER Text
+    Current INI text; empty or null creates the content from nothing.
+    .PARAMETER Section
+    Section name without brackets.
+    .PARAMETER Key
+    Key name; written with exactly this casing.
+    .PARAMETER Value
+    Value to set.
+    .OUTPUTS
+    System.String, the new INI text.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure text transformation; the caller that writes the file owns ShouldProcess.')]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in (Split-GwIniLine -Text $Text)) { $lines.Add($line) }
+    $found = Find-GwIniKey -Line $lines.ToArray() -Section $Section -Key $Key
+    $newLine = '{0}={1}' -f $Key, $Value
+    if ($found.KeyIndex -ge 0) {
+        $lines[$found.KeyIndex] = $newLine
+    }
+    elseif ($found.SectionIndex -ge 0) {
+        $lines.Insert($found.InsertIndex, $newLine)
+    }
+    else {
+        if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim().Length -gt 0) { $lines.Add('') }
+        $lines.Add('[{0}]' -f $Section)
+        $lines.Add($newLine)
+    }
+    return (($lines.ToArray() -join "`n") + "`n")
+}
+
+function Remove-GwIniValue {
+    <#
+    .SYNOPSIS
+    Returns INI text with one key removed; every other line stays.
+    .DESCRIPTION
+    Counterpart of Set-GwIniValue, used by the undo path to restore "this key was not set".
+    Text in, text out; an absent key returns the input unchanged.
+    .PARAMETER Text
+    Current INI text.
+    .PARAMETER Section
+    Section name without brackets.
+    .PARAMETER Key
+    Key name.
+    .OUTPUTS
+    System.String, the new INI text.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure text transformation; the caller that writes the file owns ShouldProcess.')]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in (Split-GwIniLine -Text $Text)) { $lines.Add($line) }
+    $found = Find-GwIniKey -Line $lines.ToArray() -Section $Section -Key $Key
+    if ($found.KeyIndex -lt 0) { return [string]$Text }
+    $lines.RemoveAt($found.KeyIndex)
+    if ($lines.Count -eq 0) { return '' }
+    return (($lines.ToArray() -join "`n") + "`n")
+}
+
+function ConvertTo-GwDurationSecond {
+    <#
+    .SYNOPSIS
+    Converts a Go-style duration such as '1m30s' to seconds.
+    .DESCRIPTION
+    'docker compose config --format json' prints durations (stop_grace_period) in Go notation.
+    Supports hours, minutes, seconds and milliseconds; anything else returns null so the caller
+    reports "not measured" instead of guessing.
+    .PARAMETER Text
+    Duration text, for example '90s', '1m30s', '1h0m5s' or '500ms'.
+    .OUTPUTS
+    System.Double seconds, or null when the text is not a duration.
+    #>
+    [CmdletBinding()]
+    [OutputType([double])]
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $null }
+    $pattern = '^(?:(?<h>\d+(?:\.\d+)?)h)?(?:(?<m>\d+(?:\.\d+)?)m(?!s))?(?:(?<s>\d+(?:\.\d+)?)s)?(?:(?<ms>\d+(?:\.\d+)?)ms)?$'
+    $match = [regex]::Match($Text.Trim(), $pattern)
+    if (-not $match.Success) { return $null }
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    $total = [double]0
+    if ($match.Groups['h'].Success) { $total += [double]::Parse($match.Groups['h'].Value, $culture) * 3600 }
+    if ($match.Groups['m'].Success) { $total += [double]::Parse($match.Groups['m'].Value, $culture) * 60 }
+    if ($match.Groups['s'].Success) { $total += [double]::Parse($match.Groups['s'].Value, $culture) }
+    if ($match.Groups['ms'].Success) { $total += [double]::Parse($match.Groups['ms'].Value, $culture) / 1000 }
+    return $total
+}
+
+function ConvertTo-GwSizeByte {
+    <#
+    .SYNOPSIS
+    Converts a .wslconfig size such as '4GB' to bytes.
+    .DESCRIPTION
+    Microsoft documents that size values default to bytes and accept a unit suffix such as
+    '8GB' or '512MB'. Units are binary (1 KB = 1024 bytes). Unknown text returns null.
+    .PARAMETER Text
+    Size text.
+    .OUTPUTS
+    System.Int64 bytes, or null when the text is not a size.
+    #>
+    [CmdletBinding()]
+    [OutputType([long])]
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $null }
+    $match = [regex]::Match($Text.Trim(), '^(?<n>\d+)\s*(?<u>B|KB|MB|GB|TB)?$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) { return $null }
+    $number = [long]::Parse($match.Groups['n'].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    $multiplier = [long]1
+    switch ($match.Groups['u'].Value.ToUpperInvariant()) {
+        'KB' { $multiplier = [long]1024 }
+        'MB' { $multiplier = [long]1048576 }
+        'GB' { $multiplier = [long]1073741824 }
+        'TB' { $multiplier = [long]1099511627776 }
+    }
+    return ($number * $multiplier)
+}
+
+function ConvertTo-GwTimestampText {
+    <#
+    .SYNOPSIS
+    Normalises a timestamp to the text form 'yyyy-MM-ddTHH:mm:ssZ'.
+    .DESCRIPTION
+    PowerShell 7 turns ISO 8601 strings into DateTime when it parses JSON, Windows PowerShell
+    5.1 does not, and 5.1 serialises a DateTime as '\/Date(...)\/'. The kit therefore stores
+    timestamps as text and passes every value read back from JSON through this function before
+    writing it again, so a journal survives being edited by either edition.
+    .PARAMETER Value
+    A DateTime, a DateTimeOffset or text.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return '' }
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [DateTime]) { return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $culture) }
+    if ($Value -is [DateTimeOffset]) { return $Value.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ', $culture) }
+    return [string]$Value
+}
+
+function Get-GwKitStatePath {
+    <#
+    .SYNOPSIS
+    Returns the path of the kit state file inside a gateway folder.
+    .PARAMETER Path
+    Gateway folder.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return (Join-Path (Resolve-GwFullPath -Path $Path) 'kit-state.json')
+}
+
+function Get-GwKitState {
+    <#
+    .SYNOPSIS
+    Loads kit-state.json from a gateway folder.
+    .DESCRIPTION
+    setup.ps1 records what it generated (runtime, distro, trading mode, container and project
+    names, API port, image reference) so doctor, harden, start and uninstall act on the same
+    stack without asking again. A missing or unreadable file returns null; callers then report
+    "setup has not run here" instead of failing.
+    .PARAMETER Path
+    Gateway folder.
+    .OUTPUTS
+    PSCustomObject with the stored properties, or null.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $text = Read-GwTextFile -Path (Get-GwKitStatePath -Path $Path)
+    if ([string]::IsNullOrEmpty($text)) { return $null }
+    try { return ($text | ConvertFrom-Json) }
+    catch [System.ArgumentException] {
+        Write-Verbose ('kit-state.json is not valid JSON: {0}' -f $_.Exception.Message)
+        return $null
+    }
+}
+
+function Save-GwKitState {
+    <#
+    .SYNOPSIS
+    Writes kit-state.json into a gateway folder.
+    .DESCRIPTION
+    Adds Schema = 1 and writes atomically as UTF-8 without byte-order mark. The state never
+    contains a credential: only names, ports and the image reference.
+    .PARAMETER Path
+    Gateway folder (must exist).
+    .PARAMETER State
+    Object with Runtime, Distro, TradingMode, ContainerName, ProjectName, ApiPort, ImageRef.
+    .OUTPUTS
+    None. Side effect: <Path>\kit-state.json is replaced.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][pscustomobject]$State
+    )
+    $document = [ordered]@{ Schema = 1 }
+    foreach ($property in $State.PSObject.Properties) {
+        if ($property.Name -ne 'Schema') { $document[$property.Name] = $property.Value }
+    }
+    $json = ([pscustomobject]$document | ConvertTo-Json -Depth 4)
+    Write-GwFileAtomic -Path (Get-GwKitStatePath -Path $Path) -Text ($json.Replace("`r`n", "`n") + "`n")
+}
+
+function Write-GwLog {
+    <#
+    .SYNOPSIS
+    Appends one timestamped line to a size-bounded log file.
+    .DESCRIPTION
+    The start-at-boot and clock-fix tasks run with nobody watching, so they leave a trace here.
+    Growth is bounded: when the file exceeds MaxBytes it is renamed to '<file>.1' (replacing an
+    older '.1') before the new line is written, so at most two files of MaxBytes exist. A log
+    line never contains a credential; callers pass phase tokens, exit codes and fixed text.
+    .PARAMETER Path
+    Log file; its directory must exist.
+    .PARAMETER Message
+    Text of the line.
+    .PARAMETER MaxBytes
+    Rotation threshold in bytes; default 262144.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message,
+        [ValidateRange(64, 104857600)][int]$MaxBytes = 262144
+    )
+    $target = Resolve-GwFullPath -Path $Path
+    if ([System.IO.File]::Exists($target)) {
+        $length = (New-Object System.IO.FileInfo($target)).Length
+        if ($length -gt $MaxBytes) {
+            $rotated = $target + '.1'
+            if ([System.IO.File]::Exists($rotated)) { [System.IO.File]::Delete($rotated) }
+            [System.IO.File]::Move($target, $rotated)
+        }
+    }
+    $stamp = ConvertTo-GwTimestampText -Value ([DateTime]::UtcNow)
+    $line = '{0} {1}{2}' -f $stamp, $Message.Replace("`r", ' ').Replace("`n", ' '), "`n"
+    [System.IO.File]::AppendAllText($target, $line, (New-Object System.Text.UTF8Encoding($false)))
+}

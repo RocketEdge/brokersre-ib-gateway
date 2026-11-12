@@ -1,0 +1,4 @@
+# PowerShell in this directory uses four spaces (the analyzer enforces it); everything else
+# inherits the repository root settings (LF, UTF-8, final newline).
+[*.{ps1,psm1,psd1}]
+indent_size = 4
