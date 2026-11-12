@@ -137,3 +137,43 @@ render() {
   run bash -c "source '${BROKERSRE_LIB}/common.sh'; TRADING_MODE=paper set_ports; echo \$API_PORT \$SOCAT_PORT"
   [ "$output" == "4002 4004" ]
 }
+
+# config_hash: a fingerprint of the non-secret configuration, carried by the config_rendered
+# event, so a reader can tell that the configuration changed between two starts. It must not
+# depend on the credentials: a hash that included the password would let anyone who sees the
+# events test password guesses offline.
+config_hash() {
+  render 'true' | jq -r 'select(.event == "config_rendered") | .data.config_hash'
+}
+
+@test "config_rendered carries a 16-hex config_hash that is stable for the same settings" {
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  a="$(config_hash)"
+  b="$(config_hash)"
+  [[ "${a}" =~ ^[0-9a-f]{16}$ ]]
+  [ "${a}" == "${b}" ]
+}
+
+@test "config_hash changes when a setting changes" {
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  a="$(config_hash)"
+  export READ_ONLY_API=no
+  b="$(config_hash)"
+  [ "${a}" != "${b}" ]
+}
+
+@test "config_hash does not depend on the username or the password" {
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  a="$(config_hash)"
+  printf 'anotheruser' > "${SECRETS}/u"
+  printf 'hunter2-a-different-password' > "${SECRETS}/p"
+  b="$(config_hash)"
+  [ "${a}" == "${b}" ]
+}
+
+@test "no event of the rendering step contains the username or the password" {
+  export TWS_USERID_FILE="${SECRETS}/u" TWS_PASSWORD_FILE="${SECRETS}/p"
+  run render 'true'
+  [[ "$output" != *"dummyuser"* ]]
+  [[ "$output" != *"hunter2hunter2"* ]]
+}

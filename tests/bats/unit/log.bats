@@ -98,3 +98,27 @@ emit() { bash -c "source '${BROKERSRE_LIB}/log.sh'; log_event \"\$@\"" _ "$@"; }
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r .msg)" == "$(printf 'a"b\\c\td\ne\001f')" ]
 }
+
+# --- structured data on an event (log contract v2) -------------------------------------------
+
+emit_data() { bash -c "source '${BROKERSRE_LIB}/log.sh'; log_event_data \"\$@\"" _ "$@"; }
+
+@test "log_event_data adds a data object and keeps every other key" {
+  run emit_data entrypoint info container_start '{"gateway_version":"10.50.1g","n":3}' "starting"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.event == "container_start" and .msg == "starting" and .data.gateway_version == "10.50.1g" and .data.n == 3 and .seq == 1 and .boot_id == "0123456789abcdef"' >/dev/null
+  [ "$(cat "${LOG_DIR}/events/events.jsonl")" == "$output" ]
+}
+
+@test "data that is not a JSON object is dropped, the event itself is still emitted" {
+  run emit_data entrypoint info container_start 'not json' "starting"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.event == "container_start" and (has("data") | not)' >/dev/null
+}
+
+@test "json_object builds a flat object from key/value pairs and escapes the values" {
+  run bash -c "source '${BROKERSRE_LIB}/log.sh'; json_object a 'x\"y' b 'line1
+line2' c ''"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.a == "x\"y" and .b == "line1\nline2" and .c == ""' >/dev/null
+}

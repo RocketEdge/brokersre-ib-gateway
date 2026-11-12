@@ -65,7 +65,9 @@ mkdir -p "${LOG_DIR}/ibc" "${LOG_DIR}/jts" "${LOG_DIR}/state" "${LOG_DIR}/events
 # From here on every event carries this start's boot id and a sequence number (log.sh).
 new_boot_id
 set_phase starting
-log_event entrypoint info container_start "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
+log_event_data entrypoint info container_start \
+  "$(json_object gateway_version "${IB_GATEWAY_VERSION}" channel "${IB_GATEWAY_CHANNEL}" ibc_version "${IBC_VERSION}" ibc_release "${IBC_RELEASE_TAG:-}" trading_mode "${TRADING_MODE:-}" instance "${IBGW_INSTANCE:-default}")" \
+  "brokersre-ib-gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) IBC ${IBC_VERSION} starting as uid $(id -u)"
 
 set_ports
 render_config

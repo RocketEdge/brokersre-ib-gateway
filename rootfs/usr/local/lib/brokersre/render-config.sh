@@ -71,6 +71,29 @@ properties_escape() {
   printf '%s' "${out}"
 }
 
+# config_fingerprint: print 16 hex characters that identify the NON-SECRET configuration.
+#
+# Purpose: an operator or an auditor wants to know that the configuration changed between two
+# starts ("who changed what, when"). The fingerprint is the SHA-256 of config.ini without its
+# credential lines, plus the settings that live only in the environment.
+# Why the credentials are excluded: events leave the host. A hash that depended on the password
+# would let anyone who can read the events test password guesses offline, and it would change
+# on every password rotation although nothing about the gateway's behaviour changed.
+config_fingerprint() {
+  {
+    grep -v -i -E '^[[:space:]]*(IbLoginId|IbPassword|FIXLoginId|FIXPassword)[[:space:]]*[=:]' "${IBC_INI}" 2>/dev/null
+    printf '%s\n' "TIME_ZONE=${TIME_ZONE:-}" "TWOFA_TIMEOUT_ACTION=${TWOFA_TIMEOUT_ACTION:-}" \
+      "TWOFA_MAX_PROMPTS=${TWOFA_MAX_PROMPTS:-}" "RELAY_MODE=${RELAY_MODE:-}" "JAVA_HEAP_MB=${JAVA_HEAP_MB:-}" \
+      "CUSTOM_CONFIG=${CUSTOM_CONFIG:-no}"
+  } | sha256sum | cut -c1-16
+}
+
+# config_data: the `data` object of the config_rendered / config_custom event.
+config_data() {
+  json_object config_hash "$(config_fingerprint)" trading_mode "${TRADING_MODE:-}" \
+    read_only_api "${READ_ONLY_API:-}" auto_restart_time "${AUTO_RESTART_TIME:-}" time_zone "${TIME_ZONE:-}"
+}
+
 render_config() {
   mkdir -p "${RUN_DIR}" "${TWS_SETTINGS_PATH}"
   if [ "${CUSTOM_CONFIG:-no}" = "yes" ]; then
@@ -78,7 +101,7 @@ render_config() {
       log_event entrypoint error config_missing "CUSTOM_CONFIG=yes but ${IBC_INI} is not readable"
       exit 1
     fi
-    log_event entrypoint info config_custom "using operator-supplied ${IBC_INI}"
+    log_event_data entrypoint info config_custom "$(config_data)" "using operator-supplied ${IBC_INI}"
   else
     file_env TWS_USERID
     file_env TWS_PASSWORD
@@ -96,7 +119,7 @@ render_config() {
     mv -f "${IBC_INI}.tmp" "${IBC_INI}"
     chmod 0600 "${IBC_INI}"
     umask 022
-    log_event entrypoint info config_rendered "IBC config rendered to ${IBC_INI} (mode 0600)"
+    log_event_data entrypoint info config_rendered "$(config_data)" "IBC config rendered to ${IBC_INI} (mode 0600)"
     unset_secret TWS_PASSWORD
     unset_secret TWS_USERID
   fi

@@ -88,6 +88,19 @@ log_event_persist() {
   } 9>"${dir}/.lock"
 }
 
+# json_object KEY VALUE [KEY VALUE ...]: print a flat JSON object whose values are strings.
+# For the `data` of an event: facts a reader would otherwise have to parse out of `msg`
+# (versions, a configuration fingerprint). Never pass a secret: events leave the host.
+json_object() {
+  local out="" sep=""
+  while [ "$#" -ge 2 ]; do
+    out+="${sep}\"$(json_escape "$1")\":\"$(json_escape "$2")\""
+    sep=","
+    shift 2
+  done
+  printf '{%s}' "${out}"
+}
+
 # log_event SRC LEVEL EVENT MSG...: emit one event.
 #
 # The stdout line is never lost: when the log volume cannot be written (not mounted, not
@@ -97,8 +110,20 @@ log_event_persist() {
 log_event() {
   local src="$1" level="$2" event="$3"
   shift 3
+  log_event_data "${src}" "${level}" "${event}" "" "$@"
+}
+
+# log_event_data SRC LEVEL EVENT DATA MSG...: emit one event that also carries a `data` object.
+#
+# DATA is the text of a JSON object (build it with json_object) or empty. Text that does not
+# look like an object is dropped and the event is emitted without `data`: a formatting mistake
+# in optional detail must never cost the event or produce an invalid line.
+log_event_data() {
+  local src="$1" level="$2" event="$3" data="$4"
+  shift 4
   local msg="$*" body boot="${BOOT_ID:-}" dir
   body="\"src\":\"$(json_escape "${src}")\",\"level\":\"$(json_escape "${level}")\",\"event\":\"$(json_escape "${event}")\",\"msg\":\"$(json_escape "${msg}")\""
+  if [[ "${data}" == \{*\} ]]; then body+=",\"data\":${data}"; fi
   if [ -n "${LOG_DIR:-}" ]; then
     dir="${LOG_DIR}/events"
     if [ -z "${boot}" ] && [ -r "${LOG_DIR}/state/boot_id" ]; then
