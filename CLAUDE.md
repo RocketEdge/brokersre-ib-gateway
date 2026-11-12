@@ -16,6 +16,7 @@ tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable       
 tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release policy, archive pre-fetch, README table), on the host (needs jq)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
+scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
 ```
 
@@ -47,7 +48,12 @@ All of these must be green before claiming a change done; run them fresh.
    IBKR at build time; the private archive is RocketEdge's internal fallback.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
    only through `publish.yml` after Trivy passes; consumers pin digests.
-9. **Tests never log in**: the IBC smoke test runs with `--network none`.
+9. **Tests never log in**: nothing started by a push or a pull request contacts IBKR; the IBC
+   smoke test runs with `--network none`. The one exception is not a test: the qualification
+   (`scripts/qualify-paper.sh`, `qualify-paper.yml`, ADR 0014) makes exactly one login to a
+   PAPER account, is dispatched by hand, and its credentials live in the environment
+   `paper-qualification` behind a required reviewer. It never answers a second factor and
+   never retries. Do not add a retry, a schedule or a `pull_request` trigger to it.
 10. Public repository: no BrokerSRE pricing, client names, Azure identifiers or internal plans.
 11. Trademark sentence on every public artefact (README, release notes, image description).
 
@@ -60,11 +66,13 @@ scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pr
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
 rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
+scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
+rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
 schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
 tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
 compose/docker-compose.example.yml
-.github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release (CodeQL comes from GitHub default setup, enabled by the organisation)
+.github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
 
