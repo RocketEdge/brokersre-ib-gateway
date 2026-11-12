@@ -1,0 +1,73 @@
+// Alert rule B "health" (azure/bicep/modules/alerts.bicep, every 5 minutes).
+//
+// One rule, five conditions (alert rules are billed per rule, so they share one). Fires per
+// gateway instance and condition:
+//   connectivity_lost  IB API code 1100 at least 3 times in 15 minutes;
+//   memory_high        memory working set above 85 % of the container limit for 10 minutes
+//                      (every sample of the last 10 minutes, at least 10 samples);
+//   restart_loop       3 or more container starts (distinct BootId) in 30 minutes;
+//   oom_kill           the kernel killed a process of the container (event oom_kill, or the
+//                      OomKills counter rose) in the last 15 minutes;
+//   disk_low           the gateway reported a full log or settings volume (event disk_low).
+// Returns one row per instance and condition; nothing during the maintenance window (the daily
+// restart produces connectivity codes on purpose). A value that was not measured never makes a
+// condition true: memory_high needs both the working set and the limit.
+//
+// The two lines below are replaced by the Bicep module with the maintenanceWindowUtc
+// parameter (time of day in UTC; equal values mean "no window"). Keep them exactly as they are.
+let maintenance_start = time(00:00:00);
+let maintenance_end = time(00:00:00);
+let time_of_day = now() - startofday(now());
+let in_maintenance = maintenance_start != maintenance_end
+    and iff(maintenance_start < maintenance_end,
+        time_of_day >= maintenance_start and time_of_day < maintenance_end,
+        time_of_day >= maintenance_start or time_of_day < maintenance_end);
+let connectivity_lost =
+    IbGwEvents_CL
+    | where TimeGenerated > ago(15m)
+    | where Code == 1100
+    | summarize Occurrences = count() by Instance
+    | where Occurrences >= 3
+    | project Instance, Condition = "connectivity_lost",
+        Detail = strcat(Occurrences, " x code 1100 in 15 min");
+let memory_high =
+    IbGwMetrics_CL
+    | where TimeGenerated > ago(10m)
+    | where isnotnull(MemWorkingSetBytes) and MemLimitBytes > 0
+    | summarize Samples = count(), LowestShare = min(todouble(MemWorkingSetBytes) / MemLimitBytes) by Instance
+    | where Samples >= 10 and LowestShare > 0.85
+    | project Instance, Condition = "memory_high",
+        Detail = strcat("working set at or above ", toint(LowestShare * 100), " % of the limit for 10 min");
+let restart_loop =
+    union
+        (IbGwEvents_CL | where TimeGenerated > ago(30m) | project Instance, BootId),
+        (IbGwMetrics_CL | where TimeGenerated > ago(30m) | project Instance, BootId)
+    | where isnotempty(BootId)
+    | summarize Boots = dcount(BootId) by Instance
+    | where Boots >= 3
+    | project Instance, Condition = "restart_loop",
+        Detail = strcat(Boots, " container starts in 30 min");
+let oom_kill =
+    union
+        (IbGwEvents_CL
+        | where TimeGenerated > ago(15m)
+        | where Event == "oom_kill"
+        | summarize Kills = count() by Instance),
+        (IbGwMetrics_CL
+        | where TimeGenerated > ago(15m)
+        | where isnotnull(OomKills)
+        | summarize Kills = max(OomKills) - min(OomKills) by Instance, BootId
+        | summarize Kills = sum(Kills) by Instance)
+    | summarize Kills = sum(Kills) by Instance
+    | where Kills > 0
+    | project Instance, Condition = "oom_kill",
+        Detail = strcat(Kills, " OOM kill(s) in 15 min");
+let disk_low =
+    IbGwEvents_CL
+    | where TimeGenerated > ago(15m)
+    | where Event == "disk_low"
+    | summarize arg_max(TimeGenerated, Msg) by Instance
+    | project Instance, Condition = "disk_low", Detail = Msg;
+union connectivity_lost, memory_high, restart_loop, oom_kill, disk_low
+| where not(in_maintenance)
+| project Instance, Condition, Detail

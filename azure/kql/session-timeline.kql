@@ -1,0 +1,17 @@
+// Session timeline: every stretch of time a gateway spent in one phase.
+//
+// Source: the Phase column of IbGwMetrics_CL (one sample every 30 seconds), so a phase shorter
+// than a sample interval can be missed and From/To are accurate to about 30 seconds. A gap
+// between two rows of an instance (To of one row well before From of the next) means that no
+// sample arrived in between: the state is NOT known there; it is not "logged-in".
+// Use: paste into Log Analytics and pick the time range. Columns: Instance, BootId, Phase,
+// From, To, Duration, Samples.
+IbGwMetrics_CL
+| where isnotempty(Phase)
+| sort by Instance asc, TimeGenerated asc
+| extend NewStretch = Instance != prev(Instance) or BootId != prev(BootId) or Phase != prev(Phase)
+| extend Stretch = row_cumsum(toint(NewStretch))
+| summarize From = min(TimeGenerated), To = max(TimeGenerated), Samples = count()
+    by Instance, BootId, Phase, Stretch
+| project Instance, BootId, Phase, From, To, Duration = To - From, Samples
+| sort by Instance asc, From asc

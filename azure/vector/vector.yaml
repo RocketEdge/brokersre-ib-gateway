@@ -1,23 +1,28 @@
 # Vector pipeline: IB Gateway log volume -> YOUR Azure Log Analytics workspace.
 #
 # Purpose   Tail the gateway's event and metric files (JSON Lines) and, only when the operator
-#           opted in, its raw IBC/launcher logs; map each line to the columns declared in
-#           ../schema/streams.json; redact; hand the rows to the sinks defined in
-#           sinks-managed-identity.yaml or sinks-certificate.yaml (entrypoint.sh picks one).
+#           opted in, its raw IBC/launcher logs; map each line to the columns of its table;
+#           redact; hand the rows to the sinks of sinks-managed-identity.yaml or
+#           sinks-certificate.yaml (entrypoint.sh renders one of them).
 # Contract  Inputs are read-only files under /var/log/ibgateway (log contract v2). Outputs are
 #           the transforms events_out, metrics_out and raw_out: their rows carry exactly the
-#           columns of the matching stream, with `timestamp` in place of TimeGenerated (the
+#           columns the data collection rule declares for the matching stream
+#           (../bicep/modules/dcr.bicep), with `timestamp` in place of TimeGenerated (the
 #           azure_logs_ingestion sink writes TimeGenerated from the event timestamp).
-#           azure/tests/run.sh compares real output with the schema file and fails on drift.
+#           azure/tests/run.sh runs this file in the real container and fails when the rows
+#           and the compiled Bicep template disagree on a column or a type.
+#           Adding a column: declare it in tables.bicep and dcr.bicep, deploy, wait a few
+#           minutes for the schema to propagate, and only then emit it here.
 # Rules     1. A malformed line is dropped and counted, never fatal
-#              (component_discarded_events_total of the mapping transform, printed below).
+#              (component_discarded_events_total of the mapping transform, printed on stdout).
 #           2. A value that was not measured is absent, never 0.
 #           3. An IBKR account id leaves the host only as [ACCT:…last3]; the user name only as
-#              [USER]; raw logs are not read into a row at all unless IBGW_RAW_MODE says so.
-#           4. No network listener, no docker.sock, one writable directory (data_dir).
-# Env       IBGW_INSTANCE, HOST_LABEL (row labels); IBGW_RAW_MODE and IBGW_REDACT_USERNAME are
-#           set by entrypoint.sh only, never by the operator; the sink files read the DCR and
-#           identity variables.
+#              [USER]; a raw line becomes a row only when IBGW_RAW_MODE allows it.
+#           4. No network listener, no docker.sock, one writable volume (/var/tmp).
+# Env       IBGW_INSTANCE, HOST_LABEL (row labels, read by the mappings); IBGW_RAW_MODE and
+#           IBGW_REDACT_USERNAME are set by entrypoint.sh only, never by the operator.
+#           Vector 0.61 does not interpolate ${VAR} in this file (that needs
+#           --dangerously-allow-env-var-interpolation, which stays off).
 # Tests     tests/*.test.yaml (vector test) and azure/tests/run.sh (real container, fixtures).
 
 # Checkpoints of the file sources and the sinks' disk buffers. The compose override mounts a
@@ -313,7 +318,7 @@ transforms:
         ], .name)
 
 sinks:
-  # Vector's counters as JSON lines on stdout (Vector's own log lines go to stderr as JSON,
+  # Vector's counters as JSON lines on stdout, next to Vector's own log lines (JSON as well,
   # VECTOR_LOG_FORMAT=json). Nothing from the gateway is ever printed here.
   stdout_metrics:
     type: console

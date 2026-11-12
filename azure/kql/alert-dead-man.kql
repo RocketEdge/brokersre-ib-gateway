@@ -1,0 +1,18 @@
+// Alert rule C "dead man" (azure/bicep/modules/alerts.bicep, every 15 minutes).
+//
+// Fires, per gateway instance, when no metrics row has ARRIVED in the workspace for more than
+// 10 minutes: the gateway container is down, the shipper is down, the host is off or the
+// network path to Azure is broken. The gateway writes a sample every 30 seconds, so silence is
+// never normal. ingestion_time() is used instead of TimeGenerated on purpose: a shipper that
+// catches up after an outage sends old timestamps, and what matters is whether rows arrive.
+// (ingestion_time() is not allowed in rules evaluated every minute; this rule runs every 15.)
+//
+// The rule looks back two days (overrideQueryTimeRange, the maximum for an alert rule), so an
+// instance is known for two days after its last row and then drops out; an instance that never
+// sent a row cannot be reported. Run by hand, the time range comes from the query window.
+let silent_longer_than = 10m;
+IbGwMetrics_CL
+| summarize LastArrival = max(ingestion_time()), LastSample = max(TimeGenerated) by Instance
+| where LastArrival < ago(silent_longer_than)
+| project Instance, Condition = "no_metrics", LastArrival, LastSample,
+    Detail = strcat("no metrics row arrived for ", datetime_diff("minute", now(), LastArrival), " min")

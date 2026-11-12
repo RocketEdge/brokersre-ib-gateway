@@ -1,0 +1,51 @@
+// Alert rule A "human needed" (azure/bicep/modules/alerts.bicep, every 5 minutes).
+//
+// Fires, per gateway instance, when somebody has to act:
+//   twofa_pending   the gateway has been waiting for the second factor for more than 5 minutes;
+//   needs_human     the gateway has been in phase needs-human for more than 5 minutes;
+//   not_logged_in   the gateway has not been logged in for more than 10 minutes, outside the
+//                   maintenance window (the daily restart logs out on purpose).
+// Source: the Phase column of IbGwMetrics_CL (one sample every 30 seconds).
+// Returns one row per instance and condition; the rule alerts when a row exists and resolves
+// by itself when the rows stop. An instance whose samples stopped arriving is NOT reported
+// here (its last phase is stale); that is the job of alert rule C (alert-dead-man.kql).
+// Latency: evaluated every 5 minutes on data that takes up to a few minutes to arrive. For a
+// seconds-scale second-factor page use the sidecar notifier, not this rule.
+//
+// The two lines below are replaced by the Bicep module with the maintenanceWindowUtc
+// parameter (time of day in UTC; equal values mean "no window"). Keep them exactly as they are.
+let maintenance_start = time(00:00:00);
+let maintenance_end = time(00:00:00);
+let lookback = 30m;
+let waiting_longer_than = 5m;
+let not_logged_in_longer_than = 10m;
+let sample_must_be_newer_than = 3m;
+let time_of_day = now() - startofday(now());
+let in_maintenance = maintenance_start != maintenance_end
+    and iff(maintenance_start < maintenance_end,
+        time_of_day >= maintenance_start and time_of_day < maintenance_end,
+        time_of_day >= maintenance_start or time_of_day < maintenance_end);
+IbGwMetrics_CL
+| where TimeGenerated > ago(lookback)
+| where isnotempty(Phase)
+| summarize
+    FirstSample = min(TimeGenerated),
+    LastSample = max(TimeGenerated),
+    LastNotWaiting = maxif(TimeGenerated, Phase !in ("2fa-pending", "needs-human")),
+    LastLoggedIn = maxif(TimeGenerated, Phase == "logged-in"),
+    arg_max(TimeGenerated, Phase)
+    by Instance
+| where LastSample > ago(sample_must_be_newer_than)
+// When the whole lookback shows one state, the state is at least as old as the first sample.
+| extend WaitingSince = coalesce(LastNotWaiting, FirstSample)
+| extend NotLoggedInSince = coalesce(LastLoggedIn, FirstSample)
+| extend Condition = case(
+    Phase == "2fa-pending" and WaitingSince < ago(waiting_longer_than), "twofa_pending",
+    Phase == "needs-human" and WaitingSince < ago(waiting_longer_than), "needs_human",
+    Phase !in ("logged-in", "test-mode") and NotLoggedInSince < ago(not_logged_in_longer_than)
+        and not(in_maintenance), "not_logged_in",
+    "")
+| where isnotempty(Condition)
+| extend Since = iff(Condition == "not_logged_in", NotLoggedInSince, WaitingSince)
+| project Instance, Condition, Phase, Since,
+    Detail = strcat("phase ", Phase, " for ", datetime_diff("minute", now(), Since), " min")
