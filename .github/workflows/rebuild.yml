@@ -7,17 +7,33 @@
 #                             every OS update, also the ones below the gate's severity.
 #   daily (05:30 UTC)         scan the digest each channel tag points at, both platforms, with the
 #                             gate's flags. scripts/rebuild-decision.sh decides: a CRITICAL or
-#                             HIGH finding in OS packages that has a fixed package requests a
+#                             HIGH finding in OS packages that has a fixed package asks for a
 #                             rebuild of that channel only. scripts/rebuild-issue.sh keeps one
-#                             tracking issue per channel (opened, rewritten in place, closed when
-#                             the published image scans clean). While the finding persists the
-#                             request is repeated every day: when a rebuild cannot pick the fix
-#                             up, its own gate fails, nothing is published and the issue stays
-#                             open for a person (docs/upgrade-policy.md).
+#                             tracking issue per channel and decides whether today's run requests
+#                             the rebuild: on the first REBUILD_MAX_ATTEMPTS days (repository
+#                             variable, default 3) with the same published image it does, with
+#                             one comment a day from day 2 on; after that it stops requesting
+#                             and the comments say that a person must decide. A rebuild that
+#                             fails its own gate three times will not pass a fourth time by
+#                             itself, and each attempt builds both platforms and leaves an
+#                             untagged image in the registry (docs/upgrade-policy.md).
 #
 # The digest comes from the registry, not from a release's digests-<channel>.json: releases of an
 # already released version are updated in place, so the newest release is not always the one
 # the channel tag points at.
+#
+# When both paths fall on the same day (the 1st): a rebuild requested by the 05:30 scan and the
+# 07:00 monthly rebuild carry the same -rYYYYMMDD suffix. The later publish moves that tag and
+# the channel tags to its own digest and rewrites the release of that name in place (no second
+# release, no second notification); the earlier digest stays in the registry, signed, under no
+# tag. publish.yml runs one publish per channel at a time, so the two never interleave.
+#
+# Limits of a schedule (GitHub's documentation of the `schedule` event): a run can start late
+# or be dropped when GitHub Actions is under load, and scheduled workflows are disabled
+# automatically after 60 days without repository activity. "Daily" is therefore a target.
+#
+# The two cron strings below are repeated in the job conditions; tests/bats/ci/workflows.bats
+# fails when the two places differ (a job whose condition matches no schedule never runs).
 name: Rebuild (monthly, and daily when a fix exists)
 
 on:
@@ -58,20 +74,26 @@ jobs:
       fail-fast: false
       matrix:
         channel: [stable, latest]
+    # One scan per channel at a time: a scheduled and a manual scan that overlapped could both
+    # find no open issue and both open one. The second one waits and then sees the first one's
+    # issue (and, on the same day, requests nothing).
+    concurrency:
+      group: rebuild-scan-${{ matrix.channel }}
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
+    env:
+      CHANNEL: ${{ matrix.channel }}
     # A matrix job has one set of outputs for all legs; each leg writes only the output named
-    # after its channel, so request-rebuild sees both decisions.
+    # after its channel (scripts/rebuild-issue.sh prints it), so request-rebuild sees both.
     outputs:
-      stable: ${{ steps.decide.outputs.stable }}
-      latest: ${{ steps.decide.outputs.latest }}
+      stable: ${{ steps.issue.outputs.stable }}
+      latest: ${{ steps.issue.outputs.latest }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve the digest the channel tag points at
         id: published
-        env:
-          CHANNEL: ${{ matrix.channel }}
         run: |
           set -euo pipefail
           digest=$(docker buildx imagetools inspect "$IMAGE:$CHANNEL" --format '{{json .Manifest}}' | jq -r '.digest // empty')
@@ -82,11 +104,12 @@ jobs:
       # the report is the input of the decision. A scan that fails (no report) fails the leg,
       # so "could not scan" is never read as "nothing to do".
       - name: Trivy scan of the published image, linux/amd64
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/amd64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ steps.published.outputs.ref }}
           format: json
           output: os-amd64.json
@@ -95,11 +118,12 @@ jobs:
           ignore-unfixed: true
           vuln-type: os
       - name: Trivy scan of the published image, linux/arm64
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
           TRIVY_IMAGE_SRC: remote
         with:
+          version: v0.76.2
           image-ref: ${{ steps.published.outputs.ref }}
           format: json
           output: os-arm64.json
@@ -107,24 +131,28 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           vuln-type: os
-      - name: Decide (scripts/rebuild-decision.sh)
+      - name: Decide (scripts/check-report-arch.sh, scripts/rebuild-decision.sh)
         id: decide
-        env:
-          CHANNEL: ${{ matrix.channel }}
+        # Each report must cover the platform that was asked for: TRIVY_PLATFORM is a
+        # pass-through of the scanner action, and two reports of the runner's platform would
+        # read as "both platforms are clean".
         run: |
           set -euo pipefail
-          decision="$(scripts/rebuild-decision.sh "$CHANNEL" os-amd64.json os-arm64.json)"
-          printf '%s\n' "$decision" | tee -a "$GITHUB_OUTPUT"
-          echo "$CHANNEL=$(sed -n 's/^action=//p' <<< "$decision")" >> "$GITHUB_OUTPUT"
-      - name: Tracking issue (scripts/rebuild-issue.sh)
+          scripts/check-report-arch.sh os-amd64.json linux/amd64
+          scripts/check-report-arch.sh os-arm64.json linux/arm64
+          scripts/rebuild-decision.sh "$CHANNEL" os-amd64.json os-arm64.json | tee -a "$GITHUB_OUTPUT"
+      - name: Tracking issue, and whether to request a rebuild today (scripts/rebuild-issue.sh)
+        id: issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHANNEL: ${{ matrix.channel }}
           ACTION: ${{ steps.decide.outputs.action }}
           CVES: ${{ steps.decide.outputs.cves }}
           REF: ${{ steps.published.outputs.ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: scripts/rebuild-issue.sh "$CHANNEL" "$ACTION" "$CVES" "$REF"
+          REBUILD_MAX_ATTEMPTS: ${{ vars.REBUILD_MAX_ATTEMPTS || '3' }}
+        run: |
+          set -euo pipefail
+          scripts/rebuild-issue.sh "$CHANNEL" "$ACTION" "$CVES" "$REF" | tee -a "$GITHUB_OUTPUT"
 
   request-rebuild:
     needs: scan-published
@@ -132,18 +160,22 @@ jobs:
     if: ${{ !cancelled() && (needs.scan-published.outputs.stable == 'rebuild' || needs.scan-published.outputs.latest == 'rebuild') }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: write
     steps:
-      - name: Request one OS-patch rebuild for the channels that need it
-        # One publish.yml run for both channels: its concurrency group keeps a single pending
-        # run, so two separate requests could replace each other.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Channels that asked for a rebuild (scripts/rebuild-channels.sh)
+        id: channels
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STABLE: ${{ needs.scan-published.outputs.stable }}
           LATEST: ${{ needs.scan-published.outputs.latest }}
         run: |
-          channels=""
-          if [ "$STABLE" = rebuild ]; then channels="stable"; fi
-          if [ "$LATEST" = rebuild ]; then channels="${channels:+$channels }latest"; fi
-          echo "requesting an OS-patch rebuild of: $channels"
-          gh workflow run publish.yml -R "$GITHUB_REPOSITORY" -f rebuild=true -f channels="$channels"
+          set -euo pipefail
+          scripts/rebuild-channels.sh "$STABLE" "$LATEST" | tee -a "$GITHUB_OUTPUT"
+      - name: Request one OS-patch rebuild for those channels
+        # One request for both channels keeps the number of publish runs down; publish.yml
+        # serialises per channel, so a request for one channel never displaces the other's.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNELS: ${{ steps.channels.outputs.channels }}
+        run: gh workflow run publish.yml -R "$GITHUB_REPOSITORY" -f rebuild=true -f channels="$CHANNELS"
