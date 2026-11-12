@@ -21,8 +21,15 @@
 #   - Every check is one function check_<name> that prints one or more result lines
 #     `STATUS|name|detail|fix` (STATUS is PASS, WARN, FAIL or SKIP) and nothing else. A check
 #     that cannot measure prints SKIP with the reason, never PASS.
+#   - FAIL stops a container start, so it is reserved for conditions under which the gateway
+#     cannot work or would send IBKR a wrong login (no credentials, a secret file IBC would
+#     misread, a restart time IBC rejects, an unwritable directory, a heap that does not fit,
+#     no room on the disk). What is likely but not certain, or what the image cannot verify
+#     (the time-zone name, a tight heap, a low free-space percentage), is a WARN.
 #   - Each check runs in its own subshell with its stderr discarded: a check that crashes is
-#     reported as FAIL "check crashed" and the remaining checks still run.
+#     reported as WARN "check crashed" and the remaining checks still run. A defect in doctor
+#     never changes the exit code by itself, so the preflight cannot stop a gateway by being
+#     wrong about itself.
 #   - Nothing here prints a secret, its length, or the value of a variable that could hold one
 #     by mistake (a *_FILE variable, an unknown variable): such variables are named, never
 #     quoted. Secret files are examined with bash builtins only, so no secret reaches `ps`.
@@ -63,9 +70,17 @@ doctor_watched_prefixes=(TWS_ TWOFA_ IBC_ AUTO_ JAVA_ VNC_ LOG_ RELAY_ DOCTOR_)
 # (AUTO_RESTART_TIME) plus the Saturday window. Disconnects are normal inside them.
 doctor_reset_windows="North America 00:15-01:45 America/New_York, Europe 06:25-07:45 Europe/Zurich (CET), Asia 04:45-06:05 and 20:15-21:15 Asia/Hong_Kong, Saturday 00:00-02:00 America/New_York"
 
-# The event a WARN of an ordinary check becomes in --startup mode. `config_deprecated` (ignored
-# variables), `doctor_failed` and `doctor_ok` are fixed by the log contract.
+# The event a WARN of an ordinary check, or a crashed check, becomes in --startup mode. With
+# `config_deprecated` (ignored variables), `doctor_failed` and `doctor_ok` it is part of the
+# log contract.
 doctor_warning_event="doctor_warning"
+
+# The detail of the WARN that stands for a crashed check, the same in every output mode.
+doctor_crash_detail="check crashed (a defect in doctor, please report it); the start continues"
+
+# Free space below this many KiB (256 MiB) on the filesystem of the log or the settings volume
+# is the one disk condition that fails: the Gateway cannot write its logs or settings.
+doctor_disk_floor_kb=262144
 
 # Results of the current run, filled by doctor_run_check: four parallel arrays, one entry per
 # result line.
@@ -556,19 +571,25 @@ check_restart_window() {
   return 0
 }
 
-# check_time_zone: TIME_ZONE looks like an IANA zone name (`Area/City`, further components
-# allowed) or is `UTC`; FAIL otherwise or when it is not set. Only the shape can be tested:
-# the image has no zone database to look the name up in.
+# check_time_zone: TIME_ZONE has the shape of a zone name the Gateway knows.
+#
+# PASS for `UTC`, `GMT` and the `Area/City` shape (further components allowed, which covers
+# `Etc/...`). WARN for anything else and for an unset value. Never FAIL: the image has no zone
+# database to look the name up in, so a name of another shape may still be valid (`Singapore`,
+# `Japan`, `EST5EDT` are), and a check that cannot verify must not stop a start. The WARN
+# exists because IBC and the Gateway fall back silently on a zone they do not know, so a
+# misspelt name shows up nowhere else.
 check_time_zone() {
   local name=time_zone zone="${TIME_ZONE:-}" pattern='^[A-Za-z_]+(/[A-Za-z0-9_+-]+)+$'
   local fix="set TIME_ZONE to an IANA zone name such as America/New_York"
+  local reason="the image has no time-zone database; IBC and the Gateway fall back silently on an unknown zone"
   local LC_ALL=C
   if [ -z "${zone}" ]; then
-    doctor_result FAIL "${name}" "TIME_ZONE is not set" "${fix}"
-  elif [ "${zone}" = "UTC" ] || [[ "${zone}" =~ ${pattern} ]]; then
+    doctor_result WARN "${name}" "TIME_ZONE is not set, so the Gateway's time zone cannot be verified: ${reason}" "${fix}"
+  elif [ "${zone}" = "UTC" ] || [ "${zone}" = "GMT" ] || [[ "${zone}" =~ ${pattern} ]]; then
     doctor_result PASS "${name}" "TIME_ZONE=${zone}"
   else
-    doctor_result FAIL "${name}" "TIME_ZONE '$(doctor_clip "${zone}")' does not look like an IANA zone name (Area/City)" "${fix}"
+    doctor_result WARN "${name}" "TIME_ZONE '$(doctor_clip "${zone}")' cannot be verified: ${reason}" "${fix}"
   fi
 }
 
@@ -697,19 +718,23 @@ check_writable_dirs() {
   return 0
 }
 
-# check_heap_vs_memory: the Java heap leaves room inside the container's memory limit.
+# check_heap_vs_memory: the Java heap fits inside the container's memory limit.
 #
 # Heap in MB: JAVA_HEAP_MB when it is a number, 768 otherwise; `auto` is half of the limit
 # clamped to 768..4096 (768 without a limit). Limit: ${CGROUP_ROOT:-/sys/fs/cgroup}/memory.max
-# (cgroup v2), where `max` means none. Heap above 75% of the limit: FAIL (the JVM needs memory
-# beyond the heap: metaspace, thread stacks, native buffers, and the kernel kills the container
-# at the limit); above 60%: WARN; else PASS. No limit: SKIP, except that `auto` passes with its
-# 768. An unreadable or unexpected memory.max: SKIP. The thresholds also apply to `auto`,
-# whose 768 MB floor does not fit under a limit below 1024 MB.
+# (cgroup v2), where `max` means none.
+#   FAIL  the heap is as large as the limit or larger: the JVM cannot get its heap, the kernel
+#         kills the container first. This is the only certain case, so the only one that fails.
+#   WARN  the heap is above 75% of the limit: the JVM needs memory beyond the heap (metaspace,
+#         thread stacks, native buffers), so a kill under load is likely, not certain.
+#   PASS  otherwise, exactly 75% included.
+#   SKIP  no limit (nothing to compare with), or an unreadable or unexpected memory.max.
+# The same tiers apply to `auto`: its 768 MB floor is the whole of a limit of 768 MB or less.
+# Heap and limit are compared in bytes, so a limit one byte above the heap is not a FAIL.
 check_heap_vs_memory() {
   local name=heap_vs_memory file="${CGROUP_ROOT:-/sys/fs/cgroup}/memory.max" setting="${JAVA_HEAP_MB:-}"
   local raw="" limit="unknown" subject detail
-  local -i heap=768 limit_mb=0
+  local -i heap=768 limit_mb=0 limit_bytes=0 heap_bytes
   local fix="raise the container memory limit or lower the heap (JAVA_HEAP_MB)"
   local LC_ALL=C
   if [ -r "${file}" ]; then read -r raw <"${file}" || true; fi
@@ -717,7 +742,8 @@ check_heap_vs_memory() {
     # A number this large (9 PB and more) is how "unlimited" looks when it is not spelt `max`.
     limit="none"
   elif [[ "${raw}" =~ ^[0-9]+$ ]]; then
-    limit_mb=$((10#${raw} / 1048576))
+    limit_bytes=$((10#${raw}))
+    limit_mb=$((limit_bytes / 1048576))
     if ((limit_mb >= 1)); then limit="set"; fi
   fi
   if [ "${limit}" = "unknown" ]; then
@@ -726,7 +752,8 @@ check_heap_vs_memory() {
   fi
   if [ "${setting}" = "auto" ]; then
     if [ "${limit}" = "none" ]; then
-      doctor_result PASS "${name}" "JAVA_HEAP_MB=auto resolves to heap 768 MB (no memory limit is set on the container)"
+      doctor_result SKIP "${name}" "no memory limit is set on the container: JAVA_HEAP_MB=auto resolves to heap 768 MB and there is no limit to compare it with" \
+        "set a memory limit (for example mem_limit: 2g) so that a runaway process cannot take the host down"
       return 0
     fi
     heap=$((limit_mb / 2))
@@ -746,10 +773,11 @@ check_heap_vs_memory() {
       "set a memory limit (for example mem_limit: 2g) so that a runaway process cannot take the host down"
     return 0
   fi
-  detail="${subject} is $((heap * 100 / limit_mb))% of the ${limit_mb} MB memory limit"
-  if ((heap * 100 > limit_mb * 75)); then
-    doctor_result FAIL "${name}" "${detail}; the JVM needs memory beyond the heap" "${fix}"
-  elif ((heap * 100 > limit_mb * 60)); then
+  heap_bytes=$((heap * 1048576))
+  detail="${subject} is $((heap_bytes * 100 / limit_bytes))% of the ${limit_mb} MB memory limit"
+  if ((heap_bytes >= limit_bytes)); then
+    doctor_result FAIL "${name}" "${detail}: the JVM cannot get its heap" "${fix}"
+  elif ((heap_bytes * 100 > limit_bytes * 75)); then
     doctor_result WARN "${name}" "${detail}; the JVM needs memory beyond the heap" "${fix}"
   else
     doctor_result PASS "${name}" "${detail}"
@@ -792,10 +820,26 @@ check_relay_exposure() {
     "publish relay port ${port} on 127.0.0.1 or a private address only, never on 0.0.0.0 of a host the internet can reach"
 }
 
+# doctor_size KIB: print a size given in KiB as MiB (below 1 GiB) or GiB with one decimal,
+# truncated, never rounded up: `97.6 MiB`, `256.0 MiB`, `47.6 GiB`.
+doctor_size() {
+  local -i kib="$1" unit=1024
+  local suffix="MiB"
+  if ((kib >= 1048576)); then
+    unit=1048576
+    suffix="GiB"
+  fi
+  printf '%d.%d %s' $((kib / unit)) $((kib * 10 / unit % 10)) "${suffix}"
+}
+
 # check_disk_space: free space of the filesystems that hold LOG_DIR and TWS_SETTINGS_PATH.
 #
-# Free below 2%: FAIL; below DISK_MIN_FREE_PCT (default 10, a bad value means 10): WARN; else
-# PASS. One result per filesystem: when both paths are on the same one it is reported once,
+#   FAIL  less than 256 MiB free (doctor_disk_floor_kb): an absolute floor, because only then
+#         is it certain that the Gateway cannot write its logs or settings. A percentage
+#         cannot say that: 2% of a 4 TB disk is 80 GB.
+#   WARN  free below DISK_MIN_FREE_PCT percent (default 10; a bad value means 10).
+#   PASS  otherwise. The detail always gives free and total space and the percentage.
+# One result per filesystem: when both paths are on the same one it is reported once,
 # naming both, so a full disk is one finding and not two. Two paths are on the same filesystem
 # when df names the same block device or share for them (two named volumes on one Docker data
 # disk have different mount points and the same device); a filesystem without a device path
@@ -850,9 +894,9 @@ check_disk_space() {
     fi
     total=$((group_used[i] + group_available[i]))
     percent=$((group_available[i] * 100 / total))
-    detail="${label}: ${percent}% free ($((group_available[i] / 1024)) MB) on ${group_key[i]}"
-    if ((group_available[i] * 100 < total * 2)); then
-      doctor_result FAIL "${name}" "${detail}; the Gateway cannot write its logs and settings on a full disk" "${fix}"
+    detail="${label}: $(doctor_size "${group_available[i]}") free of $(doctor_size "${total}") (${percent}% free) on ${group_key[i]}"
+    if ((group_available[i] < doctor_disk_floor_kb)); then
+      doctor_result FAIL "${name}" "${detail}; less than $((doctor_disk_floor_kb / 1024)) MiB free: the Gateway cannot write its logs or settings" "${fix}"
     elif ((group_available[i] * 100 < total * minimum)); then
       doctor_result WARN "${name}" "${detail}, below DISK_MIN_FREE_PCT=${minimum}" "${fix}"
     else
@@ -893,8 +937,10 @@ doctor_add_result() {
 # stray message (which could quote a value) reaches neither the terminal nor the log. The
 # check counts as crashed when it exits non-zero, prints no result, or prints a line that is
 # not `STATUS|NAME|detail|fix` for this NAME; valid lines printed before the crash are kept
-# and one `FAIL|NAME|check crashed (...)` line is added, so a defect in doctor is never
-# mistaken for a pass.
+# and one WARN with the detail doctor_crash_detail is added (the cause goes into its fix).
+# Why WARN and not FAIL: a crash is a defect in doctor, not in the operator's configuration.
+# It must be visible, so it is never a PASS, and it must not stop a gateway, so it never
+# changes the exit code by itself; the entrypoint's own checks remain behind the preflight.
 doctor_run_check() {
   local name="$1" out="" line status check_name detail fix crashed=""
   local -i rc=0 added=0
@@ -921,8 +967,8 @@ doctor_run_check() {
   done <<<"${out}"
   if [ -z "${crashed}" ] && ((added == 0)); then crashed="no result"; fi
   if [ -n "${crashed}" ]; then
-    doctor_add_result FAIL "${name}" "check crashed (${crashed}); the other checks still ran" \
-      "this is a defect in doctor, not in your configuration: report it with the output of doctor --json; DOCTOR_STRICT=no lets the container start meanwhile"
+    doctor_add_result WARN "${name}" "${doctor_crash_detail}" \
+      "nothing to change in your configuration: report it with the output of doctor --json (cause: ${crashed})"
   fi
   return 0
 }
@@ -991,6 +1037,8 @@ doctor_print_json() {
 #   WARN  -> level warn;  event config_deprecated for ignored_variables, else doctor_warning
 #   FAIL  -> level error; event config_deprecated for ignored_variables, else doctor_failed
 #   no FAIL -> one final doctor_ok (info) with the counts
+# A crashed check is a WARN and always a doctor_warning, whichever check it was: it says
+# nothing about the configuration, so it is never a config_deprecated and never stops a start.
 # The message is `<check>: <detail> (fix: <fix>)`. PASS and SKIP are not logged one by one.
 # DOCTOR_STRICT=no: a FAIL is logged with level warn and does not stop the start (the escape
 # hatch for a check that is wrong about an unusual deployment); doctor_ok is still withheld.
@@ -1013,7 +1061,9 @@ doctor_emit_startup() {
         ;;
       *) continue ;;
     esac
-    if [ "${name}" = "ignored_variables" ]; then event="config_deprecated"; fi
+    if [ "${name}" = "ignored_variables" ] && [ "${doctor_r_detail[i]}" != "${doctor_crash_detail}" ]; then
+      event="config_deprecated"
+    fi
     message="${name}: ${doctor_r_detail[i]}"
     if [ -n "${doctor_r_fix[i]}" ]; then message+=" (fix: ${doctor_r_fix[i]})"; fi
     log_event doctor "${level}" "${event}" "${message}"

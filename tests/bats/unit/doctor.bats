@@ -26,9 +26,10 @@ setup() {
     STRICT_ENV DOCTOR_STRICT DOCTOR_TCP TZ VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD_FILE
   REAL_PATH="${PATH}"
   stub_df
-  df_answer log 500000 500000 /mnt/data
-  df_answer settings 500000 500000 /mnt/data
+  df_answer log 50000000 50000000 /mnt/data
+  df_answer settings 50000000 50000000 /mnt/data
   CANARY="hunter2""CANARY"
+  CRASH_DETAIL="check crashed (a defect in doctor, please report it); the start continues"
 }
 
 teardown() {
@@ -58,6 +59,11 @@ df_answer() {
 # mem_limit_mb N: a container memory limit of N MiB in the fake cgroup directory.
 mem_limit_mb() {
   printf '%s\n' "$(($1 * 1048576))" >"${CGROUP_ROOT}/memory.max"
+}
+
+# mem_limit_bytes N: a container memory limit of exactly N bytes, for boundaries between two MiB.
+mem_limit_bytes() {
+  printf '%s\n' "$1" >"${CGROUP_ROOT}/memory.max"
 }
 
 # check NAME: run one check function in a fresh bash with nounset (as the script runs) and print
@@ -595,28 +601,35 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 # 6. time_zone
 # ---------------------------------------------------------------------------------------------
 
-@test "time_zone: PASS for IANA names and for UTC" {
-  for zone in America/New_York Etc/UTC UTC America/Argentina/Buenos_Aires Etc/GMT+5 Asia/Hong_Kong America/Port-au-Prince; do
+@test "time_zone: PASS for UTC, GMT, Etc/... and Area/City names" {
+  for zone in UTC GMT Etc/UTC Etc/GMT+5 America/New_York America/Argentina/Buenos_Aires Asia/Hong_Kong \
+    America/Port-au-Prince; do
     TIME_ZONE="${zone}" run check time_zone
     one_result PASS time_zone
     [[ "$(detail)" == *"${zone}"* ]]
   done
 }
 
-@test "time_zone: FAIL for anything that is not an IANA name" {
-  for zone in EST 'New York' 'America/New York' '+08:00' 'America/' '/Zurich' 'GMT+8'; do
+# The image has no zone database, so a name of another shape may still be one the Gateway
+# knows (Singapore, Japan, EST5EDT): it cannot be verified, which is a WARN, never a FAIL.
+@test "time_zone: WARN for any other name, because it cannot be verified" {
+  for zone in Singapore Japan EST5EDT EST 'GMT+8' 'New York' 'America/New York' '+08:00' 'America/' '/Zurich'; do
     TIME_ZONE="${zone}" run check time_zone
-    one_result FAIL time_zone
+    one_result WARN time_zone
+    [[ "$(detail)" == *"${zone}"* ]]
+    [[ "$(detail)" == *"cannot be verified: the image has no time-zone database; IBC and the Gateway fall back silently on an unknown zone"* ]]
     [[ "$(fix)" == *"America/New_York"* ]]
   done
 }
 
-@test "time_zone: FAIL when empty or unset" {
+@test "time_zone: WARN when empty or unset" {
   TIME_ZONE='' run check time_zone
-  one_result FAIL time_zone
+  one_result WARN time_zone
+  [[ "$(detail)" == *"not set"* ]]
+  [[ "$(fix)" == *"America/New_York"* ]]
   unset TIME_ZONE
   run check time_zone
-  one_result FAIL time_zone
+  one_result WARN time_zone
   [[ "$(detail)" == *"not set"* ]]
 }
 
@@ -848,45 +861,61 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   one_result SKIP heap_vs_memory
 }
 
-@test "heap_vs_memory: PASS for the default 768 MB heap up to 60% of the limit" {
+@test "heap_vs_memory: PASS for the default 768 MB heap up to exactly 75% of the limit" {
   mem_limit_mb 2048
   run check heap_vs_memory
   one_result PASS heap_vs_memory
   [[ "$(detail)" == *"768 MB"*"37%"*"2048 MB"* ]]
-  mem_limit_mb 1280
-  run check heap_vs_memory
-  one_result PASS heap_vs_memory
-}
-
-@test "heap_vs_memory: WARN above 60% and up to 75% of the limit" {
-  mem_limit_mb 1279
-  run check heap_vs_memory
-  one_result WARN heap_vs_memory
-  [ -n "$(fix)" ]
+  [ -z "$(fix)" ]
   mem_limit_mb 1024
   run check heap_vs_memory
-  one_result WARN heap_vs_memory
+  one_result PASS heap_vs_memory
   [[ "$(detail)" == *"75%"* ]]
 }
 
-@test "heap_vs_memory: FAIL above 75% of the limit" {
+@test "heap_vs_memory: WARN above 75% of the limit while the heap is still smaller than the limit" {
   mem_limit_mb 1023
   run check heap_vs_memory
-  one_result FAIL heap_vs_memory
+  one_result WARN heap_vs_memory
   [[ "$(detail)" == *"the JVM needs memory beyond the heap"* ]]
   [[ "$(fix)" == *"raise the"*"limit"*"lower"*"heap"* ]]
+  # One byte more than the heap is still a limit the heap fits under.
+  mem_limit_bytes $((768 * 1048576 + 1))
+  run check heap_vs_memory
+  one_result WARN heap_vs_memory
+  [[ "$(detail)" == *"99%"* ]]
 }
 
-@test "heap_vs_memory: a numeric JAVA_HEAP_MB is the heap" {
+@test "heap_vs_memory: FAIL only when the heap is as large as the limit or larger" {
+  mem_limit_mb 768
+  run check heap_vs_memory
+  one_result FAIL heap_vs_memory
+  [[ "$(detail)" == *"768 MB"*"the JVM cannot get its heap"* ]]
+  [[ "$(fix)" == *"raise the"*"limit"*"lower"*"heap"* ]]
+  mem_limit_mb 512
+  run check heap_vs_memory
+  one_result FAIL heap_vs_memory
+}
+
+@test "heap_vs_memory: a numeric JAVA_HEAP_MB is the heap, with the same three tiers" {
   export JAVA_HEAP_MB=2048
   mem_limit_mb 4096
   run check heap_vs_memory
   one_result PASS heap_vs_memory
   [[ "$(detail)" == *"2048 MB"*"50%"*"4096 MB"* ]]
-  mem_limit_mb 3000
+  mem_limit_mb 2731
+  run check heap_vs_memory
+  one_result PASS heap_vs_memory
+  mem_limit_mb 2730
   run check heap_vs_memory
   one_result WARN heap_vs_memory
-  mem_limit_mb 2500
+  mem_limit_mb 2049
+  run check heap_vs_memory
+  one_result WARN heap_vs_memory
+  mem_limit_mb 2048
+  run check heap_vs_memory
+  one_result FAIL heap_vs_memory
+  mem_limit_mb 1024
   run check heap_vs_memory
   one_result FAIL heap_vs_memory
 }
@@ -920,19 +949,31 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [[ "$(detail)" == *"768 MB"* ]]
 }
 
-@test "heap_vs_memory: JAVA_HEAP_MB=auto without a limit is 768 and passes" {
+@test "heap_vs_memory: JAVA_HEAP_MB=auto without a limit is a SKIP that names the 768 MB it resolves to" {
   export JAVA_HEAP_MB=auto
   run check heap_vs_memory
-  one_result PASS heap_vs_memory
-  [[ "$(detail)" == *"auto"*"768 MB"*"no memory limit"* ]]
+  one_result SKIP heap_vs_memory
+  [[ "$(detail)" == *"no memory limit"* ]]
+  [[ "$(detail)" == *"auto"*"768 MB"* ]]
 }
 
-@test "heap_vs_memory: JAVA_HEAP_MB=auto still fails when even the 768 MB floor does not fit" {
+@test "heap_vs_memory: JAVA_HEAP_MB=auto follows the same tiers when its 768 MB floor fills the limit" {
   export JAVA_HEAP_MB=auto
+  mem_limit_mb 1024
+  run check heap_vs_memory
+  one_result PASS heap_vs_memory
+  [[ "$(detail)" == *"768 MB"*"75%"* ]]
   mem_limit_mb 900
   run check heap_vs_memory
-  one_result FAIL heap_vs_memory
+  one_result WARN heap_vs_memory
   [[ "$(detail)" == *"768 MB"*"900 MB"* ]]
+  mem_limit_mb 768
+  run check heap_vs_memory
+  one_result FAIL heap_vs_memory
+  [[ "$(detail)" == *"the JVM cannot get its heap"* ]]
+  mem_limit_mb 600
+  run check heap_vs_memory
+  one_result FAIL heap_vs_memory
 }
 
 @test "heap_vs_memory: JAVA_HEAP_MB=auto with an unreadable limit is a SKIP" {
@@ -991,11 +1032,12 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 @test "disk_space: PASS with enough free space, one line when both paths share a filesystem" {
   run check disk_space
   one_result PASS disk_space
-  [[ "$(detail)" == *"LOG_DIR"*"TWS_SETTINGS_PATH"*"50% free"* ]]
+  [[ "$(detail)" == *"LOG_DIR"*"TWS_SETTINGS_PATH"*"47.6 GiB free of 95.3 GiB (50% free)"* ]]
+  [ -z "$(fix)" ]
 }
 
 @test "disk_space: one line per filesystem when the paths are on different ones" {
-  df_answer settings 100000 900000 /mnt/settings /dev/other
+  df_answer settings 10000000 90000000 /mnt/settings /dev/other
   run check disk_space
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
@@ -1004,16 +1046,16 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 }
 
 @test "disk_space: two volumes on one block device are one filesystem, reported once" {
-  df_answer log 500000 500000 /var/log/ibgateway /dev/sde
-  df_answer settings 500000 500000 /home/ibgateway/Jts/settings /dev/sde
+  df_answer log 50000000 50000000 /var/log/ibgateway /dev/sde
+  df_answer settings 50000000 50000000 /home/ibgateway/Jts/settings /dev/sde
   run check disk_space
   one_result PASS disk_space
   [[ "$(detail)" == *"LOG_DIR"*"TWS_SETTINGS_PATH"*"50% free"*"/dev/sde"* ]]
 }
 
 @test "disk_space: filesystems without a block device (tmpfs) are told apart by their mount point" {
-  df_answer log 500000 500000 /var/log/ibgateway tmpfs
-  df_answer settings 100000 900000 /home/ibgateway/Jts/settings tmpfs
+  df_answer log 50000000 50000000 /var/log/ibgateway tmpfs
+  df_answer settings 10000000 90000000 /home/ibgateway/Jts/settings tmpfs
   run check disk_space
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
@@ -1021,41 +1063,76 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [[ "${lines[1]}" == "PASS|disk_space|TWS_SETTINGS_PATH"*"90% free"*"/home/ibgateway/Jts/settings"* ]]
 }
 
-@test "disk_space: WARN below DISK_MIN_FREE_PCT (default 10)" {
-  df_answer log 910000 90000 /mnt/log /dev/logdisk
+@test "disk_space: WARN below DISK_MIN_FREE_PCT (default 10), with the numbers" {
+  df_answer log 91000000 9000000 /mnt/log /dev/logdisk
   run check disk_space
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
-  [[ "${lines[0]}" == "WARN|disk_space|LOG_DIR"*"9% free"* ]]
+  [[ "${lines[0]}" == "WARN|disk_space|LOG_DIR"*"8.5 GiB free of 95.3 GiB (9% free)"*"DISK_MIN_FREE_PCT=10"* ]]
   [ -n "$(fix 0)" ]
   [[ "${lines[1]}" == "PASS|disk_space|TWS_SETTINGS_PATH"* ]]
 }
 
-@test "disk_space: exactly the minimum is still a PASS" {
-  df_answer log 900000 100000 /mnt/data
-  df_answer settings 900000 100000 /mnt/data
+@test "disk_space: exactly the minimum percentage is still a PASS" {
+  df_answer log 90000000 10000000 /mnt/data
+  df_answer settings 90000000 10000000 /mnt/data
   run check disk_space
   one_result PASS disk_space
 }
 
-@test "disk_space: FAIL below 2% free" {
-  df_answer log 985000 15000 /mnt/data
-  df_answer settings 985000 15000 /mnt/data
+@test "disk_space: a nearly full large disk with gigabytes left is a WARN, never a FAIL" {
+  df_answer log 3900000000 70000000 /mnt/data
+  df_answer settings 3900000000 70000000 /mnt/data
+  run check disk_space
+  one_result WARN disk_space
+  [[ "$(detail)" == *"66.7 GiB free"*"(1% free)"* ]]
+}
+
+@test "disk_space: FAIL below the absolute floor of 256 MiB free" {
+  df_answer log 99900000 100000 /mnt/data
+  df_answer settings 99900000 100000 /mnt/data
   run check disk_space
   one_result FAIL disk_space
-  [[ "$(detail)" == *"1% free"* ]]
-  df_answer log 980000 20000 /mnt/data
-  df_answer settings 980000 20000 /mnt/data
+  [[ "$(detail)" == *"97.6 MiB free of 95.3 GiB (0% free)"* ]]
+  [[ "$(detail)" == *"less than 256 MiB"*"cannot write its logs"* ]]
+  [ -n "$(fix)" ]
+}
+
+@test "disk_space: the floor is absolute: a small volume fails one kilobyte below 256 MiB even when half free" {
+  df_answer log 262145 262143 /mnt/data
+  df_answer settings 262145 262143 /mnt/data
+  run check disk_space
+  one_result FAIL disk_space
+  [[ "$(detail)" == *"255.9 MiB free of 512.0 MiB (49% free)"* ]]
+}
+
+@test "disk_space: exactly 256 MiB free is not a FAIL" {
+  df_answer log 262144 262144 /mnt/data
+  df_answer settings 262144 262144 /mnt/data
+  run check disk_space
+  one_result PASS disk_space
+  [[ "$(detail)" == *"256.0 MiB free of 512.0 MiB (50% free)"* ]]
+  df_answer log 99737856 262144 /mnt/data
+  df_answer settings 99737856 262144 /mnt/data
   run check disk_space
   one_result WARN disk_space
 }
 
+@test "disk_space: only the filesystem that is below the floor fails" {
+  df_answer log 99900000 100000 /mnt/log /dev/logdisk
+  run check disk_space
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "${lines[0]}" == "FAIL|disk_space|LOG_DIR:"* ]]
+  [[ "${lines[1]}" == "PASS|disk_space|TWS_SETTINGS_PATH:"* ]]
+}
+
 @test "disk_space: DISK_MIN_FREE_PCT moves the warning threshold and a bad value means the default" {
-  df_answer log 800000 200000 /mnt/data
-  df_answer settings 800000 200000 /mnt/data
+  df_answer log 80000000 20000000 /mnt/data
+  df_answer settings 80000000 20000000 /mnt/data
   DISK_MIN_FREE_PCT=30 run check disk_space
   one_result WARN disk_space
-  [[ "$(detail)" == *"20% free"*"30"* ]]
+  [[ "$(detail)" == *"(20% free)"*"DISK_MIN_FREE_PCT=30"* ]]
   DISK_MIN_FREE_PCT=lots run check disk_space
   one_result PASS disk_space
   DISK_MIN_FREE_PCT=20 run check disk_space
@@ -1265,14 +1342,38 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 }
 
 @test "--startup emits doctor_failed (error) per FAIL, no doctor_ok, and exits 1" {
-  export TRADING_MODE=both TIME_ZONE=nowhere
+  export TRADING_MODE=both AUTO_RESTART_TIME='23:45'
   run "${DOCTOR}" --startup
   [ "$status" -eq 1 ]
   echo "$output" | jq -es 'all(.src == "doctor")' >/dev/null
   echo "$output" | jq -es '[.[] | select(.event == "doctor_failed" and .level == "error")] | length == 2' >/dev/null
-  echo "$output" | jq -es '[.[] | select(.event == "doctor_failed") | .msg | split(":")[0]] == ["trading_mode", "time_zone"]' >/dev/null
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_failed") | .msg | split(":")[0]] == ["trading_mode", "auto_restart_time"]' >/dev/null
   echo "$output" | jq -es '[.[] | select(.event == "doctor_ok")] | length == 0' >/dev/null
   echo "$output" | jq -es '.[0].msg | contains("two containers")' >/dev/null
+}
+
+# A start is stopped only by what makes the gateway unable to work. What is merely likely, or
+# what the image cannot verify, is a warning and the gateway starts.
+@test "--startup: an unverifiable time zone, a tight heap and a low free-space percentage warn and never stop the start" {
+  export TIME_ZONE=Singapore
+  mem_limit_mb 900
+  df_answer log 91000000 9000000 /mnt/data
+  df_answer settings 91000000 9000000 /mnt/data
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -es '[.[] | .event] == ["doctor_warning", "doctor_warning", "doctor_warning", "doctor_ok"]' >/dev/null
+  echo "$output" | jq -es '[.[] | .level] == ["warn", "warn", "warn", "info"]' >/dev/null
+  echo "$output" | jq -es '[.[0:3][] | .msg | split(":")[0]] == ["time_zone", "heap_vs_memory", "disk_space"]' >/dev/null
+}
+
+@test "--startup: a heap as large as the memory limit and a disk below 256 MiB free stop a strict start" {
+  mem_limit_mb 768
+  df_answer log 99900000 100000 /mnt/data
+  df_answer settings 99900000 100000 /mnt/data
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_failed" and .level == "error") | .msg | split(":")[0]] == ["heap_vs_memory", "disk_space"]' >/dev/null
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_ok")] | length == 0' >/dev/null
 }
 
 @test "--startup with DOCTOR_STRICT=no logs each FAIL as doctor_failed (warn) and exits 0" {
@@ -1347,46 +1448,83 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 # Crash isolation
 # ---------------------------------------------------------------------------------------------
 
-@test "a check that exits is reported as FAIL 'check crashed' and the other checks still run" {
+# A crash is a defect in doctor, not in the operator's configuration: it is shown as a WARN in
+# every mode and never changes the exit code by itself, so the preflight cannot stop a gateway
+# by being wrong about itself.
+
+@test "a check that exits is reported as WARN 'check crashed', the other checks still run and the exit code stays 0" {
   run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --json"
-  [ "$status" -eq 1 ]
-  echo "$output" | jq -e '.result == "fail" and (.checks | length) == 12' >/dev/null
-  echo "$output" | jq -e '.checks[] | select(.name == "time_zone") | .status == "fail" and (.detail | startswith("check crashed"))' >/dev/null
-  echo "$output" | jq -e '[.checks[] | select(.name != "time_zone" and .status == "fail")] | length == 0' >/dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.result == "warn" and (.checks | length) == 12' >/dev/null
+  echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[] | select(.name == "time_zone") | .status == "warn" and .detail == $detail' >/dev/null
+  echo "$output" | jq -e '.checks[] | select(.name == "time_zone") | .fix | contains("exit status 7")' >/dev/null
+  echo "$output" | jq -e '[.checks[] | select(.status == "fail")] | length == 0' >/dev/null
   echo "$output" | jq -e '.checks[-1].name == "disk_space"' >/dev/null
+}
+
+@test "a crashed check is a WARN row of the table and the exit code stays 0" {
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main"
+  [ "$status" -eq 0 ]
+  grep -Eq "^WARN +time_zone +${CRASH_DETAIL//[()]/.}\$" <<<"$output"
+  [[ "${lines[-1]}" == "doctor: warn (9 passed, 1 warned, 0 failed, 2 skipped)" ]]
 }
 
 @test "an unset variable inside a check (nounset) crashes that check only" {
   run bash -uc "source '${DOCTOR}'; check_trading_mode() { printf '%s' \"\${NO_SUCH_VARIABLE}\"; }; doctor_main --json"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
-  echo "$output" | jq -e '.checks[0] | .name == "trading_mode" and .status == "fail" and (.detail | startswith("check crashed"))' >/dev/null
+  echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[0] | .name == "trading_mode" and .status == "warn" and .detail == $detail' >/dev/null
   echo "$output" | jq -e '(.checks | length) == 12' >/dev/null
 }
 
 @test "a check that prints something other than a result line is reported as crashed" {
   run bash -uc "source '${DOCTOR}'; check_time_zone() { echo 'not a result'; }; doctor_main --json"
-  [ "$status" -eq 1 ]
-  echo "$output" | jq -e '[.checks[] | select(.name == "time_zone")] | length == 1 and (.[0].detail | startswith("check crashed"))' >/dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '[.checks[] | select(.name == "time_zone")] | length == 1 and .[0].status == "warn" and .[0].detail == $detail' >/dev/null
   [[ "$output" != *"not a result"* ]]
 }
 
 @test "a check that prints nothing is reported as crashed" {
   run bash -uc "source '${DOCTOR}'; check_time_zone() { :; }; doctor_main --json"
-  [ "$status" -eq 1 ]
-  echo "$output" | jq -e '.checks[] | select(.name == "time_zone") | .status == "fail" and (.detail | startswith("check crashed"))' >/dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[] | select(.name == "time_zone") | .status == "warn" and .detail == $detail' >/dev/null
 }
 
 @test "results printed before a crash are kept next to the crash report" {
-  run bash -uc "source '${DOCTOR}'; check_time_zone() { doctor_result WARN time_zone 'seen before the crash'; exit 3; }; doctor_main --json"
-  [ "$status" -eq 1 ]
-  echo "$output" | jq -e '[.checks[] | select(.name == "time_zone") | .status] == ["warn", "fail"]' >/dev/null
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { doctor_result PASS time_zone 'seen before the crash'; exit 3; }; doctor_main --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '[.checks[] | select(.name == "time_zone") | .status] == ["pass", "warn"]' >/dev/null
 }
 
-@test "a crashed check stops a strict start and is an event like any other FAIL" {
-  run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --startup"
+@test "a crashed check does not hide a real failure: the exit code is still 1" {
+  export TRADING_MODE=both
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --json"
   [ "$status" -eq 1 ]
-  echo "$output" | jq -es '.[0] | .event == "doctor_failed" and .level == "error" and (.msg | startswith("time_zone: check crashed"))' >/dev/null
+  echo "$output" | jq -e '.result == "fail"' >/dev/null
+  echo "$output" | jq -e '[.checks[] | select(.status == "fail") | .name] == ["trading_mode"]' >/dev/null
+}
+
+@test "--startup: a crashed check is a doctor_warning and the start continues" {
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --startup"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  echo "$output" | jq -es --arg detail "${CRASH_DETAIL}" '.[0] | .event == "doctor_warning" and .level == "warn" and (.msg | startswith("time_zone: " + $detail))' >/dev/null
+  echo "$output" | jq -es '.[1] | .event == "doctor_ok" and .level == "info"' >/dev/null
+}
+
+@test "--startup: a crash of the ignored-variable check is a doctor_warning, not config_deprecated" {
+  run bash -uc "source '${DOCTOR}'; check_ignored_variables() { exit 7; }; doctor_main --startup"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -es '[.[] | .event] == ["doctor_warning", "doctor_ok"]' >/dev/null
+}
+
+@test "--startup: even when every check crashes the start continues, also with STRICT_ENV=yes" {
+  export STRICT_ENV=yes
+  run bash -uc "source '${DOCTOR}'; for name in \"\${doctor_checks[@]}\"; do eval \"check_\${name}() { exit 9; }\"; done; doctor_main --startup"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 13 ]
+  echo "$output" | jq -es '[.[0:12][] | select(.event == "doctor_warning" and .level == "warn")] | length == 12' >/dev/null
+  echo "$output" | jq -es '.[12].event == "doctor_ok"' >/dev/null
 }
 
 # ---------------------------------------------------------------------------------------------
