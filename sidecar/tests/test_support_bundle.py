@@ -116,6 +116,17 @@ def test_the_bundle_is_a_tar_gz_with_a_fixed_set_of_files(tmp_path: Path) -> Non
     assert json.loads(files["settings.json"])["instance"] == "desk-1"
 
 
+def test_the_bundle_says_how_the_sidecar_reaches_the_gateway(tmp_path: Path) -> None:
+    # Whoever reads a bundle must see the network mode and the probed endpoint first.
+    _, files = make(tmp_path)
+    settings = json.loads(files["settings.json"])
+    assert settings["network_mode"] == "own_network"
+    assert settings["gateway_endpoint"] == "ib-gateway:4004"
+    assert settings["ibkr_region"] == "none"
+    assert settings["exit_when_orphaned"] is False
+    assert settings["deadman_ping_configured"] is False
+
+
 def test_no_username_or_full_account_id_is_in_any_file(tmp_path: Path) -> None:
     _, files = make(tmp_path)
     whole = io.StringIO()

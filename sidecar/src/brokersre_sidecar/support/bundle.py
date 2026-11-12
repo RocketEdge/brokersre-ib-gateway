@@ -142,7 +142,13 @@ def _settings(settings: Settings) -> str:
             {
                 "instance": settings.instance,
                 "trading_mode": settings.trading_mode,
+                "network_mode": (
+                    "shared_namespace" if settings.shared_namespace() else "own_network"
+                ),
+                "gateway_endpoint": settings.gateway_endpoint(),
                 "api_port": settings.api_port,
+                "exit_when_orphaned": settings.exit_when_orphaned,
+                "ibkr_region": settings.ibkr_region,
                 "time_zone": settings.time_zone,
                 "probe_enabled": settings.probe_enabled,
                 "health_client_id": settings.health_client_id,
