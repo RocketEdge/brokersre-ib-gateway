@@ -1,18 +1,48 @@
-# Monthly OS-patch rebuild of the pinned Gateway/IBC versions. Delegates to publish.yml with
-# rebuild=true, which adds -rYYYYMMDD tags and re-points the channel tags; consumers that pin by
-# digest (constraint C6 in BrokerSRE) see the new digest through their image-pin workflow.
-name: Rebuild (monthly)
+# OS-patch rebuilds of the pinned Gateway/IBC versions. Both paths delegate to publish.yml with
+# rebuild=true, which adds -rYYYYMMDD tags and re-points the channel tags after the same gates as
+# any publish; consumers that pin by digest see the new digest through their own image-pin
+# process. Nobody merges anything: a rebuild changes no file of this repository.
+#
+#   monthly (1st, 07:00 UTC)  rebuild both channels, whatever the scanners say: this picks up
+#                             every OS update, also the ones below the gate's severity.
+#   daily (05:30 UTC)         scan the digest each channel tag points at, both platforms, with the
+#                             gate's flags. scripts/rebuild-decision.sh decides: a CRITICAL or
+#                             HIGH finding in OS packages that has a fixed package requests a
+#                             rebuild of that channel only. scripts/rebuild-issue.sh keeps one
+#                             tracking issue per channel (opened, rewritten in place, closed when
+#                             the published image scans clean). While the finding persists the
+#                             request is repeated every day: when a rebuild cannot pick the fix
+#                             up, its own gate fails, nothing is published and the issue stays
+#                             open for a person (docs/upgrade-policy.md).
+#
+# The digest comes from the registry, not from a release's digests-<channel>.json: releases of an
+# already released version are updated in place, so the newest release is not always the one
+# the channel tag points at.
+name: Rebuild (monthly, and daily when a fix exists)
 
 on:
   schedule:
     - cron: "0 7 1 * *"
+    - cron: "30 5 * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "rebuild-all: rebuild both channels now. scan: run the daily scan now (rebuilds only a channel with a fixable finding)."
+        type: choice
+        options:
+          - rebuild-all
+          - scan
+        default: rebuild-all
 
 permissions:
   contents: read
 
+env:
+  IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway
+
 jobs:
   trigger:
+    if: github.event.schedule == '0 7 1 * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'rebuild-all')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -20,3 +50,100 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run publish.yml -R "$GITHUB_REPOSITORY" -f rebuild=true -f channels="stable latest"
+
+  scan-published:
+    if: github.event.schedule == '30 5 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'scan')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, latest]
+    permissions:
+      contents: read
+      issues: write
+    # A matrix job has one set of outputs for all legs; each leg writes only the output named
+    # after its channel, so request-rebuild sees both decisions.
+    outputs:
+      stable: ${{ steps.decide.outputs.stable }}
+      latest: ${{ steps.decide.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Resolve the digest the channel tag points at
+        id: published
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "$IMAGE:$CHANNEL" --format '{{json .Manifest}}' | jq -r '.digest // empty')
+          # External input: nothing but a sha256 digest may reach an issue or a scan.
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::cannot resolve $IMAGE:$CHANNEL to a digest (got '$digest')"; exit 1; }
+          echo "ref=$IMAGE@$digest" | tee -a "$GITHUB_OUTPUT"
+      # Same flags as the gate of ci.yml and publish.yml, but a finding must not fail the scan:
+      # the report is the input of the decision. A scan that fails (no report) fails the leg,
+      # so "could not scan" is never read as "nothing to do".
+      - name: Trivy scan of the published image, linux/amd64
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ steps.published.outputs.ref }}
+          format: json
+          output: os-amd64.json
+          exit-code: "0"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os
+      - name: Trivy scan of the published image, linux/arm64
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ steps.published.outputs.ref }}
+          format: json
+          output: os-arm64.json
+          exit-code: "0"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os
+      - name: Decide (scripts/rebuild-decision.sh)
+        id: decide
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          set -euo pipefail
+          decision="$(scripts/rebuild-decision.sh "$CHANNEL" os-amd64.json os-arm64.json)"
+          printf '%s\n' "$decision" | tee -a "$GITHUB_OUTPUT"
+          echo "$CHANNEL=$(sed -n 's/^action=//p' <<< "$decision")" >> "$GITHUB_OUTPUT"
+      - name: Tracking issue (scripts/rebuild-issue.sh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ matrix.channel }}
+          ACTION: ${{ steps.decide.outputs.action }}
+          CVES: ${{ steps.decide.outputs.cves }}
+          REF: ${{ steps.published.outputs.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/rebuild-issue.sh "$CHANNEL" "$ACTION" "$CVES" "$REF"
+
+  request-rebuild:
+    needs: scan-published
+    # Runs when at least one channel asked for a rebuild, also when the other leg failed.
+    if: ${{ !cancelled() && (needs.scan-published.outputs.stable == 'rebuild' || needs.scan-published.outputs.latest == 'rebuild') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Request one OS-patch rebuild for the channels that need it
+        # One publish.yml run for both channels: its concurrency group keeps a single pending
+        # run, so two separate requests could replace each other.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABLE: ${{ needs.scan-published.outputs.stable }}
+          LATEST: ${{ needs.scan-published.outputs.latest }}
+        run: |
+          channels=""
+          if [ "$STABLE" = rebuild ]; then channels="stable"; fi
+          if [ "$LATEST" = rebuild ]; then channels="${channels:+$channels }latest"; fi
+          echo "requesting an OS-patch rebuild of: $channels"
+          gh workflow run publish.yml -R "$GITHUB_REPOSITORY" -f rebuild=true -f channels="$channels"
