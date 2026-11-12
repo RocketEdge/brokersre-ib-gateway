@@ -82,6 +82,7 @@ class _Writer:
     """Accumulates exposition lines, writing HELP and TYPE once per metric."""
 
     def __init__(self) -> None:
+        """Start with no lines and no declared metric."""
         self._lines: list[str] = []
         self._declared: set[str] = set()
 

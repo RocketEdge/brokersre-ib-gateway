@@ -64,6 +64,7 @@ class ApiConditionTracker:
     """
 
     def __init__(self) -> None:
+        """Start with connectivity up, no client-id conflict and no farm known."""
         self._connectivity_lost = False
         self._client_id_in_use = False
         self._farms: OrderedDict[tuple[FarmKind, str], FarmCondition] = OrderedDict()

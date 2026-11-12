@@ -287,6 +287,7 @@ class Application:
         assert dispatcher is not None  # noqa: S101 - only called from _build_notifier
 
         async def worker() -> None:
+            """Deliver the queue of one channel until cancelled."""
             await dispatcher.run_channel(name)
 
         return worker

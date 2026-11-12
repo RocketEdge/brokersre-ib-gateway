@@ -362,6 +362,7 @@ async def _serve(
     if external_stop is not None:
 
         async def watch() -> None:
+            """Turn the thread-level stop request into the asyncio stop event."""
             await asyncio.to_thread(external_stop.wait)
             stop.set()
 

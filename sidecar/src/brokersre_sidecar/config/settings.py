@@ -181,6 +181,7 @@ class _Reader:
     """Typed access to an environment mapping that collects problems instead of raising."""
 
     def __init__(self, env: Mapping[str, str]) -> None:
+        """Wrap ``env``; ``problems`` collects one line per invalid variable."""
         self._env = env
         self.problems: list[str] = []
 

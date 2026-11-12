@@ -55,6 +55,7 @@ class SecretRegistry:
     """
 
     def __init__(self) -> None:
+        """Start with no registered secret."""
         self._values: list[str] = []
 
     def add(self, value: str) -> None:

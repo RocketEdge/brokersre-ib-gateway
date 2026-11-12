@@ -42,6 +42,7 @@ class _TimeProbeWrapper:
     """
 
     def __init__(self) -> None:
+        """Start without a listener and without a pending time request."""
         self.listener: ErrorListener | None = None
         self.pending: asyncio.Future[int] | None = None
 
