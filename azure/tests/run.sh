@@ -117,6 +117,17 @@ printf '%s\n' "${CANARY_USERNAME}" >"${secrets_dir}/ib-username"
 printf 'dummy-password-not-real\n' >"${secrets_dir}/ib-password"
 printf 'not a real certificate\n' >"${secrets_dir}/azure-client-cert.pfx"
 : >"${secrets_dir}/empty"
+# The same canary user name in the encodings Windows tools produce, and files that must be
+# refused. \357\273\277 is the UTF-8 byte-order mark, \377\376 the UTF-16 one.
+printf '\357\273\277%s' "${CANARY_USERNAME}" >"${secrets_dir}/username-bom"
+printf '%s\r\n' "${CANARY_USERNAME}" >"${secrets_dir}/username-crlf"
+printf '\357\273\277%s\r\n' "${CANARY_USERNAME}" >"${secrets_dir}/username-bom-crlf"
+printf '%s\n\r\n\n' "${CANARY_USERNAME}" >"${secrets_dir}/username-blank-lines"
+printf '\377\376C\000A\000N\000A\000R\000Y\000\r\000\n\000' >"${secrets_dir}/username-utf16"
+printf 'two words\n' >"${secrets_dir}/username-space"
+printf 'first\nsecond\n' >"${secrets_dir}/username-two-lines"
+printf 'J\303\274rgen\n' >"${secrets_dir}/username-non-ascii"
+printf '\357\273\277\r\n' >"${secrets_dir}/username-only-bom"
 # mktemp -d creates a 0700 directory; uid 1000 inside the container must be able to read it
 # (bind mounts keep host permissions on Linux hosts such as the CI runner).
 chmod 0755 "${work_dir}" "${secrets_dir}" && chmod 0644 "${secrets_dir}"/*
@@ -260,6 +271,21 @@ group_entrypoint() {
     entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/absent -- validate --no-environment
   expect_refusal "refuses an empty user-name file" "IBGW_REDACT_USERNAME_FILE" \
     entrypoint "${valid_env[@]}" -e IBGW_REDACT_USERNAME_FILE=/run/secrets/empty -- validate --no-environment
+
+  # The user-name file is normalised as the gateway normalises it (a leading UTF-8 byte-order
+  # mark and trailing line ends are not part of the name). The proof is positive: the redaction
+  # unit tests, which require [USER] in the shipped row, pass with each encoding of the file.
+  local variant
+  for variant in bom crlf bom-crlf blank-lines; do
+    check "user-name file (${variant}): the name is still redacted to [USER]" \
+      entrypoint "${valid_env[@]}" -e "IBGW_REDACT_USERNAME_FILE=/run/secrets/username-${variant}" -- \
+      test "${unit_config[@]}" /etc/vector/tests/raw-redacted.test.yaml
+  done
+  for variant in utf16 space two-lines non-ascii only-bom; do
+    expect_refusal "user-name file (${variant}) is refused: raw logs are never shipped with a name that cannot match" \
+      "IBGW_REDACT_USERNAME_FILE" \
+      entrypoint "${valid_env[@]}" -e "IBGW_REDACT_USERNAME_FILE=/run/secrets/username-${variant}" -- validate --no-environment
+  done
 
   out="$(docker run --rm --name "azpack-unit-${run_id}" --network none --user 1000:1000 --read-only \
     --cap-drop ALL -v "${host_repo}/azure/vector:/etc/vector:ro" "${valid_env[@]}" \

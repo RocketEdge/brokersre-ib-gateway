@@ -11,7 +11,9 @@
 #           DCR_LOGS_ENDPOINT               https://<host> of the data collection rule
 #           DCR_IMMUTABLE_ID                dcr-<32 hex>
 #           AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_CERTIFICATE_PATH   (certificate only)
-#           IBGW_REDACT_USERNAME_FILE       optional file whose first line is the IBKR user name
+#           IBGW_REDACT_USERNAME_FILE       optional file holding the IBKR user name: one line of
+#                                           printable ASCII; a UTF-8 byte-order mark and line
+#                                           ends are ignored, as the gateway ignores them
 #           SHIP_RAW_LOGS                   optional; "yes" ships raw logs without a user-name file
 # Outputs   /var/tmp/vector-config/sinks.yaml (rendered from sinks-<AZURE_AUTH>.yaml) and the
 #           empty data directory /var/tmp/vector on first start;
@@ -81,15 +83,33 @@ unset IBGW_REDACT_USERNAME
 if [ -n "${IBGW_REDACT_USERNAME_FILE:-}" ]; then
   [ -f "${IBGW_REDACT_USERNAME_FILE}" ] && [ -r "${IBGW_REDACT_USERNAME_FILE}" ] \
     || die "the file named by IBGW_REDACT_USERNAME_FILE is missing or not readable by uid 1000; raw logs are not shipped without it"
-  username=''
-  IFS= read -r username <"${IBGW_REDACT_USERNAME_FILE}" || true
-  username="$(printf '%s' "${username}" | tr -d '\r')"
-  [ -n "${username}" ] \
+  # Normalise the file exactly as the gateway does when it reads the same secret (a leading
+  # UTF-8 byte-order mark and every trailing CR/LF are not part of the name), working on the
+  # bytes as hex so that no locale or shell quoting can change them. A name that would not
+  # match what IBC prints must stop the container: shipping raw logs with a "redaction" that
+  # silently matches nothing is the one outcome this file exists to prevent.
+  [ "$(wc -c <"${IBGW_REDACT_USERNAME_FILE}")" -le 512 ] \
+    || die "the file named by IBGW_REDACT_USERNAME_FILE is larger than 512 bytes; it must hold the IBKR user name only"
+  name_hex="$(od -An -v -tx1 "${IBGW_REDACT_USERNAME_FILE}" | tr -d ' \n')"
+  name_hex="${name_hex#efbbbf}"
+  while :; do
+    case "${name_hex}" in
+      *0d | *0a) name_hex="${name_hex%??}" ;;
+      *) break ;;
+    esac
+  done
+  [ -n "${name_hex}" ] \
     || die "the file named by IBGW_REDACT_USERNAME_FILE is empty; raw logs are not shipped without a user name to redact"
-  IBGW_RAW_MODE=redacted
-  IBGW_REDACT_USERNAME="${username}"
+  # Every remaining byte must be printable ASCII without a space (0x21 to 0x7e): a NUL byte
+  # means UTF-16 (Windows PowerShell '>' or Out-File), a line break means more than one line.
+  printf '%s' "${name_hex}" | grep -Eqx '(2[1-9a-f]|[3-6][0-9a-f]|7[0-9a-e])+' \
+    || die "the file named by IBGW_REDACT_USERNAME_FILE must hold one line of printable ASCII without spaces, written as UTF-8 (not UTF-16, no second line); raw logs are not shipped with a user name that cannot be matched"
+  unset name_hex
+  # The checks above proved that the file is the name plus, at most, a byte-order mark and line
+  # ends, so keeping the printable ASCII bytes yields exactly the normalised name.
+  IBGW_REDACT_USERNAME="$(LC_ALL=C tr -cd '!-~' <"${IBGW_REDACT_USERNAME_FILE}")"
   export IBGW_REDACT_USERNAME
-  unset username
+  IBGW_RAW_MODE=redacted
   log info "raw logs are shipped; the user name is replaced by [USER] and account ids by their last three characters"
 elif [ "${SHIP_RAW_LOGS:-no}" = yes ]; then
   IBGW_RAW_MODE=acknowledged
