@@ -1,0 +1,66 @@
+# OPTIONAL alternative to docker-compose.sidecar.yml: the sidecar INSIDE the gateway's network
+# namespace. Use one of the two files, never both:
+#
+#   docker compose -f docker-compose.example.yml -f docker-compose.sidecar-shared.yml up -d
+#
+# What this buys: the probe talks to the Gateway's own API port on loopback (127.0.0.1:4002
+# paper, 4001 live) instead of the relay port, so it measures the Gateway even when the
+# relay is the broken part.
+#
+# What it costs, and why it is not the default: when the gateway CONTAINER stops or restarts,
+# its network namespace goes away and the sidecar keeps only loopback. From that moment it
+# cannot send a notification or a dead-man ping, and its endpoints are unreachable. It then
+# exits with code 75 so that its restart policy rejoins the restarted gateway, and announces
+# what happened from the gateway's event feed. A gateway that stays stopped is announced by
+# nobody: configure a dead-man check (DEADMAN_PING_URL_FILE), which then goes silent.
+#
+# Pin the image by DIGEST in production; credentials are files (Docker secrets).
+services:
+  ib-gateway:
+    ports:
+      # The sidecar's endpoints are published HERE: the network namespace is the gateway's.
+      - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
+
+  sidecar:
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0
+    # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
+    # this policy starts it again inside the gateway's new network namespace.
+    restart: unless-stopped
+    network_mode: "service:ib-gateway"
+    depends_on:
+      ib-gateway:
+        condition: service_started
+        restart: true            # compose restarts the sidecar when it restarts the gateway
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 256m
+    pids_limit: 128
+    environment:
+      GATEWAY_HOST: 127.0.0.1                        # loopback selects the shared-namespace mode (API port 4002/4001)
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      IBGW_INSTANCE: ${IBGW_INSTANCE:-default}
+      TIME_ZONE: ${TIME_ZONE:-America/New_York}
+      # EXIT_WHEN_ORPHANED: "no"                     # keep running in a dead namespace (not recommended)
+      NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url
+      # DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url   # strongly recommended in this mode
+    secrets:
+      - notify-teams-url
+      # - deadman-ping-url
+    volumes:
+      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      - sidecar-state:/var/lib/sidecar     # notifier state, so a restart neither repeats nor forgets
+
+secrets:
+  notify-teams-url:
+    file: ./secrets/notify-teams-url
+  # deadman-ping-url:
+  #   file: ./secrets/deadman-ping-url
+
+volumes:
+  sidecar-state:

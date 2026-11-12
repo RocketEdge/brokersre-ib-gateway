@@ -2,27 +2,22 @@
 #
 #   docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml up -d
 #
-# The sidecar shares the gateway's network namespace, so its port 9810 is PUBLISHED ON THE
-# ib-gateway SERVICE (compose appends this entry to the gateway's ports). Pin the image by
-# DIGEST in production (the publish workflow prints it); the tag is for local evaluation.
-# Channel credentials are files (Docker secrets); never put a webhook URL or token in here.
+# The sidecar is an ordinary container on the compose network. Nothing is added to the
+# ib-gateway service: the sidecar reads the gateway's log volume (read-only), probes the API
+# through the gateway's relay port (ib-gateway:4004 paper, 4003 live) and publishes its own
+# port 9810. It therefore keeps running, and keeps notifying, when the gateway container
+# stops or restarts.
+#
+# Pin the image by DIGEST in production (the publish workflow prints it); the tag is for
+# local evaluation. Credentials are files (Docker secrets); never put a webhook URL, a token
+# or a ping URL in here.
 services:
-  ib-gateway:
-    ports:
-      # Sidecar endpoints (/livez /readyz /status /metrics). Bind to loopback or a private
-      # NIC; they are unauthenticated and meant for a local monitor or a reverse proxy.
-      - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
-
   sidecar:
     image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0
-    # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
-    # this policy starts it again inside the gateway's new network namespace.
     restart: unless-stopped
-    network_mode: "service:ib-gateway"
     depends_on:
       ib-gateway:
-        condition: service_started
-        restart: true            # compose restarts the sidecar when it restarts the gateway
+        condition: service_started   # start order only; the sidecar never needs a restart with the gateway
     user: "1000:1000"
     read_only: true
     cap_drop:
@@ -33,10 +28,16 @@ services:
       - /tmp:size=16m
     mem_limit: 256m
     pids_limit: 128
+    ports:
+      # Sidecar endpoints (/livez /readyz /status /metrics). Bind to loopback or a private
+      # NIC; they are unauthenticated and meant for a local monitor or a reverse proxy.
+      - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
     environment:
-      TRADING_MODE: ${TRADING_MODE:-paper}           # the gateway's value: selects API port 4002/4001
+      TRADING_MODE: ${TRADING_MODE:-paper}           # the gateway's value: selects the relay port 4004/4003
       IBGW_INSTANCE: ${IBGW_INSTANCE:-default}       # label shown in every notification
       TIME_ZONE: ${TIME_ZONE:-America/New_York}      # local time in notifications, HEARTBEAT_TIME zone
+      # GATEWAY_HOST: ib-gateway                     # the gateway's service name (the default)
+      # IBKR_REGION: america                         # america | europe | asia: that region's reset windows excuse a lost IBKR link
       # PROBE_ENABLED: "no"                          # status endpoints and alerts without the API probe
       # HEALTH_CLIENT_ID: "999"                      # API client id reserved for the probe
       # HEARTBEAT_TIME: "08:30"                      # daily "sidecar alive, nothing active" message
@@ -45,9 +46,13 @@ services:
       NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url
       # NOTIFY_SLACK_URL_FILE: /run/secrets/notify-slack-url
       # NOTIFY_PAGERDUTY_KEY_FILE: /run/secrets/notify-pagerduty-key
-      # NOTIFY_ESCALATION_CHANNELS: pagerduty        # who hears about a 2FA prompt after 10 and 30 minutes
+      # NOTIFY_ESCALATION_CHANNELS: pagerduty        # who hears about a 2FA prompt 10 and 30 minutes after the first one
+      # Recommended: a dead-man check outside this host. Without it nobody is told when the
+      # host, Docker or the sidecar itself dies. Add the secret below as well.
+      # DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url
     secrets:
       - notify-teams-url
+      # - deadman-ping-url
     volumes:
       - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
       - sidecar-state:/var/lib/sidecar     # notifier state, so a restart neither repeats nor forgets
@@ -56,6 +61,8 @@ services:
 secrets:
   notify-teams-url:
     file: ./secrets/notify-teams-url
+  # deadman-ping-url:
+  #   file: ./secrets/deadman-ping-url
 
 volumes:
   sidecar-state:

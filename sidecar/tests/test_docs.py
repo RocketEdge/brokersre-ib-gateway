@@ -112,9 +112,49 @@ def test_the_readme_ends_with_the_trademark_sentence() -> None:
     assert README.rstrip("\n").endswith(TRADEMARK)
 
 
-def test_the_readme_tells_to_publish_the_port_on_the_gateway_service() -> None:
+def test_the_readme_shows_both_network_modes_and_which_one_is_the_default() -> None:
+    assert "### Own network namespace (default, recommended)" in README
+    assert "### Shared network namespace (optional)" in README
     assert '"127.0.0.1:9810:9810"' in README
     assert 'network_mode: "service:ib-gateway"' in README
+
+
+def test_the_default_compose_file_adds_nothing_to_the_gateway_service() -> None:
+    default = (REPOSITORY_ROOT / "compose/docker-compose.sidecar.yml").read_text(encoding="utf-8")
+    code = "\n".join(line for line in default.splitlines() if not line.lstrip().startswith("#"))
+    assert "network_mode" not in code
+    assert "\n  ib-gateway:\n" not in code  # no override of the gateway service
+    assert ":9810:9810" in code  # the sidecar publishes its own port
+    assert "ibgw-logs:/var/log/ibgateway:ro" in code
+    shared = (REPOSITORY_ROOT / "compose/docker-compose.sidecar-shared.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'network_mode: "service:ib-gateway"' in shared
+    assert "GATEWAY_HOST: 127.0.0.1" in shared
+
+
+def test_the_readme_says_plainly_that_a_dead_host_is_silent_without_the_dead_man_ping() -> None:
+    assert "**Without a\ndead-man check, a dead host is silent**" in README
+
+
+def test_the_reset_windows_cite_their_source_and_the_date_they_were_checked() -> None:
+    assert "https://brokerage.ibkr.com/en/software/systemStatus.php" in README
+    assert "checked on 2026-11-12" in README
+    windows = (SIDECAR_ROOT / "src" / "brokersre_sidecar" / "probe" / "windows.py").read_text(
+        encoding="utf-8"
+    )
+    assert "https://brokerage.ibkr.com/en/software/systemStatus.php" in windows
+    assert "2026-11-12" in windows
+
+
+def test_every_link_inside_the_readme_points_at_a_heading_that_exists() -> None:
+    headings = re.findall(r"^#{2,3} (.+)$", README, flags=re.MULTILINE)
+    anchors = {
+        re.sub(r"[^a-z0-9 -]", "", heading.lower()).replace(" ", "-") for heading in headings
+    }
+    links = set(re.findall(r"\]\(#([a-z0-9-]+)\)", README))
+    assert links, "the README has in-page links"
+    assert links <= anchors, sorted(links - anchors)
 
 
 @pytest.mark.parametrize(
@@ -123,11 +163,15 @@ def test_the_readme_tells_to_publish_the_port_on_the_gateway_service() -> None:
         "docs/sidecar.md",
         "docs/adr/0010-sidecar-for-probe-status-and-alerts.md",
         "compose/docker-compose.sidecar.yml",
+        "compose/docker-compose.sidecar-shared.yml",
         ".github/workflows/sidecar.yml",
         ".github/workflows/sidecar-publish.yml",
+        ".github/workflows/sidecar-rescan.yml",
         "sidecar/Dockerfile",
         "sidecar/schemas/status.v1.schema.json",
         "sidecar/tests/container/run.sh",
+        "sidecar/tests/e2e/run.sh",
+        "sidecar/tests/e2e/receiver.py",
     ],
 )
 def test_the_sidecars_documents_and_pipeline_files_exist(relative: str) -> None:
