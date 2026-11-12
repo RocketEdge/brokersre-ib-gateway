@@ -26,6 +26,8 @@ by or endorsed by Interactive Brokers.
 - [Environment variables](#environment-variables)
 - [Ports, volumes and the sidecar contract](#ports-volumes-and-the-sidecar-contract)
 - [Health, phases and logs](#health-phases-and-logs)
+- [Break-glass console](#break-glass-console)
+- [Shipping events to your own log system](#shipping-events-to-your-own-log-system)
 - [Optional sidecar: API probe, status endpoints, alerts](#optional-sidecar-api-probe-status-endpoints-alerts)
 - [Shipping to Azure Log Analytics](#shipping-to-azure-log-analytics)
 - [Security posture](#security-posture)
@@ -33,6 +35,7 @@ by or endorsed by Interactive Brokers.
 - [Evidence for due diligence](#evidence-for-due-diligence)
 - [Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login)
 - [Get notified of new images](#get-notified-of-new-images)
+- [Is a newer image available?](#is-a-newer-image-available)
 - [Building and testing](#building-and-testing)
 - [Upgrade policy](#upgrade-policy)
 - [Automatic updates and repository secrets](#automatic-updates-and-repository-secrets)
@@ -124,7 +127,7 @@ You should see `logged-in`, and `(healthy)` in the status column. The API is the
 | event `doctor_failed` naming another check, and the container stops | The preflight found a setting the gateway cannot run with; the message says which and how to fix it | Fix the setting. `docker compose ... run --rm ib-gateway doctor` shows every check |
 | event `login_failed_dialog`, phase `needs-human` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
 | event `login_rejected_latched` right after a start, phase `needs-human`, no login | IBKR rejected these credentials at an earlier start and the secret files are unchanged; the gateway does not send them again (the latch, [ADR 0016](docs/adr/0016-rejected-login-latch.md)) | Write the correct username and password into the secret files and start again: a rewritten file releases the latch. `doctor` shows the same and when IBKR refused |
-| event `unknown_window` or `login_stalled`, phase stays `login` | The Gateway shows a window that IBC does not handle | Look at `ibc/ibc.log` on the log volume for the window title; report it. To see the window itself, start with `SCREENSHOTS=yes`: the next time it happens a picture of the screen is saved to `screens/` on the log volume (XWD format, opens in GIMP or ImageMagick). It is off by default because the screen can show your username |
+| event `unknown_window` or `login_stalled`, phase stays `login` | The Gateway shows a window that IBC does not handle | Look at `ibc/ibc.log` on the log volume for the window title, or at the screen through the [break-glass console](docs/console.md); report it. To see the window afterwards, start with `SCREENSHOTS=yes`: the next time it happens a picture of the screen is saved to `screens/` on the log volume (XWD format, opens in GIMP or ImageMagick). It is off by default because the screen can show your username |
 | event `existing_session` | The username is logged in somewhere else | Close the other session, or use a dedicated username |
 | event `dirs_not_writable` | A tmpfs or volume is not writable by uid 1000 | Keep the `uid=1000,gid=1000` mount options of the example |
 | a client gets "connection refused" on 4001/4002 | The Gateway is not logged in yet, or is restarting: the relay opens only while it is logged in | Retry; check the phase |
@@ -178,7 +181,7 @@ Paper first. Before the same setup holds a live session, check each line:
 IBKR asks for a full login with the second factor about once a week; the daily restart in
 between does not ask again. IBKR's own page puts it as "the weekly authentication cycle
 starts on every Monday"
-([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/best-practice-configure-tws-ib-gateway/daily-weekly-reauthentication));
+([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication));
 IBC's user guide says authentication is required "the first time during the week that TWS or
 Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
 prompt, and no setting of this image changes that: the image never answers, types or bypasses
@@ -198,6 +201,9 @@ the container.
 
 Plan it: decide who approves the prompt and when, and make sure that person learns that it is
 waiting.
+
+What IBKR has published about passkeys and IB Gateway, and what is not established:
+[docs/passkeys.md](docs/passkeys.md).
 
 ## Several gateways on one host
 
@@ -244,7 +250,8 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
 | `EXISTING_SESSION_DETECTED_ACTION` | `primary` | IBC action when another session of the same username appears. |
 | `TWS_ACCEPT_INCOMING` | `reject` | IBC `AcceptIncomingConnectionAction`: API clients must be trusted. |
 | `IBC_COMMAND_SERVER_PORT` | `7462` | IBC command server on `127.0.0.1`; `0` disables it. |
-| `VNC_SERVER_PASSWORD_FILE` | unset | Enables x11vnc on `127.0.0.1:5900` inside the container (break-glass; tunnel in). |
+| `VNC_SERVER_PASSWORD_FILE` | unset | Enables the break-glass console: x11vnc on `127.0.0.1:5900` inside the container ([docs/console.md](docs/console.md)). |
+| `VNC_VIEW_ONLY` | `yes` | The console is view-only; `no` lets a person click and type. Any other value stops the start. |
 | `CUSTOM_CONFIG` | `no` | `yes` to supply your own `/run/brokersre/config.ini` instead of rendering one. |
 | `IBC_LAUNCH` | `yes` | `no` starts everything except IBC (used by the offline tests). |
 
@@ -306,6 +313,33 @@ failed check stops the container before any login is attempted.
 
 All log files on the volume are size-capped and rotated (`LOG_MAX_BYTES`, `LOG_KEEP`). The
 contract is specified in [docs/log-contract.md](docs/log-contract.md).
+
+## Break-glass console
+
+When the Gateway is stuck behind a window that IBC does not handle, a person can look at its
+screen: x11vnc inside the container, off by default, on the container's own loopback address,
+**view-only** unless `VNC_VIEW_ONLY=no`. Every visit is an event (`vnc_client_connected`,
+`vnc_client_disconnected`). Nothing in the image ever clicks or types, and nothing answers a
+second factor.
+
+```bash
+docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.console.yml up -d
+```
+
+Switching it on recreates the container, so the Gateway logs in again; so does the change
+from view-only to input. The route from a VNC viewer to the console (a bridge you open and
+close, an SSH tunnel), what a person may do there, and why no web console is shipped:
+[docs/console.md](docs/console.md). It was tested offline with the image's real x11vnc and a
+stand-in viewer, not during a real login.
+
+## Shipping events to your own log system
+
+`events/events.jsonl` and `metrics/metrics.jsonl` on the log volume are meant to be shipped;
+the raw IBC and Gateway logs are not (they can hold the username).
+[docs/recipes/](docs/recipes/README.md) has Vector configurations for Grafana Loki, an
+OpenTelemetry collector and Datadog, with a compose file that runs the shipper as a non-root
+user with the log volume read-only. They were validated offline against stand-in receivers,
+not against the real services.
 
 ## Optional sidecar: API probe, status endpoints, alerts
 
@@ -435,6 +469,15 @@ that is the channel you run. A release changes nothing you run: images are pinne
 BrokerSRE clients receive a new digest as a pull request in their own repository from the weekly
 image-pin workflow and merge it only after it is verified.
 
+## Is a newer image available?
+
+`scripts/check-upgrade.sh --container ib-gateway` compares the digest a gateway runs with the
+digest its channel tag points at and prints one JSON document: exit 0 up to date, 10 a
+different image behind the tag, 2 no answer. It only asks; it never pulls or restarts
+anything. [docs/upgrade-check.md](docs/upgrade-check.md) has a cron and a Task Scheduler
+example that only notify. It was tested with a stand-in `docker` and by hand against other
+projects' public images, not yet against this repository's registry.
+
 ## Building and testing
 
 ```bash
@@ -444,6 +487,7 @@ git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-co
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable   # unit suite inside the image
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh  # offline container tests
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh    # compose files as shipped: several gateways, gateway + strategy
+tests/recipes/run.sh                                                         # log-shipper recipes: validate, then run against a stand-in (needs only Docker)
 ```
 
 The container tests never log in: the IBC smoke test runs with `--network none` and proves that
@@ -548,7 +592,9 @@ every variable it dropped or renamed on stderr, without printing a value.
 [sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md),
 [docs/runbooks/README.md](docs/runbooks/README.md),
 [docs/evidence.md](docs/evidence.md), [SECURITY.md](SECURITY.md),
-[windows/README.md](windows/README.md).
+[windows/README.md](windows/README.md), [docs/console.md](docs/console.md),
+[docs/upgrade-check.md](docs/upgrade-check.md), [docs/passkeys.md](docs/passkeys.md),
+[docs/recipes/README.md](docs/recipes/README.md), design notes under [docs/specs/](docs/specs/).
 
 ## License
 

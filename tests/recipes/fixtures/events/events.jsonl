@@ -1,0 +1,6 @@
+{"ts":"2026-11-12T06:19:49.101Z","src":"entrypoint","level":"info","event":"container_start","msg":"brokersre-ib-gateway 10.50.1g (stable) IBC 3.24.2 starting as uid 1000","data":{"gateway_version":"10.50.1g","channel":"stable","ibc_version":"3.24.2","ibc_release":"3.24.2-rocketedge.1","trading_mode":"paper","instance":"default"},"boot_id":"0123456789abcdef","seq":1}
+{"ts":"2026-11-12T06:19:49.412Z","src":"doctor","level":"info","event":"doctor_ok","msg":"preflight passed: 10 passed, 0 warned, 2 skipped","boot_id":"0123456789abcdef","seq":2}
+{"ts":"2026-11-12T06:19:50.448Z","src":"vnc","level":"warn","event":"vnc_enabled","msg":"x11vnc listening on 127.0.0.1:5900, view-only (break-glass; tunnel in)","data":{"view_only":"yes"},"boot_id":"0123456789abcdef","seq":3}
+{"ts":"2026-11-12T06:19:52.003Z","src":"ibc","level":"info","event":"login_dialog","msg":"login_dialog","boot_id":"0123456789abcdef","seq":4}
+{"ts":"2026-11-12T06:20:31.770Z","src":"ibc","level":"error","event":"login_failed_dialog","msg":"login_failed_dialog","boot_id":"0123456789abcdef","seq":5}
+{"ts":"2026-11-12T06:20:31.9

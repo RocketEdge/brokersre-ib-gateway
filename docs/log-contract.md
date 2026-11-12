@@ -67,6 +67,26 @@ Rejected-login latch ([ADR 0016](adr/0016-rejected-login-latch.md)):
 | `login_latch_cleared` | info | `entrypoint` or `ibc` | the record was removed: a secret file was rewritten, `LOGIN_LATCH=clear` is set, or a login completed |
 | `login_latch_unreadable` | warn | `entrypoint` | a record that could not be read was removed; the start continues |
 
+### Events of the break-glass console (`src` = `vnc`)
+
+The console is off unless a VNC password is set ([console.md](console.md)). A person looks and
+acts there; these events record that someone did.
+
+| Event | Level | When | `data` |
+|---|---|---|---|
+| `vnc_disabled` | info | at start, no VNC password set | |
+| `vnc_enabled` | warn | at start, x11vnc started on `127.0.0.1:5900` | `view_only` (`yes` or `no`) |
+| `vnc_client_connected` | warn | x11vnc accepted and authenticated a VNC client | `client_ip`, `client_id`, `clients` (connected now), `view_only` |
+| `vnc_client_disconnected` | info | that client left | `client_ip`, `client_id` (the same as in its `vnc_client_connected`), `clients`, `session_s` (length of the session in seconds) |
+| `config_invalid` | error | a VNC password is set and `VNC_VIEW_ONLY` is neither `yes` nor `no`; the container exits 1 before any login | |
+
+A connection that never authenticated (a wrong password, a port probe) is no session and no
+event. A session that is still open when the container stops has no `vnc_client_disconnected`:
+x11vnc is ended with the other helpers, and `shutdown_requested` is what follows the
+`vnc_client_connected` (observed 2026-11-12). A value the hook cannot verify is `unknown`
+(`client_ip`, `view_only`) or absent (`client_id`, `clients`, `session_s`); nothing a client
+can shape is echoed. The events carry no password and no username.
+
 ### Events classified from IBC's output (`rootfs/etc/brokersre/ibc-patterns.tsv`)
 
 | Event | Level | Phase set | Source line pattern | Evidence |
@@ -206,7 +226,7 @@ as a healthy value.
 | `127.0.0.1:4001` (live) / `4002` (paper) | IB Gateway API, loopback only | after login |
 | `4003` (live) / `4004` (paper) | relay to the API port | only while the phase is `logged-in` (`RELAY_MODE=gated`, default); always with `RELAY_MODE=always` or `IBC_LAUNCH=no` |
 | `127.0.0.1:7462` | IBC command server | while IBC runs (`IBC_COMMAND_SERVER_PORT=0` disables) |
-| `127.0.0.1:5900` | VNC | only when a VNC password is set |
+| `127.0.0.1:5900` | VNC (break-glass console) | only when a VNC password is set; view-only unless `VNC_VIEW_ONLY=no` |
 
 A client that gets "connection refused" on the relay port should retry: the Gateway is not
 logged in yet, or is restarting.

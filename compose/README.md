@@ -22,6 +22,7 @@ is a tested one.
 | One gateway (live or paper) | [docker-compose.example.yml](docker-compose.example.yml) | README of the repository, "Quick start" |
 | Live and paper at the same time, or several IBKR usernames on one host | [docker-compose.multi.yml](docker-compose.multi.yml) | this page |
 | A gateway and your strategy on the same host, the API not published at all | [../examples/compose-with-client.yml](../examples/compose-with-client.yml) | [../examples/README.md](../examples/README.md) |
+| A person's look at the Gateway's screen when it is stuck (break-glass; added to the one-gateway file with a second `-f`) | [docker-compose.console.yml](docker-compose.console.yml) | [../docs/console.md](../docs/console.md) |
 
 Copy the file you need and pin the image by digest (`IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`)
 before you rely on it.

@@ -1,0 +1,142 @@
+# Vector recipe: the gateway's events and resource samples to an OpenTelemetry collector, as
+# OTLP log records over HTTP.
+#
+# Reads events/events.jsonl and metrics/metrics.jsonl from the gateway's log volume, mounted
+# read-only (docs/log-contract.md). Never the raw IBC or Gateway logs under ibc/ and jts/:
+# those can contain the IBKR username and stay on the host.
+#
+# Image: the Vector image pinned by digest in docker-compose.vector.yml.
+# Validated: `vector validate` and an offline run against a stand-in receiver
+# (tests/recipes/run.sh). Not validated: delivery to a real collector. See README.md.
+#
+# Before use, edit in a copy of this file:
+#   - `uri:` of the sink, the collector's OTLP/HTTP logs URL (it ends in /v1/logs);
+#   - the value of service.instance.id when you run several gateways (one value per gateway).
+# Credentials are read from files, never written here:
+#   /run/secrets/otlp_token   (bearer token for the collector)
+# For a collector without authentication delete the `auth:` block and the `secret:` block.
+# No environment variable is read: this Vector version expands `${...}` only when it is
+# started with a flag whose name begins with "dangerously", and the recipes do not need it.
+#
+# Resource samples are sent as log records too (the sample's JSON line is the body): turning
+# them into OTLP metrics is the collector's job, not done here.
+
+# Checkpoints (how far each file was read) live here; without a volume every new container
+# re-reads the files from the beginning. /var/tmp and not Vector's usual /var/lib/vector: the
+# shipper runs as a non-root user, a new volume takes owner and mode from the image directory
+# it is mounted over, and in this image only /var/tmp is writable for such a user.
+data_dir: /var/tmp
+
+# Secrets come from files, one file per secret (Docker secrets).
+secret:
+  files:
+    type: directory
+    path: /run/secrets
+    remove_trailing_whitespace: true
+
+sources:
+  gateway_files:
+    type: file
+    # The live file and its rotated generations (.1, .2, .3): a line that was rotated away
+    # while Vector was down is still read. Files are told apart by a checksum of their first
+    # line, so a renamed generation is not read twice.
+    include:
+      - /var/log/ibgateway/events/events.jsonl*
+      - /var/log/ibgateway/metrics/metrics.jsonl*
+    read_from: beginning
+    oldest_first: true
+
+transforms:
+  gateway_otlp:
+    type: remap
+    inputs: [gateway_files]
+    # A line that is not a JSON object (a line cut short by a crash) is dropped, never shipped
+    # half; Vector counts it in component_discarded_events_total.
+    drop_on_error: true
+    drop_on_abort: true
+    source: |
+      line = string!(.message)
+      parsed, err = parse_json(line)
+      if err != null || !is_object(parsed) {
+        abort
+      }
+      parsed = object!(parsed)
+      stream = "events"
+      if contains(string!(.file), "/metrics/") {
+        stream = "metrics"
+      }
+      # The event's own time; the time Vector read the line when it has none. (The conversion
+      # to nanoseconds can fail for a time centuries away, hence the error variables.)
+      unix_nanos, _nanos_err = to_unix_timestamp(now(), unit: "nanoseconds")
+      parsed_ts, ts_err = parse_timestamp(parsed.ts, "%+")
+      if ts_err == null {
+        event_nanos, event_err = to_unix_timestamp(parsed_ts, unit: "nanoseconds")
+        if event_err == null {
+          unix_nanos = event_nanos
+        }
+      }
+      attributes = [
+        {"key": "brokersre.stream", "value": {"stringValue": stream}},
+        {"key": "brokersre.src", "value": {"stringValue": to_string(parsed.src) ?? "unknown"}},
+        {"key": "brokersre.boot_id", "value": {"stringValue": to_string(parsed.boot_id) ?? ""}}
+      ]
+      seq, seq_err = to_int(parsed.seq)
+      if seq_err == null {
+        attributes = push(attributes, {"key": "brokersre.seq", "value": {"intValue": seq}})
+      }
+      record = {"timeUnixNano": unix_nanos}
+      if stream == "events" {
+        level = downcase(to_string(parsed.level) ?? "info")
+        record.severityText = upcase(level)
+        record.severityNumber = 9
+        if level == "warn" {
+          record.severityNumber = 13
+        }
+        if level == "error" {
+          record.severityNumber = 17
+        }
+        record.body = {"stringValue": to_string(parsed.msg) ?? ""}
+        attributes = push(attributes, {"key": "event.name", "value": {"stringValue": to_string(parsed.event) ?? "unknown"}})
+        # The event's `data` (a flat object of strings) as attributes brokersre.data.<key>.
+        if is_object(parsed.data) {
+          for_each(object!(parsed.data)) -> |key, value| {
+            attributes = push(attributes, {"key": "brokersre.data." + key, "value": {"stringValue": to_string(value) ?? ""}})
+          }
+        }
+      } else {
+        # A resource sample: the JSON line is the body, the gateway's phase an attribute.
+        record.body = {"stringValue": line}
+        attributes = push(attributes, {"key": "brokersre.phase", "value": {"stringValue": to_string(parsed.phase) ?? "unknown"}})
+      }
+      record.attributes = attributes
+      # The sink sends events that already have the OTLP shape; nothing else may remain.
+      . = {
+        "resourceLogs": [{
+          "resource": {"attributes": [
+            {"key": "service.name", "value": {"stringValue": "ib-gateway"}},
+            {"key": "service.instance.id", "value": {"stringValue": "default"}}
+          ]},
+          "scopeLogs": [{
+            "scope": {"name": "brokersre-ib-gateway"},
+            "logRecords": [record]
+          }]
+        }]
+      }
+
+sinks:
+  otlp:
+    type: opentelemetry
+    inputs: [gateway_otlp]
+    protocol:
+      type: http
+      uri: "https://otel-collector.example.internal:4318/v1/logs"
+      method: post
+      # Protobuf, the encoding OTLP/HTTP receivers expect.
+      encoding:
+        codec: otlp
+      auth:
+        strategy: bearer
+        token: "SECRET[files.otlp_token]"
+      # The file position is saved only after the collector took the records: at-least-once.
+      acknowledgements:
+        enabled: true

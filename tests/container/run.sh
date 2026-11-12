@@ -27,6 +27,10 @@ fail() {
 secrets_dir="$(mktemp -d)"
 printf 'dummyuser' >"${secrets_dir}/ib-username"
 printf 'dummypassword-not-real' >"${secrets_dir}/ib-password"
+# Break-glass console: an obviously fake password (assembled, so no scanner takes it for a
+# secret) and a wrong one. The VNC protocol uses the first eight characters.
+printf '%s\n' "dummy""vnc" >"${secrets_dir}/vnc-password"
+printf '%s\n' "wrong""vnc" >"${secrets_dir}/vnc-wrong-password"
 # mktemp -d creates a 0700 directory; uid 1000 inside the container must be able to traverse it
 # (bind mounts keep host permissions on Linux hosts such as the CI runner).
 chmod 0755 "${secrets_dir}" && chmod 0644 "${secrets_dir}"/*
@@ -241,6 +245,112 @@ else
 fi
 docker rm -f ibgw-test >/dev/null 2>&1 || true
 docker volume rm ibgw-test-logs >/dev/null 2>&1 || true
+
+echo "== break-glass console (real x11vnc: view-only, session events, no password anywhere) =="
+# The image ships x11vnc but no VNC client, so tests/container/vnc-client.sh speaks RFB 3.8 with
+# VNC authentication in bash; it runs inside the container, where the console listens on
+# loopback. Nothing here is automated in the product: the test plays the person.
+vnc_client() { docker exec -i ibgw-test bash -s -- "$@" <"$(dirname "$0")/vnc-client.sh"; }
+vnc_event_count() { docker logs ibgw-test 2>&1 | grep -c "\"event\":\"$1\""; }
+vnc_event_count_is() { [ "$(vnc_event_count "$1")" = "$2" ]; }
+vnc_events_match() { docker logs ibgw-test 2>&1 | docker run --rm -i --entrypoint jq "${IMAGE}" -es "$1" >/dev/null 2>&1; }
+# vnc_pointer: print x11vnc's answer to "where is the X pointer" (`...pointer_pos:X,Y`). The
+# console's own x11vnc takes no remote-control queries (-noremote), so a second, throwaway
+# x11vnc of the test (view-only, loopback, port 5999) answers; it is started once per container.
+vnc_pointer() {
+  if ! in_container 'test -e /tmp/pointer-helper'; then
+    docker exec -d ibgw-test x11vnc -display :1 -rfbport 5999 -localhost -nopw -viewonly -quiet
+    in_container 'touch /tmp/pointer-helper'
+    sleep 2
+  fi
+  in_container 'x11vnc -display :1 -Q pointer_pos 2>/dev/null'
+}
+run_container -e IBC_LAUNCH=no -e VNC_SERVER_PASSWORD_FILE=/run/secrets/vnc-password
+if wait_for 30 port_open 5900 \
+  && in_container 'tr "\0" "\n" <"/proc/$(pgrep -x x11vnc | head -1)/cmdline" >/tmp/x11vnc.args; grep -qx -e -viewonly /tmp/x11vnc.args && grep -qx -e -localhost /tmp/x11vnc.args && grep -qx -e -noremote /tmp/x11vnc.args' \
+  && vnc_events_match 'map(select(.event == "vnc_enabled")) | length == 1 and .[0].level == "warn" and .[0].data.view_only == "yes"'; then
+  pass "console: x11vnc listens on 5900, view-only by default and without remote control, and vnc_enabled says so"
+else
+  fail "console start" "$(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
+if in_container 'read -r _ _ _ addr _ < <(ip -4 -o addr show scope global); addr="${addr%/*}"; test -n "${addr}" && ! timeout 2 bash -c "exec 3<>/dev/tcp/${addr}/5900" 2>/dev/null'; then
+  pass "console: 5900 is closed on the container's network address (loopback only)"
+else
+  fail "console loopback" "5900 answers on the container's network address"
+fi
+# x11vnc lets any process on the display switch view-only off through its remote-control
+# channel (measured with 0.9.17: `-R noviewonly`), which would also make the events wrong.
+# The console runs with that channel off; the attempt below must change nothing. It is made
+# before the test's own pointer helper exists, because that helper does listen on the channel.
+in_container 'timeout 10 x11vnc -display :1 -R noviewonly >/dev/null 2>&1; true'
+sleep 1
+vnc_out="$(vnc_client --password-file /run/secrets/vnc-password --move 123 77 --hold 1 2>&1)"
+vnc_rc=$?
+if [ "${vnc_rc}" -eq 0 ] && wait_for 15 vnc_event_count_is vnc_client_disconnected 1 \
+  && vnc_events_match 'map(select(.event == "vnc_client_connected")) as $c | map(select(.event == "vnc_client_disconnected")) as $d
+      | ($c | length) == 1 and ($d | length) == 1
+        and $c[0].src == "vnc" and $c[0].level == "warn" and $c[0].data.client_ip == "127.0.0.1" and $c[0].data.view_only == "yes"
+        and $d[0].src == "vnc" and $d[0].level == "info" and ($d[0].data.session_s | test("^[0-9]+$"))
+        and ($c[0].data.client_id | test("^0x[0-9a-f]+$")) and $c[0].data.client_id == $d[0].data.client_id'; then
+  pass "console: a person who connects and leaves is two events (vnc_client_connected, vnc_client_disconnected)"
+else
+  fail "console session events" "client exit ${vnc_rc} (${vnc_out}); logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-400)"
+fi
+vnc_pointer_now="$(vnc_pointer)"
+if [[ "${vnc_pointer_now}" == *pointer_pos:* ]] && [[ "${vnc_pointer_now}" != *pointer_pos:123,77 ]]; then
+  pass "console: view-only discards input, also after an attempt to lift it by remote control (pointer stayed at ${vnc_pointer_now#*pointer_pos:})"
+else
+  fail "console view-only" "pointer query says '${vnc_pointer_now}'"
+fi
+vnc_out="$(vnc_client --password-file /run/secrets/vnc-wrong-password --hold 0 2>&1)"
+vnc_rc=$?
+sleep 2
+if [ "${vnc_rc}" -eq 3 ] && vnc_event_count_is vnc_client_connected 1 && vnc_event_count_is vnc_client_disconnected 1; then
+  pass "console: a wrong password gets nobody in and is no session event"
+else
+  fail "console wrong password" "client exit ${vnc_rc} (${vnc_out}); connected events: $(vnc_event_count vnc_client_connected)"
+fi
+# The password: not in any argument list, not in the environment of PID 1 or x11vnc (which
+# does not even keep the path of the secret file), not on disk any more, not in an event. The
+# value is read inside the container, so it is not in this command either.
+if in_container 'p="$(cat /run/secrets/vnc-password)"; x="$(pgrep -x x11vnc | head -1)"; test -n "${p}" && test -n "${x}" || exit 1
+    for f in /proc/[0-9]*/cmdline; do if tr "\0" " " <"${f}" 2>/dev/null | grep -qF -- "${p}"; then exit 1; fi; done
+    if tr "\0" "\n" </proc/1/environ | grep -q -e "^VNC_SERVER_PASSWORD=" -e "${p}"; then exit 1; fi
+    if tr "\0" "\n" <"/proc/${x}/environ" | grep -q -e "^VNC_SERVER_PASSWORD" -e "${p}"; then exit 1; fi
+    test ! -e /run/brokersre/vncpasswd && ! grep -rqF -- "${p}" /var/log/ibgateway /run/brokersre' \
+  && ! docker logs ibgw-test 2>&1 | quiet_grep -F -- "$(cat "${secrets_dir}/vnc-password")"; then
+  pass "console: the VNC password is in no argument list, environment, file or event"
+else
+  fail "console password hygiene" "the VNC password, its variable or its file is still visible"
+fi
+if docker logs ibgw-test 2>&1 | docker run --rm -i --entrypoint jq "${IMAGE}" -es 'all(has("ts") and has("src") and has("level") and has("event") and has("msg"))' >/dev/null 2>&1 \
+  && [ "$(docker logs ibgw-test 2>&1)" = "$(in_container 'cat /var/log/ibgateway/events/events.jsonl')" ] \
+  && in_container 'jq -es "[.[].seq] == [range(1; length + 1)]" /var/log/ibgateway/events/events.jsonl >/dev/null'; then
+  pass "console: session events are on stdout and in events.jsonl alike, gap-free; x11vnc's own output is not"
+else
+  fail "console log contract" "stdout and events.jsonl differ, a non-event line, or a gap in seq"
+fi
+# VNC_VIEW_ONLY=no is the deliberate switch: the same pointer event now moves the pointer, which
+# also proves that the view-only check above measures something.
+run_container -e IBC_LAUNCH=no -e VNC_SERVER_PASSWORD_FILE=/run/secrets/vnc-password -e VNC_VIEW_ONLY=no
+if wait_for 30 port_open 5900 && vnc_client --password-file /run/secrets/vnc-password --move 123 77 --hold 1 >/dev/null 2>&1 \
+  && [[ "$(vnc_pointer)" == *pointer_pos:123,77 ]] \
+  && in_container '! tr "\0" "\n" <"/proc/$(pgrep -x x11vnc | head -1)/cmdline" | grep -qx -e -viewonly' \
+  && wait_for 15 vnc_events_match 'map(select(.event == "vnc_client_connected")) | length == 1 and .[0].data.view_only == "no"'; then
+  pass "console: VNC_VIEW_ONLY=no lets the person's input through, and the event says input was allowed"
+else
+  fail "console input" "pointer: $(vnc_pointer); logs: $(docker logs ibgw-test 2>&1 | tail -2 | cut -c1-300)"
+fi
+# --network none: should this check ever fail, IBC would start, and no test may reach IBKR.
+run_container --network none -e VNC_SERVER_PASSWORD_FILE=/run/secrets/vnc-password -e VNC_VIEW_ONLY=true
+if wait_for 30 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true' \
+  && [ "$(docker inspect -f '{{.State.ExitCode}}' ibgw-test)" = "1" ] \
+  && docker logs ibgw-test 2>&1 | grep '"event":"config_invalid"' | quiet_grep 'VNC_VIEW_ONLY must be yes or no' \
+  && ! docker logs ibgw-test 2>&1 | quiet_grep -e '"event":"ibc_starting"' -e '"event":"vnc_enabled"'; then
+  pass "console: any other VNC_VIEW_ONLY stops the start before IBC (config_invalid, exit 1)"
+else
+  fail "console bad setting" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
+fi
 
 echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) =="
 # The reference compose runs read-only with every capability dropped, so the smoke test does

@@ -1,0 +1,94 @@
+# Vector recipe: the gateway's events and resource samples to Datadog Logs.
+#
+# Reads events/events.jsonl and metrics/metrics.jsonl from the gateway's log volume, mounted
+# read-only (docs/log-contract.md). Never the raw IBC or Gateway logs under ibc/ and jts/:
+# those can contain the IBKR username and stay on the host.
+#
+# Image: the Vector image pinned by digest in docker-compose.vector.yml.
+# Validated: `vector validate` and an offline run against a stand-in receiver
+# (tests/recipes/run.sh). Not validated: delivery to Datadog. See README.md.
+#
+# Before use, edit in a copy of this file:
+#   - `site:` of the sink, your Datadog site;
+#   - the tag `instance:default` when you run several gateways (one value per gateway).
+# Credentials are read from files, never written here:
+#   /run/secrets/datadog_api_key   (the Datadog API key)
+# No environment variable is read: this Vector version expands `${...}` only when it is
+# started with a flag whose name begins with "dangerously", and the recipes do not need it.
+#
+# Resource samples are sent as logs too, with their numbers as attributes: a metric from them
+# is a log-based metric defined in Datadog, not done here.
+
+# Checkpoints (how far each file was read) live here; without a volume every new container
+# re-reads the files from the beginning. /var/tmp and not Vector's usual /var/lib/vector: the
+# shipper runs as a non-root user, a new volume takes owner and mode from the image directory
+# it is mounted over, and in this image only /var/tmp is writable for such a user.
+data_dir: /var/tmp
+
+# Secrets come from files, one file per secret (Docker secrets).
+secret:
+  files:
+    type: directory
+    path: /run/secrets
+    remove_trailing_whitespace: true
+
+sources:
+  gateway_files:
+    type: file
+    # The live file and its rotated generations (.1, .2, .3): a line that was rotated away
+    # while Vector was down is still read. Files are told apart by a checksum of their first
+    # line, so a renamed generation is not read twice.
+    include:
+      - /var/log/ibgateway/events/events.jsonl*
+      - /var/log/ibgateway/metrics/metrics.jsonl*
+    read_from: beginning
+    oldest_first: true
+
+transforms:
+  gateway_datadog:
+    type: remap
+    inputs: [gateway_files]
+    # A line that is not a JSON object (a line cut short by a crash) is dropped, never shipped
+    # half; Vector counts it in component_discarded_events_total.
+    drop_on_error: true
+    drop_on_abort: true
+    source: |
+      line = string!(.message)
+      parsed, err = parse_json(line)
+      if err != null || !is_object(parsed) {
+        abort
+      }
+      parsed = object!(parsed)
+      stream = "events"
+      if contains(string!(.file), "/metrics/") {
+        stream = "metrics"
+      }
+      # The gateway's keys become the log's attributes (event, src, boot_id, seq, data, and for
+      # a resource sample its numbers).
+      . = parsed
+      # The event's own time; the time Vector read the line when it has none.
+      .timestamp = now()
+      parsed_ts, ts_err = parse_timestamp(parsed.ts, "%+")
+      if ts_err == null {
+        .timestamp = parsed_ts
+      }
+      .ddsource = "ibgateway"
+      .service = "ib-gateway"
+      .ddtags = "instance:default,stream:" + stream
+      if stream == "events" {
+        .status = downcase(to_string(parsed.level) ?? "info")
+        .message = to_string(parsed.msg) ?? ""
+      } else {
+        .status = "info"
+        .message = line
+      }
+
+sinks:
+  datadog:
+    type: datadog_logs
+    inputs: [gateway_datadog]
+    default_api_key: "SECRET[files.datadog_api_key]"
+    site: datadoghq.com
+    # The file position is saved only after Datadog took the logs: at-least-once.
+    acknowledgements:
+      enabled: true

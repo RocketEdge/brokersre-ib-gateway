@@ -95,3 +95,15 @@
 
 - [x] `docs/runbooks/`: index and one page per sidecar alert class; `NOTIFY_RUNBOOK_BASE` set in the compose override; tests keep pages, classes and links in step
 - [ ] Correct the pages from the first real incidents; decide whether a clearing by timer (`login_failed`, `unknown_window`, an unrequested restart) should say so in the `resolved` message
+
+## Roadmap P4 (2026-11-12, branch `feat/p4-depth`)
+
+- [x] Break-glass console: view-only by default (`VNC_VIEW_ONLY`), `-noremote`, session events, console override compose, `docs/console.md`, ADR 0017; no idle limit (x11vnc has none), no web console (no image from a publisher that can be verified)
+- [x] `scripts/check-upgrade.sh` (asks only; `brokersre.upgrade-check.v1`) and `docs/upgrade-check.md`
+- [x] Log-shipper recipes for Loki, OTLP and Datadog (`docs/recipes/`), tested against stand-ins (`tests/recipes/run.sh`, CI job `recipes`); same Vector pin as the Azure pack
+- [x] `docs/passkeys.md`; design notes for log export, a market data canary and strategy telemetry (`docs/specs/`), nothing built
+- [x] The dead "Daily & Weekly Reauthentication" link in the README
+- [ ] First run of the `recipes` job on a GitHub runner
+- [ ] Needs a real session: the console during a login (L26), one recipe against a real system (L28)
+- [ ] Decide: a run-time switch for console input with its own event; limit the console bridge to the Docker host (ADR 0017, revisit triggers)
+- [ ] Follow-up: a console session open at shutdown has no `vnc_client_disconnected`

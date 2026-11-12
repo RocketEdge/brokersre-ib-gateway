@@ -1,0 +1,29 @@
+# Break-glass console for the reference compose: a person looks at the Gateway's screen, and
+# with VNC_VIEW_ONLY=no also clicks and types, through a VNC viewer. Nothing here is automated
+# and no web console is shipped (docs/console.md says why). Use it as a second -f file:
+#
+#   docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.console.yml up -d
+#
+# What it adds to the gateway service, and nothing else:
+#   - the VNC password as a secret file (compose/secrets/vnc-password; never in this file or in
+#     the environment). The VNC protocol uses its first eight characters.
+#   - VNC_VIEW_ONLY, `yes` unless you start docker compose with VNC_VIEW_ONLY=no.
+#   - port 5901 of the container on the host's loopback address. Nothing listens there until a
+#     person opens the bridge (docs/console.md, step 3); x11vnc itself stays on the container's
+#     own loopback (5900), which no port mapping can reach.
+# Adding or removing this file recreates the container, which starts a new login.
+# This file is started as shipped by tests/compose/run.sh.
+services:
+  ib-gateway:
+    environment:
+      VNC_SERVER_PASSWORD_FILE: /run/secrets/vnc-password
+      VNC_VIEW_ONLY: ${VNC_VIEW_ONLY:-yes}
+    secrets:
+      - vnc-password
+    ports:
+      # Loopback only. From another machine, tunnel in: ssh -N -L 5901:127.0.0.1:5901 <host>.
+      - "127.0.0.1:${IBGW_CONSOLE_PORT:-5901}:5901"
+
+secrets:
+  vnc-password:
+    file: ${IBGW_SECRETS_DIR:-./secrets}/vnc-password
