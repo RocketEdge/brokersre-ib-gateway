@@ -466,3 +466,61 @@ def test_a_reset_window_never_excuses_a_gateway_that_refuses_the_handshake() -> 
     assert evaluate(probe=refused)[AlertClass.API_UNHEALTHY] is ACTIVE
     zombie = unhealthy(last_error="timeout", zombie=True)
     assert evaluate(probe=zombie)[AlertClass.API_UNHEALTHY] is ACTIVE
+
+
+def skewed(minute: int, skew: float, rtt: float = 0.05) -> dict[str, object]:
+    """A successful probe taken ``minute`` minutes after T0 that measured ``skew``."""
+    return {
+        "clock_skew_s": skew,
+        "last_rtt_s": rtt,
+        "last_probe_at": T0 + timedelta(minutes=minute),
+        "last_probe_ok": True,
+    }
+
+
+def test_a_clock_skew_alerts_only_after_two_consecutive_samples() -> None:
+    # One reading proves little: the process may have been paused between sending the
+    # request and reading the clock.
+    engine = RuleEngine(RuleConfig())
+    assert evaluate(engine=engine, probe=skewed(0, 45.0))[AlertClass.CLOCK_SKEW] is UNKNOWN
+    # The same sample looked at again is not a second sample.
+    assert evaluate(engine=engine, probe=skewed(0, 45.0))[AlertClass.CLOCK_SKEW] is UNKNOWN
+    second = engine.evaluate(
+        gateway_snapshot(T0), probe_snapshot(T0, **skewed(1, 44.0)), now=T0, mono=1000.0
+    )[AlertClass.CLOCK_SKEW]
+    assert second.state is ACTIVE
+    assert second.detail == "IBKR time minus host time is 44.0 s (2 consecutive probes)"
+    assert evaluate(engine=engine, probe=skewed(2, -0.3))[AlertClass.CLOCK_SKEW] is INACTIVE
+
+
+def test_one_outlier_between_good_samples_never_alerts() -> None:
+    engine = RuleEngine(RuleConfig())
+    verdicts = [
+        evaluate(engine=engine, probe=skewed(minute, skew))[AlertClass.CLOCK_SKEW]
+        for minute, skew in enumerate([-0.3, 30.0, -0.2, 30.0, -0.4])
+    ]
+    assert verdicts == [INACTIVE, UNKNOWN, INACTIVE, UNKNOWN, INACTIVE]
+
+
+def test_a_failed_probe_is_not_a_clock_sample() -> None:
+    engine = RuleEngine(RuleConfig())
+    evaluate(engine=engine, probe=skewed(0, 45.0))
+    # The probe failed a minute later; the engine still shows the last measured skew.
+    failed = skewed(1, 45.0) | {"last_probe_ok": False, "status": ProbeStatus.DOWN}
+    assert evaluate(engine=engine, probe=failed)[AlertClass.CLOCK_SKEW] is UNKNOWN
+    assert evaluate(engine=engine, probe=skewed(2, 45.0))[AlertClass.CLOCK_SKEW] is ACTIVE
+    # Leaving the logged-in phase forgets the measurement and the count.
+    assert evaluate(engine=engine, probe={"clock_skew_s": None})[AlertClass.CLOCK_SKEW] is UNKNOWN
+    assert evaluate(engine=engine, probe=skewed(9, 45.0))[AlertClass.CLOCK_SKEW] is UNKNOWN
+
+
+def test_half_the_round_trip_time_is_added_to_the_tolerance() -> None:
+    # The skew is measured against the middle of the round trip. When the request and the
+    # answer take unequal time, that estimate is off by up to half the round trip.
+    slow = RuleEngine(RuleConfig())
+    for minute in range(3):
+        probe = skewed(minute, 3.2, rtt=4.0)  # provable skew 2.7 s, tolerance 1 + 2 s
+        assert evaluate(engine=slow, probe=probe)[AlertClass.CLOCK_SKEW] is INACTIVE
+    fast = RuleEngine(RuleConfig())
+    evaluate(engine=fast, probe=skewed(0, 3.2))
+    assert evaluate(engine=fast, probe=skewed(1, 3.2))[AlertClass.CLOCK_SKEW] is ACTIVE

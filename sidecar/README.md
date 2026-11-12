@@ -219,7 +219,7 @@ in `ibgw_notify_failures_total`.
 | `restart_storm` | error | 3 or more gateway starts within 30 minutes. | Stop the restart loop and read the first error. |
 | `resource_alert` | error | The gateway reports `memory_high` (until `memory_ok`), or an `oom_kill` in the last 15 minutes. | Raise the memory limit or lower the Java heap. |
 | `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
-| `clock_skew` | warning | The host clock provably differs from IBKR time by more than 1 second. | Fix time synchronisation on the host. |
+| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time (IBKR answers in whole seconds, so up to 1.5 s of the reading is rounding). One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
 | `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped. | Check that the gateway container runs and the volume is mounted. |
 | `volume_missing` | error | For 5 minutes the sidecar could not read a known phase: the log volume is not mounted, `state/phase` is missing or unreadable, or it holds a token this sidecar does not know. Nothing else can alert in that state. | Mount the gateway's log volume read-only at `GATEWAY_LOG_DIR`; check that the gateway writes `state/phase`. |
 | `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while no alert is active. | Nothing. A missing heartbeat means the sidecar is down or an alert is active. |

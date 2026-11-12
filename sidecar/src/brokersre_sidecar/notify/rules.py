@@ -75,7 +75,9 @@ class RuleConfig:
         storm_boots: Gateway starts within 30 minutes that make a restart storm.
         event_hold_s: A point event (failed login, unknown dialog, OOM kill) keeps its
             condition active this long.
-        clock_skew_max_s: Tolerated clock difference in seconds.
+        clock_skew_max_s: Tolerated clock difference in seconds (half the round-trip time
+            of the measuring probe is added to it).
+        clock_skew_samples: Consecutive probes that must show the skew before it alerts.
         silent_after_s: Seconds without an observed feed line that count as silence.
         volume_missing_after_s: Seconds without a readable, known phase before the
             sidecar says that it cannot see the gateway.
@@ -85,6 +87,7 @@ class RuleConfig:
     storm_boots: int = 3
     event_hold_s: float = 900.0
     clock_skew_max_s: float = 1.0
+    clock_skew_samples: int = 2
     silent_after_s: float = 300.0
     volume_missing_after_s: float = 300.0
 
@@ -114,15 +117,17 @@ def skew_exceeds(skew_s: float, limit_s: float) -> bool:
 class RuleEngine:
     """Evaluates every condition class.
 
-    Holds one piece of memory: since when (monotonic) the API has been continuously
-    unhealthy; moving between ``down`` and ``degraded`` must not restart that clock.
-    Single-threaded.
+    Holds two pieces of memory: since when (monotonic) the API has been continuously
+    unhealthy (moving between ``down`` and ``degraded`` must not restart that clock),
+    and how many consecutive probes showed a clock skew. Single-threaded.
     """
 
     def __init__(self, config: RuleConfig) -> None:
         """Create the engine with its thresholds."""
         self._config = config
         self._unhealthy_since: float | None = None
+        self._skew_sample_at: datetime | None = None
+        self._skew_streak = 0
 
     def evaluate(
         self,
@@ -360,12 +365,33 @@ class RuleEngine:
         return _INACTIVE
 
     def _clock_skew(self, probe: ProbeSnapshot) -> Evaluation:
-        """Active when the host clock provably differs from IBKR time by more than the limit."""
-        if probe.clock_skew_s is None:
+        """Active when consecutive probes prove that the host clock differs from IBKR time.
+
+        One reading is not proof: a process that was paused between sending the request
+        and reading its own clock measures a skew that does not exist. So the condition
+        needs ``clock_skew_samples`` consecutive successful probes beyond the limit, and
+        one probe within the limit clears it. A probe that failed is not a sample.
+
+        The skew is taken against the middle of the round trip; if request and answer
+        travel unequally long, that is wrong by up to half the round-trip time, which is
+        therefore added to the tolerance.
+        """
+        skew = probe.clock_skew_s
+        if skew is None:
+            self._skew_sample_at = None
+            self._skew_streak = 0
             return _UNKNOWN
-        if skew_exceeds(probe.clock_skew_s, self._config.clock_skew_max_s):
-            return Evaluation(_ACTIVE, f"IBKR time minus host time is {probe.clock_skew_s:.1f} s")
-        return _INACTIVE
+        if probe.last_probe_ok and probe.last_probe_at != self._skew_sample_at:
+            self._skew_sample_at = probe.last_probe_at
+            tolerance = self._config.clock_skew_max_s + (probe.last_rtt_s or 0.0) / 2
+            self._skew_streak = self._skew_streak + 1 if skew_exceeds(skew, tolerance) else 0
+        if self._skew_streak >= self._config.clock_skew_samples:
+            return Evaluation(
+                _ACTIVE,
+                f"IBKR time minus host time is {skew:.1f} s "
+                f"({self._config.clock_skew_samples} consecutive probes)",
+            )
+        return _INACTIVE if self._skew_streak == 0 else _UNKNOWN
 
     def _volume_missing(self, gateway: GatewaySnapshot) -> Evaluation:
         """Active when the sidecar has not been able to see the gateway for too long.
