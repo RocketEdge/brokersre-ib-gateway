@@ -5,6 +5,28 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Optional allowlist for the relay (`RELAY_ALLOW_CIDR`)
+
+- **What changed:** `RELAY_ALLOW_CIDR` (one IPv4 network) makes the relay serve peers in that
+  network only (socat `range=`). A peer outside it is closed without a byte of the API and
+  reported as `relay_refused`: the first at once, later ones as one count per
+  `RELAY_REFUSED_REPORT_S` (60 s), so a port scan cannot flood the events. An unusable value
+  stops the start (`config_invalid`; the preflight reports it as a failure of
+  `relay_exposure`). Unset, the relay is started exactly as before.
+- **Result:** unit tests green (counts in the pull request), two of them with the image's real
+  socat: a peer inside the network is relayed, a peer outside gets nothing and is reported.
+- **What did NOT work / root cause:** (1) several networks are not possible with socat: a
+  second `range=` is silently ignored (measured with socat 1.8.1.1), so the option takes
+  exactly one and refuses a comma. (2) The allowlist cannot separate clients that arrive
+  through a published port on Docker Desktop: the relay sees the bridge gateway
+  (`172.17.0.1` in the measurement), not the client. It is a second line for clients on a
+  shared Docker network, not a replacement for the port binding (L17). (3) socat does not
+  start at all with a log file it cannot open, so the relay tests the file first and runs
+  without reports rather than without a relay. (4) A test of mine hung instead of failing:
+  a start that should have been refused left a supervisor that held the pipe of bats' `run`;
+  the test now writes to a file and the teardown ends stray supervisors.
+- **Next step:** measure the peer address on Docker Engine with a remote client (L17).
+
 ### 2026-11-12 — Qualification: one real paper login per image, and an API-level health check
 
 - **What changed:** (1) `api-handshake.sh` sends the TWS API version handshake to the loopback

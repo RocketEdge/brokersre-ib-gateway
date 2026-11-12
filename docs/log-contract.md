@@ -44,8 +44,12 @@ reader must ignore keys and events it does not know.
 `config_custom` (data: `config_hash`, a fingerprint of the non-secret configuration),
 `config_missing`, `config_conflict`, `config_invalid`, `secret_unreadable`, `dirs_not_writable`,
 `jts_ini_written`, `jts_ini_kept`, `xvfb_started`, `xvfb_failed`, `vnc_disabled`, `vnc_enabled`,
-`socat_started`, `relay_opened`, `relay_closed`, `ibc_starting`, `ibc_not_launched`,
-`ibc_exited`, `needs_human`, `shutdown_requested`, `shutdown_complete`.
+`socat_started`, `relay_opened`, `relay_closed`, `relay_refused` (warn; data: `count`,
+`last_peer`, `allow`; a peer outside `RELAY_ALLOW_CIDR` was closed; at most one event per
+`RELAY_REFUSED_REPORT_S` after the first, and `count` is a lower bound),
+`relay_log_unwritable` (warn; the allowlist applies but refusals cannot be reported),
+`ibc_starting`, `ibc_not_launched`, `ibc_exited`, `needs_human`, `shutdown_requested`,
+`shutdown_complete`.
 
 ### Events classified from IBC's output (`rootfs/etc/brokersre/ibc-patterns.tsv`)
 

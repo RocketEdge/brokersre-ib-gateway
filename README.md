@@ -207,6 +207,12 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
   login and during the daily restart a client gets "connection refused" and should simply
   retry; it is never accepted and then dropped. `RELAY_MODE=always` restores a relay that
   listens from container start.
+- The API has **no authentication**: whoever reaches the relay can use the account as far as
+  `READ_ONLY_API` allows. The port binding and the host firewall decide who that is. When the
+  strategy runs in a container on the same Docker network, `RELAY_ALLOW_CIDR` (one IPv4
+  network) adds a second line: the relay closes every other peer and reports it. It cannot
+  tell clients apart that arrive through a published port, because Docker can present those
+  with its bridge address ([env-vars](docs/env-vars.md)).
 - The IBC **command server** (`STOP`, `RESTART`, `RECONNECTDATA`, `RECONNECTACCOUNT`, ...) is on
   `127.0.0.1:7462`. A sidecar can use it only by sharing this container's network namespace
   (`network_mode: "service:ib-gateway"`), which is how the BrokerSRE agent does it. `ibc-cmd STOP`
