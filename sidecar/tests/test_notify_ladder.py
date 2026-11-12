@@ -154,17 +154,18 @@ def test_state_survives_a_restart_without_a_duplicate_and_resolves_afterwards() 
 
 def test_the_dirty_flag_tracks_changes_that_need_saving() -> None:
     engine = ladder()
-    assert engine.dirty is False
+    seen = [engine.dirty]
     engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
-    assert engine.dirty is True
+    seen.append(engine.dirty)
     engine.export_state()
-    assert engine.dirty is False
+    seen.append(engine.dirty)
     engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(1))
-    assert engine.dirty is False
+    seen.append(engine.dirty)
+    assert seen == [False, True, False, False]
 
 
 def test_corrupt_or_foreign_saved_state_is_ignored() -> None:
-    for garbage in (
+    cases: tuple[object, ...] = (
         None,
         [],
         "text",
@@ -175,7 +176,8 @@ def test_corrupt_or_foreign_saved_state_is_ignored() -> None:
             "classes": {"login_failed": {"active": True, "since": "not a time"}, "made_up": {}},
             "heartbeat_date": 5,
         },
-    ):
+    )
+    for garbage in cases:
         engine = ladder()
         engine.import_state(garbage)
         assert kinds(engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))) == [

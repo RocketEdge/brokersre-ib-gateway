@@ -113,8 +113,9 @@ class _State:
 
 
 class LadderEngine:
-    """The ladder state machine. Single-threaded; ``step`` must be called with a
-    non-decreasing ``now``.
+    """The ladder state machine.
+
+    Single-threaded; ``step`` must be called with a non-decreasing ``now``.
     """
 
     def __init__(self, config: LadderConfig) -> None:

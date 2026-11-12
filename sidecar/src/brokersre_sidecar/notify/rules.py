@@ -94,9 +94,10 @@ def skew_exceeds(skew_s: float, limit_s: float) -> bool:
 
 
 class RuleEngine:
-    """Evaluates every condition class. Holds one piece of memory: since when the API has
-    been continuously unhealthy (moving between ``down`` and ``degraded`` must not restart
-    that clock). Single-threaded.
+    """Evaluates every condition class.
+
+    Holds one piece of memory: since when the API has been continuously unhealthy (moving
+    between ``down`` and ``degraded`` must not restart that clock). Single-threaded.
     """
 
     def __init__(self, config: RuleConfig) -> None:

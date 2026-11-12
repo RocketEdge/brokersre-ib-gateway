@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 import pytest
@@ -18,8 +19,8 @@ def evaluate(
     now: datetime = T0,
     engine: RuleEngine | None = None,
     volume_present: bool = True,
-    gateway: dict[str, object] | None = None,
-    probe: dict[str, object] | None = None,
+    gateway: Mapping[str, object] | None = None,
+    probe: Mapping[str, object] | None = None,
 ) -> dict[AlertClass, Condition]:
     rules = engine or RuleEngine(RuleConfig(login_stall_s=300.0))
     result = rules.evaluate(
