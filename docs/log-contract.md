@@ -81,9 +81,11 @@ acts there; these events record that someone did.
 | `config_invalid` | error | a VNC password is set and `VNC_VIEW_ONLY` is neither `yes` nor `no`; the container exits 1 before any login | |
 
 A connection that never authenticated (a wrong password, a port probe) is no session and no
-event. A value the hook cannot verify is `unknown` (`client_ip`, `view_only`) or absent
-(`client_id`, `clients`, `session_s`); nothing a client can shape is echoed. The events carry
-no password and no username.
+event. A session that is still open when the container stops has no `vnc_client_disconnected`:
+x11vnc is ended with the other helpers, and `shutdown_requested` is what follows the
+`vnc_client_connected` (observed 2026-11-12). A value the hook cannot verify is `unknown`
+(`client_ip`, `view_only`) or absent (`client_id`, `clients`, `session_s`); nothing a client
+can shape is echoed. The events carry no password and no username.
 
 ### Events classified from IBC's output (`rootfs/etc/brokersre/ibc-patterns.tsv`)
 

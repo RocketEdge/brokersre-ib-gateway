@@ -177,8 +177,9 @@ could switch view-only off unseen, is turned off (`-noremote`).
 
 Through the bridge the client address is always `127.0.0.1`: the events say that someone was
 there and for how long, not who. Who could reach it is decided by who can log in to the Docker
-host. A connection that never passed the password check is not an event.
-Details: [log-contract.md](log-contract.md).
+host. A connection that never passed the password check is not an event, and a session that
+is still open when the container stops ends without `vnc_client_disconnected`
+(`shutdown_requested` follows instead). Details: [log-contract.md](log-contract.md).
 
 ## Several gateways
 
