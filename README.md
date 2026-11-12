@@ -29,6 +29,7 @@ by or endorsed by Interactive Brokers.
 - [Shipping to Azure Log Analytics](#shipping-to-azure-log-analytics)
 - [Security posture](#security-posture)
 - [Verifying an image](#verifying-an-image)
+- [Evidence for due diligence](#evidence-for-due-diligence)
 - [Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login)
 - [Get notified of new images](#get-notified-of-new-images)
 - [Building and testing](#building-and-testing)
@@ -336,19 +337,35 @@ No `sudo`, no SSH or telnet client; runs as uid 1000; works with `read_only: tru
 credentials enter through `_FILE` variables, are rendered into
 `/run/brokersre/config.ini` (tmpfs, mode 0600) and are removed from the environment before any
 child process starts; every artefact (base image, Gateway installer, IBC zip) is verified by
-SHA-256 at build time; images are signed (keyless cosign), carry a CycloneDX SBOM and GitHub
-build provenance, and are scanned by Trivy before any tag moves. See [SECURITY.md](SECURITY.md).
+SHA-256 at build time; images are signed (keyless cosign), carry one CycloneDX SBOM per platform
+and GitHub build provenance, and both platforms are scanned by Trivy v0.76.2 before any tag
+moves. See [SECURITY.md](SECURITY.md).
 
 ## Verifying an image
 
 ```bash
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest-from-the-release>
-cosign verify "$IMAGE" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@'
-cosign verify-attestation --type cyclonedx "$IMAGE" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/RocketEdge/brokersre-ib-gateway/' | jq .
+IDENTITY='^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify "$IMAGE" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY"
+# One SBOM per platform, attested to that platform's manifest (digests-<channel>.json, key "platforms"):
+PLATFORM=ghcr.io/rocketedge/brokersre-ib-gateway@$(jq -r '.platforms["linux/amd64"]' digests-stable.json)
+cosign verify-attestation --type cyclonedx "$PLATFORM" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY" | jq .
 ```
+
+The identity ends in `@refs/heads/main$`: without the branch, a signature made by the same
+workflow file on another branch would verify too. Images published up to 2026-11-11 carry one
+SBOM, attested to the index digest, which describes linux/amd64 only.
+
+## Evidence for due diligence
+
+[docs/evidence.md](docs/evidence.md) maps the usual operational due-diligence questions (what
+runs, what changed, who reaches the API, where the credentials are, how health is known, the
+second factor, vulnerabilities, what is not covered) to the artefact that answers each and
+the command that produces it. IBKR's bundled jars carry CVEs this image cannot patch; the
+project's statement on each is
+[security/vex/ibgateway-vendor-jars.openvex.json](security/vex/ibgateway-vendor-jars.openvex.json)
+(`trivy image --vex security/vex/ibgateway-vendor-jars.openvex.json <image>`).
 
 ## Qualifying an image with a real paper login
 
@@ -381,7 +398,9 @@ reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). No image has 
 Every new IB Gateway version and every OS-patch rebuild creates a
 [release](https://github.com/RocketEdge/brokersre-ib-gateway/releases). Its notes carry the
 exact digest to pin and the `cosign verify` command; the release's `digests-<channel>.json` always
-holds the digest the channel tag points at. When an already released version is rebuilt (an
+holds the digest the channel tag points at and the digest of each platform's manifest. The
+other release assets are `sbom-<channel>-linux-amd64.cdx.json`,
+`sbom-<channel>-linux-arm64.cdx.json` and `ibgateway-vendor-jars.openvex.json`. When an already released version is rebuilt (an
 image fix, no new IB Gateway), its release is updated in place, which GitHub does not announce.
 Follow the releases in either of two ways:
 
@@ -417,9 +436,11 @@ IBC starts, the command server listens and `STOP` shuts the Gateway down tidily.
 
 See [docs/upgrade-policy.md](docs/upgrade-policy.md). Summary: `detect-releases.yml` checks
 IBKR daily and opens a pull request when IBKR publishes a build; a `stable` update merges itself
-once CI passes, a `latest` update waits for a human (ADR 0009); `publish.yml` builds, scans,
-pushes, signs; a monthly rebuild refreshes OS packages with `-rYYYYMMDD` tags. Consumers pin
-digests.
+once CI passes, a `latest` update waits for a human (ADR 0009); `publish.yml` builds, pushes by
+digest, scans both platforms of that digest, signs, and only then moves tags; OS packages are
+refreshed with `-rYYYYMMDD` tags monthly, and within a day of a fixable CRITICAL/HIGH finding
+in a published image (a target, not a guarantee: GitHub can delay or drop a scheduled run).
+Consumers pin digests.
 
 ## Automatic updates and repository secrets
 
@@ -507,7 +528,8 @@ every variable it dropped or renamed on stderr, without printing a value.
 [docs/env-vars.md](docs/env-vars.md), [docs/log-contract.md](docs/log-contract.md),
 [docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
 [examples/README.md](examples/README.md), [azure/README.md](azure/README.md),
-[sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md).
+[sidecar/README.md](sidecar/README.md), [docs/sidecar.md](docs/sidecar.md),
+[docs/evidence.md](docs/evidence.md), [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -5,6 +5,54 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Supply chain: both platforms gated on the pushed digest, fix-driven rebuilds, VEX for the vendor jars
+
+- **What changed:** `publish.yml` builds both platforms once without a cache, pushes the index
+  by digest only, scans linux/amd64 and linux/arm64 of that digest, makes one SBOM per
+  platform attested to that platform's manifest, signs and attests the index (VEX,
+  provenance) and only then moves tags (`scripts/promote-tags.sh`). `rebuild.yml` scans the
+  published images daily and requests a rebuild of a channel with a fixable CRITICAL/HIGH OS
+  finding, with one issue per channel, one comment per day and no request after three days.
+  The channel list, the tag overlap of the two channels, the platform of every scan report,
+  the platform manifests of the index and the rebuild request are decided by tested scripts;
+  the two workflows serialise per channel, hold no expression inside a script and pin every
+  action by commit and Trivy to v0.76.2. `security/vex/ibgateway-vendor-jars.openvex.json`
+  states the project's position on the 25 CVEs of IBKR's bundled jars (all
+  `under_investigation`); `scripts/check-vex.sh` reports drift. New: `docs/evidence.md`, ADR
+  0015. **Breaking for consumers of release assets:** `sbom-<channel>.cdx.json` becomes
+  `sbom-<channel>-linux-amd64.cdx.json` and `-arm64.cdx.json`, the SBOM attestation is on the
+  platform manifest digest, `digests-<channel>.json` gains `platforms`, and the documented
+  verification identity ends in `@refs/heads/main$`.
+- **Result:** CI-script suite green inside the image (counts in the pull request; 134 of its
+  tests are new) and, in the builder's run, under gawk on Ubuntu 24.04. A manual scan of both
+  platforms of the digests published on 2026-11-11 found no fixable OS finding of any
+  severity. **No workflow has run yet**: they run only from `main`.
+- **What did NOT work / root cause:**
+  - *The gate was never "CRITICAL/HIGH".* trivy-action drops the severity input when the
+    format is SARIF, so with `exit-code: 1` the gate failed on a fixable finding of any
+    severity. Fixed with `limit-severities-for-sarif: "true"` where SARIF is the gate format.
+  - *Scanning a local amd64 build never scanned what was pushed*, and arm64 not at all.
+    Scanning an OCI layout before any push was rejected: it needs a second tool to push the
+    scanned layout. Pushing by digest costs an untagged, unsigned manifest in the registry
+    when a gate fails (L23).
+  - *One SBOM for a two-platform image described one platform.* syft reads the runner's
+    platform from an index: 9,776 components for amd64, 9,946 with `openjdk-25-jre` for arm64.
+  - *A workflow-wide concurrency group lost work*: a request for one channel replaced a
+    pending run for both.
+  - *`inputs.channels` was pasted into shell*; the allow-list ran after the paste.
+  - *The documented identity regexp accepted any branch.*
+  - *`not_affected` was not defensible for any jar CVE.* Loopback exposure does not show that
+    the Gateway never parses hostile input; two CVE texts exclude 2.12.3 but the advisory
+    data disagrees.
+  - *A bare `! command` in a bats test asserts nothing unless it is the last line.* Twelve
+    such lines existed across the suites, several of them guarding "no secret appears here";
+    all now end in `|| false` and still pass. A four-test probe showed the difference.
+  - *jq's `^` and `$` match per line*, so an anchored check let a line break through.
+  - Deleting the untagged image of a failed gate was rejected: only the index can be deleted
+    safely, and the platform manifests hold the bulk.
+- **Next step:** merge this change on its own; run `rebuild.yml` by hand with mode `scan`,
+  then watch the publish run of the merge, and record the first run ids here.
+
 ### 2026-11-12 — Optional sidecar: API probe, status endpoints, alerts (`sidecar/`)
 
 - **What changed:** a second, optional image. It reads the gateway's log volume read-only,

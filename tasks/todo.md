@@ -70,3 +70,12 @@
 - [ ] First runs of the three workflows; the first-publish path of `sidecar-publish.yml`
 - [ ] A paper login with the sidecar attached (L20); one real message per channel
 - [ ] A person checks the reset-window table against IBKR's system status page (L21)
+
+## Roadmap P2: supply chain (2026-11-12, branch `feat/p2-supply-chain`)
+
+- [x] `publish.yml`: push by digest, gate both platforms of that digest, one SBOM per platform, VEX attestation, tags moved last by `promote-tags.sh`; actions pinned by commit, Trivy by version
+- [x] `rebuild.yml`: daily scan of the published images, rebuild request for a fixable CRITICAL/HIGH finding, bounded to three days
+- [x] OpenVEX for IBKR's bundled jars with a drift check; `docs/evidence.md`; ADR 0015
+- [ ] First runs of the changed workflows (start with `rebuild.yml`, mode `scan`); record the run ids (L24)
+- [ ] A tested registry cleanup after a failed gate (L23); sign the platform manifests too
+- [ ] Decide about `/usr/bin/pebble` (L22); re-attest the VEX without a rebuild
