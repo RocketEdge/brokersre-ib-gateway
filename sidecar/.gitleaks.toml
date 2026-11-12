@@ -1,0 +1,19 @@
+# gitleaks configuration for scans of this directory (`gitleaks dir sidecar`).
+# The default rules apply unchanged. The only addition: directories that are not part of the
+# repository (the local virtual environment and tool caches, all in sidecar/.gitignore) are
+# skipped. Without this, a directory scan reports numeric constants in third-party test
+# files (numpy's random-number tests) as "generic API keys".
+title = "brokersre-ib-gateway-sidecar"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "git-ignored local environment and tool caches (third-party or generated files)"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)\.hypothesis/''',
+  '''(^|/)\.(pytest|mypy|ruff)_cache/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)htmlcov/''',
+]
