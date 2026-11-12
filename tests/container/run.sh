@@ -85,6 +85,18 @@ else
   docker logs ibgw-test 2>&1 | head -20
 fi
 if in_container 'grep -rq "dummypassword-not-real" /var/log/ibgateway'; then fail "log leak" "password found under the log volume"; else pass "password absent from the log volume"; fi
+# Log contract v2: the events file on the volume holds exactly the lines of the container's
+# stdout, each with this start's boot id and a gap-free sequence number.
+if [ "$(docker logs ibgw-test 2>&1)" = "$(in_container 'cat /var/log/ibgateway/events/events.jsonl')" ]; then
+  pass "events/events.jsonl on the volume is identical to the container's stdout"
+else
+  fail "events file" "differs from stdout"
+fi
+if in_container 'b=$(cat /var/log/ibgateway/state/boot_id); [[ "${b}" =~ ^[0-9a-f]{16}$ ]] && jq -es --arg b "${b}" "all(.boot_id == \$b) and ([.[].seq] == [range(1; length + 1)])" /var/log/ibgateway/events/events.jsonl >/dev/null'; then
+  pass "every event carries the boot id and the sequence 1..n without a gap"
+else
+  fail "boot id / seq" "missing boot id or a gap in seq"
+fi
 
 echo "== read-only root filesystem =="
 # A tmpfs is root-owned 0755 unless the mount says otherwise, and the gateway runs as uid 1000;
@@ -112,7 +124,7 @@ echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabi
 # The reference compose runs read-only with every capability dropped, so the smoke test does
 # too: IBC and the Gateway JVM must start in exactly that configuration.
 docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
-run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true -e JAVA_HEAP_MB=1024 \
   --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
 if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
   fail "ibc smoke" "7462 never listened"
@@ -121,11 +133,21 @@ fi
 if in_container 'pgrep -f ibcalpha.ibc >/dev/null'; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
 # A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
 # Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
-if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -qx "_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home"'; then
+if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -q "^_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home "'; then
   pass "Gateway JVM gets a user.home on the settings volume"
 else
   fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
 fi
+# JAVA_HEAP_MB=1024 above: the Gateway reports its real maximum heap in launcher.log a few
+# seconds after start. 1,048,576 KB proves the run-time value won over the image's 768 MB.
+if wait_for 60 in_container 'grep -q "HeapUsage: Max=1,048,576KB" /home/ibgateway/Jts/settings/launcher.log'; then
+  pass "JAVA_HEAP_MB sets the Gateway heap at run time (1024 MB in effect)"
+else
+  fail "runtime heap" "launcher.log does not show a 1024 MB heap: $(in_container 'grep -o "HeapUsage: Max=[0-9,]*KB" /home/ibgateway/Jts/settings/launcher.log | tail -1' 2>/dev/null)"
+fi
+# The relay follows the login: before a login it must refuse connections instead of accepting
+# and dropping them.
+if port_open 4004; then fail "relay gate" "relay listens on 4004 before any login"; else pass "relay closed while the Gateway is not logged in"; fi
 if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
   pass "Java home exists, is writable and private (0700) under a read-only root"
 else
