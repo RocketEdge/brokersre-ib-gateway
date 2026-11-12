@@ -28,9 +28,9 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck --version | head -2
-          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh
+          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh examples/*.sh
       - name: shfmt (diff only)
-        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/bats/run-in-image.sh
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/compose tests/bats/run-in-image.sh examples/wait-for-gateway.sh
       - name: versions.json sanity
         run: |
           jq -e '.schema_version == 1' versions.json
@@ -79,6 +79,8 @@ jobs:
           tests/bats/run-in-image.sh "$TEST_IMAGE"
       - name: Container tests (offline)
         run: IMAGE="$TEST_IMAGE" tests/container/run.sh
+      - name: Compose tests (several gateways, gateway + strategy; offline)
+        run: IMAGE="$TEST_IMAGE" tests/compose/run.sh
       - name: Trivy gate (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -107,3 +109,33 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4.39.3
         with:
           sarif_file: trivy.sarif
+
+  # The sample clients under examples/ are read-only and are tested against stand-ins: no job
+  # here has IBKR credentials or contacts IBKR.
+  examples-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/python
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run black --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  examples-csharp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/csharp
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          global-json-file: examples/csharp/global.json
+      - run: dotnet build -warnaserror
+      - run: dotnet test
+      - run: dotnet format GatewayClient.slnx --verify-no-changes
