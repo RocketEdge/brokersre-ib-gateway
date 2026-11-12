@@ -5,6 +5,22 @@ Next step.
 
 ## Change History
 
+### 2026-11-13 — The sidecar moves to Python 3.15
+
+- **What changed:** the sidecar image is built on `python:3.15-slim` (Python 3.15.2, the same
+  Debian release, pinned by digest), and its package requires Python 3.15: `requires-python`,
+  the black and ruff targets, mypy's version, `.python-version` and `uv.lock` change with the
+  `FROM` line.
+- **Result:** unit suite, lint, format and type checks pass on 3.15.2; the image builds and
+  its smoke and end-to-end suites pass (counts in the pull request). No dependency changed
+  version: the lock file was re-resolved for the new interpreter.
+- **What did NOT work / root cause:** *Dependabot's pull request for this could not build.*
+  It changed only the `FROM` line, while the package said `>=3.14,<3.15` and the lock file
+  was resolved for 3.14, so `uv sync --frozen` found no interpreter. The version lives in six
+  places; the automatic pull request is a notice, not the change.
+- **Next step:** none. `examples/python` stays on `>=3.14` (it is a sample for users and
+  already accepts 3.15).
+
 ### 2026-11-13 — First authenticated paper sessions: the account had no paper trading access
 
 - **What changed:** documents only. `docs/limitations.md` (L02, L03, L10, L16, L25 updated;

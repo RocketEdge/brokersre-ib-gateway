@@ -504,7 +504,7 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
 
 ```bash
 cd sidecar
-uv sync                               # Python 3.14, everything pinned in uv.lock
+uv sync                               # Python 3.15, everything pinned in uv.lock
 uv run ruff check . && uv run black --check . && uv run mypy
 uv run pytest --cov                   # coverage gate: 90 %
 docker build -t brokersre-ib-gateway-sidecar:dev .

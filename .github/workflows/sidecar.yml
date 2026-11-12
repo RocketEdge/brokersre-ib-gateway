@@ -53,7 +53,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: sidecar/uv.lock
-      - name: Install (exactly uv.lock; Python 3.14 from .python-version)
+      - name: Install (exactly uv.lock; Python 3.15 from .python-version)
         run: uv sync --frozen
       - name: ruff
         run: uv run ruff check .
