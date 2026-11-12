@@ -1,0 +1,19 @@
+<Project>
+  <!-- Central package management: every version is pinned here, exactly (verified on
+       nuget.org on 2026-11-12). No project file carries a version. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Google.Protobuf is a dependency of IBKR's CSharpAPI.dll (TWS API 10.38 and later talk
+         protobuf). API 10.48.01 was built against 3.29.5; a later 3.x release is binary
+         compatible and carries the security fixes. Override with -p:IbApiProtobufVersion=...
+         if your copy of the API needs another one. -->
+    <IbApiProtobufVersion Condition="'$(IbApiProtobufVersion)' == ''">3.36.2</IbApiProtobufVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="[10.0.15]" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="[10.0.15]" />
+    <PackageVersion Include="Google.Protobuf" Version="[$(IbApiProtobufVersion)]" />
+    <PackageVersion Include="xunit.v3" Version="[4.0.3]" />
+    <PackageVersion Include="AwesomeAssertions" Version="[9.6.0]" />
+  </ItemGroup>
+</Project>

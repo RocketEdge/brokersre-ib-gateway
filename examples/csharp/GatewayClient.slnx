@@ -1,0 +1,11 @@
+<Solution>
+  <!-- The library and its tests: both build without any IBKR file. The executable that uses
+       IBKR's CSharpAPI.dll (src/GatewayClient.IbApi) is deliberately NOT part of the solution;
+       build it on its own with -p:IbApiDll=<path to your CSharpAPI.dll> (README.md). -->
+  <Folder Name="/src/">
+    <Project Path="src/GatewayClient/GatewayClient.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GatewayClient.Tests/GatewayClient.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,17 @@
+# C# conventions of the sample (the repository's root .editorconfig sets two spaces for
+# everything else). `dotnet format --verify-no-changes` checks these.
+[*.cs]
+indent_size = 4
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = true:warning
+dotnet_style_qualification_for_field = false:warning
+
+[*.{csproj,props,slnx}]
+indent_size = 2
+
+# Test names read as sentences: Method_Condition_ExpectedResult.
+[tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none
