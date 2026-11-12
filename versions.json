@@ -22,8 +22,8 @@
       }
     },
     "latest": {
-      "version": "10.51.1e",
-      "build_datetime": "20261026 16:53:53",
+      "version": "10.52.1c",
+      "build_datetime": "20261102 17:21:34",
       "sha256": {
         "x64": "e57858252ae21da7395e5c08884639cc45dfc15eed24a7ccd6cf4383d2826ec0",
         "arm": "6aa611348ec6709b59a4a966494aa54969c7848249579dccdca0d3a333e908f6"
