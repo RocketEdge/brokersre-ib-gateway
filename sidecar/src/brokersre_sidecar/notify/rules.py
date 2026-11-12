@@ -30,6 +30,14 @@ from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, Phase, ProbeStatu
 
 _UNHEALTHY = frozenset({ProbeStatus.DOWN, ProbeStatus.DEGRADED, ProbeStatus.CLIENT_ID_IN_USE})
 _NOT_RUNNING = frozenset({Phase.STOPPING, Phase.STOPPED, Phase.EXITED})
+# Phases the gateway passes through between two second-factor prompts.
+_BETWEEN_PROMPTS = frozenset({Phase.LOGIN, Phase.RESTARTING, Phase.STARTING})
+_TWOFA_EVENTS = ("twofa_initiated", "twofa_dialog", "twofa_timeout")
+# Phases in which another alert takes over from a pending second factor.
+_TWOFA_SUCCESSORS: dict[str, AlertClass] = {
+    Phase.NEEDS_HUMAN: AlertClass.NEEDS_HUMAN,
+    Phase.EXITED: AlertClass.GATEWAY_EXITED,
+}
 
 
 class Condition(Enum):
@@ -133,7 +141,7 @@ class RuleEngine:
         phase = gateway.phase
         known = phase is not None and phase != UNKNOWN_PHASE
         return {
-            AlertClass.TWOFA_PENDING: self._phase_is(phase, known, Phase.TWOFA_PENDING),
+            AlertClass.TWOFA_PENDING: self._twofa_pending(gateway, known),
             AlertClass.NEEDS_HUMAN: self._needs_human(gateway, known),
             AlertClass.LOGIN_FAILED: self._login_failed(gateway, now),
             AlertClass.EXISTING_SESSION: self._phase_is(phase, known, Phase.EXISTING_SESSION),
@@ -158,6 +166,42 @@ class RuleEngine:
         if phase == wanted:
             return Evaluation(_ACTIVE, f"gateway phase is {wanted.value}")
         return _INACTIVE
+
+    @staticmethod
+    def _twofa_pending(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active from the first second-factor prompt until a login completes.
+
+        With the gateway's defaults an unanswered prompt times out after 180 s, the
+        gateway logs in again and prompts again, for hours: the phase flips
+        ``2fa-pending`` -> ``login`` -> ``2fa-pending``. For a person nothing changed
+        in between, so the condition holds across the flip: while the phase is
+        ``login``, ``restarting`` or ``starting`` and this boot has prompted for a
+        second factor since the last completed login. Only ``logged-in`` resolves it.
+        When the gateway gives up (``needs-human``) or goes away (``exited``,
+        ``stopped``), the verdict is a hand-over to that alert, not a recovery.
+        """
+        if not known:
+            return _UNKNOWN
+        phase = gateway.phase
+        if phase == Phase.TWOFA_PENDING:
+            return Evaluation(_ACTIVE, "gateway phase is 2fa-pending")
+        if phase in _TWOFA_SUCCESSORS:
+            return Evaluation(Condition.INACTIVE, superseded_by=_TWOFA_SUCCESSORS[phase])
+        if phase not in _BETWEEN_PROMPTS:
+            return _INACTIVE
+        prompts = [
+            event.ts
+            for name in _TWOFA_EVENTS
+            if (event := gateway.last_events.get(name)) is not None
+            and (event.boot_id is None or event.boot_id == gateway.boot_id)
+        ]
+        if not prompts:
+            return _INACTIVE
+        if gateway.last_login is not None and gateway.last_login >= max(prompts):
+            return _INACTIVE
+        return Evaluation(
+            _ACTIVE, f"second factor not approved yet; gateway phase is {phase} between prompts"
+        )
 
     @staticmethod
     def _pair(gateway: GatewaySnapshot, name: str, detail: str) -> Evaluation:

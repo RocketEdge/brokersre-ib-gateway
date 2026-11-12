@@ -111,6 +111,7 @@ class Notifier:
                 phase=gateway.phase,
                 api_status=probe.status.value,
                 now=now,
+                superseded_by=due.superseded_by,
             )
             # Announcements and escalations report back: the alert counts as notified only
             # when a channel accepted the message.

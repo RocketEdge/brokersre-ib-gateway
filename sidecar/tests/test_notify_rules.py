@@ -305,3 +305,64 @@ def test_details_are_built_from_numbers_and_fixed_words_only() -> None:
     assert result[AlertClass.DISK_LOW] == "the gateway reports low disk space"
     assert result[AlertClass.RESOURCE_ALERT] == "the gateway reports memory pressure"
     assert result[AlertClass.GATEWAY_SILENT] == "no event and no metrics sample for 400 s"
+
+
+def twofa(phase: str, **events_at: timedelta) -> dict[str, object]:
+    """A gateway in ``phase`` whose named events happened that long ago."""
+    events = {name: gateway_event(name, T0 - ago) for name, ago in events_at.items()}
+    return {"phase": phase, "last_events": events, "last_login": None}
+
+
+@pytest.mark.parametrize("phase", ["login", "restarting", "starting"])
+def test_an_unanswered_prompt_stays_pending_while_the_gateway_logs_in_again(phase: str) -> None:
+    # twofa_timeout sets the phase to login; the next prompt is seconds away.
+    gateway = twofa(
+        phase, twofa_initiated=timedelta(seconds=200), twofa_timeout=timedelta(seconds=20)
+    )
+    assert evaluate(gateway=gateway)[AlertClass.TWOFA_PENDING] is ACTIVE
+
+
+def test_a_login_without_any_prompt_is_not_a_pending_second_factor() -> None:
+    assert evaluate(gateway=twofa("login"))[AlertClass.TWOFA_PENDING] is INACTIVE
+
+
+def test_only_a_completed_login_resolves_the_second_factor() -> None:
+    pending = twofa("login", twofa_dialog=timedelta(minutes=30))
+    assert evaluate(gateway=pending)[AlertClass.TWOFA_PENDING] is ACTIVE
+    approved = pending | {"phase": "logged-in", "last_login": T0 - timedelta(seconds=5)}
+    assert evaluate(gateway=approved)[AlertClass.TWOFA_PENDING] is INACTIVE
+    # A later login in progress (the daily restart) is not a pending prompt either.
+    next_day = approved | {"phase": "login"}
+    assert evaluate(gateway=next_day)[AlertClass.TWOFA_PENDING] is INACTIVE
+
+
+def test_a_prompt_of_an_earlier_boot_does_not_keep_a_new_boot_pending() -> None:
+    events = {
+        "twofa_initiated": gateway_event(
+            "twofa_initiated", T0 - timedelta(minutes=10), boot="00000000000000ff"
+        )
+    }
+    gateway = {"phase": "login", "last_events": events, "last_login": None}
+    assert evaluate(gateway=gateway)[AlertClass.TWOFA_PENDING] is INACTIVE
+
+
+@pytest.mark.parametrize(
+    ("phase", "successor"),
+    [
+        ("needs-human", AlertClass.NEEDS_HUMAN),
+        ("exited", AlertClass.GATEWAY_EXITED),
+    ],
+)
+def test_the_second_factor_alert_is_handed_over_not_resolved(
+    phase: str, successor: AlertClass
+) -> None:
+    result = RuleEngine(RuleConfig()).evaluate(
+        gateway_snapshot(T0, **twofa(phase, twofa_initiated=timedelta(minutes=5))),
+        probe_snapshot(T0),
+        now=T0,
+        mono=1000.0,
+    )
+    verdict = result[AlertClass.TWOFA_PENDING]
+    assert verdict.state is INACTIVE
+    assert verdict.superseded_by is successor
+    assert result[successor].state is ACTIVE

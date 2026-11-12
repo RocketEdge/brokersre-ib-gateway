@@ -454,3 +454,24 @@ def test_implicit_tls_uses_smtp_ssl_and_plain_smtp_requires_starttls(
     explicit: Any = open_smtp(SmtpTarget("relay.example.com", 587, False, None, None), 10.0)
     assert opened[-1] == ("plain", "relay.example.com", 587, 10.0)
     assert explicit.tls_started is True
+
+
+def test_a_hand_over_is_worded_as_superseded_not_as_resolved() -> None:
+    handed_over = factory().build(
+        MessageKind.RESOLVED,
+        AlertClass.TWOFA_PENDING,
+        detail="",
+        escalation_step=0,
+        since=T0,
+        phase="needs-human",
+        api_status="not_measured",
+        now=T0,
+        superseded_by=AlertClass.NEEDS_HUMAN,
+    )
+    assert handed_over.kind == "resolved"  # receivers that close incidents by kind still do
+    assert handed_over.title == "Superseded: IBKR two-factor approval needed"
+    assert handed_over.instruction == (
+        "This alert is closed because the gateway moved on, not because the problem went "
+        "away. Follow the needs_human alert."
+    )
+    assert "Resolved" not in handed_over.plain_text()

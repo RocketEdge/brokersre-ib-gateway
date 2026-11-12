@@ -205,7 +205,7 @@ in `ibgw_notify_failures_total`.
 
 | Class | Default severity | Fires when | What to do |
 |---|---|---|---|
-| `twofa_pending` | critical | The phase is `2fa-pending`. | Approve the IBKR Mobile prompt now. Nothing approves it for you. |
+| `twofa_pending` | critical | From the first second-factor prompt until a login completes. It stays active while the gateway times out a prompt and logs in again to prompt anew (phase `login` between two prompts). | Approve the IBKR Mobile prompt now. Nothing approves it for you. |
 | `needs_human` | critical | The phase is `needs-human`. | Open the gateway screen (VNC) or its log and resolve what it waits on. |
 | `login_failed` | error | The gateway reported a failed login in the last 15 minutes and has not logged in since. Silent while the phase is `needs-human` (that alert carries the cause). | Check the username and password secrets and whether the account is locked. |
 | `existing_session` | error | The phase is `existing-session`. | Log out the other session or give this gateway its own username. |
@@ -237,9 +237,13 @@ pair. It has no threshold of its own for them, so the two cannot disagree.
 ## Escalation and de-duplication
 
 - A new condition is notified at once on `NOTIFY_CHANNELS`.
-- `twofa_pending` and `needs_human` are repeated on `NOTIFY_ESCALATION_CHANNELS` after
-  `ESCALATE_AFTER_S` (10 minutes) and once more after `ESCALATE_AGAIN_AFTER_S`
-  (30 minutes). Then the ladder is silent until the condition clears.
+- `twofa_pending` and `needs_human` are repeated on `NOTIFY_ESCALATION_CHANNELS`
+  `ESCALATE_AFTER_S` (10 minutes) and once more `ESCALATE_AGAIN_AFTER_S` (30 minutes)
+  after the condition began, which for a second factor is the FIRST prompt. Then the
+  ladder is silent until the condition clears.
+- When the gateway gives up on a second factor (`needs-human`) or exits, the
+  `twofa_pending` alert is closed with a message that says "Superseded", not "Resolved",
+  and names the alert that took over.
 - A class is announced at most once per 15 minutes. A condition that flaps is held back
   and announced when the 15 minutes end, if it is still active.
 - An alert counts as notified only when at least one channel accepted the message. Until

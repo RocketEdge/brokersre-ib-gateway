@@ -161,6 +161,7 @@ class MessageFactory:
         phase: str | None,
         api_status: str,
         now: datetime,
+        superseded_by: AlertClass | None = None,
     ) -> Message:
         """Build the message for one due notification.
 
@@ -173,6 +174,8 @@ class MessageFactory:
             phase: Current gateway phase token (None when not measured).
             api_status: Current probe status value.
             now: Creation time (UTC).
+            superseded_by: For a ``RESOLVED`` that is a hand-over: the class that took
+                over. The message then says so instead of claiming a recovery.
         """
         spec = CATALOG[alert]
         title = spec.title
@@ -180,6 +183,13 @@ class MessageFactory:
         severity = spec.severity
         if kind is MessageKind.ESCALATION:
             title = f"{spec.title} (still pending, escalation {escalation_step} of 2)"
+        elif kind is MessageKind.RESOLVED and superseded_by is not None:
+            title = f"Superseded: {spec.title}"
+            instruction = (
+                "This alert is closed because the gateway moved on, not because the problem "
+                f"went away. Follow the {superseded_by.value} alert."
+            )
+            severity = Severity.INFO
         elif kind is MessageKind.RESOLVED:
             title = f"Resolved: {spec.title}"
             instruction = "No action needed. The condition has cleared."
