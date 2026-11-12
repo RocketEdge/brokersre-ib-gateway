@@ -7,7 +7,7 @@
 // Creates   a Log Analytics workspace (or uses yours), the tables IbGwEvents_CL,
 //           IbGwMetrics_CL and IBGatewayLogs_CL, a data collection rule for the Logs Ingestion
 //           API, one role assignment on that rule for the shipper's identity, an action group,
-//           three alert rules and a workbook.
+//           three alert rules, a workbook and a query pack.
 // Access    Nothing here gives anyone but you access to anything. The only role assignment is
 //           Monitoring Metrics Publisher on the data collection rule, for the principal you
 //           name; it can send rows and cannot read them. No template parameter takes an IBKR
@@ -110,6 +110,9 @@ param severityDeadMan int = 1
 @description('Whether to create the workbook "IB Gateway".')
 param deployWorkbook bool = true
 
+@description('Whether to create the query pack <namePrefix>-queries with the documented queries of azure/kql (Logs > Queries shows them).')
+param deployQueryPack bool = true
+
 @description('Tags applied to every resource this template creates.')
 param tags object = {}
 
@@ -190,6 +193,14 @@ module workbook 'modules/workbook.bicep' = if (deployWorkbook) {
   params: {
     location: location
     workspaceResourceId: workspaceResourceId
+    tags: tags
+  }
+}
+
+module queryPack 'modules/query-pack.bicep' = if (deployQueryPack) {
+  params: {
+    location: location
+    packName: '${namePrefix}-queries'
     tags: tags
   }
 }
