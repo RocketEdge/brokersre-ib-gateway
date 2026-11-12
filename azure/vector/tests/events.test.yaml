@@ -1,0 +1,209 @@
+# Unit tests for the events mapping (transforms events_row -> events_out in ../vector.yaml).
+# Run by azure/tests/run.sh with IBGW_INSTANCE=test-instance and HOST_LABEL=test-host.
+# Inputs have the shape of the gateway's real lines (log contract v2). Their `ts` is built
+# from the current date at 00:00:00.456 UTC, so the tests do not age; the conditions check the
+# time of day exactly and that the date is recent. Every account id below is a canary.
+tests:
+  - name: events - a container_start line maps to every IbGwEvents_CL column, data becomes Props
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .source_type = "file"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "entrypoint", "level": "info", "event": "container_start",
+            "msg": "brokersre-ib-gateway 10.50.1g (stable) IBC 3.24.2 starting as uid 1000",
+            "data": {"gateway_version": "10.50.1g", "channel": "stable", "ibc_version": "3.24.2",
+                     "ibc_release": "3.24.2-rocketedge.1", "trading_mode": "paper", "instance": "paper-1"},
+            "boot_id": "443d261aecbd4789", "seq": 1
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(format_timestamp!(timestamp!(.timestamp), "%H:%M:%S%.3f"), "00:00:00.456")
+              age = to_unix_timestamp(now()) - to_unix_timestamp(timestamp!(.timestamp))
+              assert!(age >= 0 && age < 86400, "the date of ts was not kept")
+              assert_eq!(.Instance, "test-instance")
+              assert_eq!(.Host, "test-host")
+              assert_eq!(.BootId, "443d261aecbd4789")
+              assert_eq!(.Seq, 1)
+              assert_eq!(.Src, "entrypoint")
+              assert_eq!(.Level, "info")
+              assert_eq!(.Event, "container_start")
+              assert_eq!(.Msg, "brokersre-ib-gateway 10.50.1g (stable) IBC 3.24.2 starting as uid 1000")
+              assert_eq!(.Props, {"gateway_version": "10.50.1g", "channel": "stable", "ibc_version": "3.24.2", "ibc_release": "3.24.2-rocketedge.1", "trading_mode": "paper", "instance": "paper-1"})
+              assert_eq!(keys(.), ["BootId", "Event", "Host", "Instance", "Level", "Msg", "Props", "Seq", "Src", "timestamp"])
+
+  - name: events - a line without data has no Props and ships no source field
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "ibc", "level": "info", "event": "login_dialog", "msg": "login_dialog",
+            "boot_id": "443d261aecbd4789", "seq": 11
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Event, "login_dialog")
+              assert_eq!(.Seq, 11)
+              assert_eq!(keys(.), ["BootId", "Event", "Host", "Instance", "Level", "Msg", "Seq", "Src", "timestamp"])
+
+  - name: events - a malformed line is dropped
+    inputs:
+      - insert_at: events_row
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"2026-11-12T01:02:05.000Z","src":"entrypoint","lev'
+    no_outputs_from:
+      - events_row
+      - events_out
+
+  - name: events - a JSON value that is not an object is dropped
+    inputs:
+      - insert_at: events_row
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '["not","an","object"]'
+    no_outputs_from:
+      - events_out
+
+  - name: events - a line without a parseable ts is dropped
+    inputs:
+      - insert_at: events_row
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/events/events.jsonl
+          message: '{"ts":"yesterday","src":"ibc","level":"info","event":"login_completed","msg":"x","boot_id":"443d261aecbd4789","seq":3}'
+    no_outputs_from:
+      - events_out
+
+  - name: events - fields of the wrong type become empty, never 0 or a guess
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": 7, "level": "info", "event": "login_completed", "msg": "x",
+            "boot_id": "443d261aecbd4789", "seq": "forty-two"
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Event, "login_completed")
+              assert!(!exists(.Seq), "a non-integer seq must be absent")
+              assert!(!exists(.Src), "a non-string src must be absent")
+
+  - name: events - a top-level key the contract does not name is kept in Props next to data
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "entrypoint", "level": "info", "event": "config_rendered", "msg": "rendered",
+            "data": {"config_hash": "c7c60feb79adfd61", "trading_mode": "paper"},
+            "boot_id": "443d261aecbd4789", "seq": 4, "added_in_a_later_contract": 5
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Props, {"config_hash": "c7c60feb79adfd61", "trading_mode": "paper", "added_in_a_later_contract": 5})
+
+  - name: events - a data value that is not an object is kept as Props.data
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "entrypoint", "level": "info", "event": "config_rendered", "msg": "rendered",
+            "data": "not an object", "boot_id": "443d261aecbd4789", "seq": 4
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Props, {"data": "not an object"})
+
+  - name: events - an account id in msg, in a data value or deep in an unknown key keeps only its last three characters
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "ibc", "level": "warn", "event": "unknown_window",
+            "msg": "unknown window: account DU1234567 and U7654321",
+            "data": {"title": "Notice for F0001234"},
+            "boot_id": "443d261aecbd4789", "seq": 12,
+            "later": ["first line\nU7654321", 7, {"deep": "x\tDF98765 ok"}]
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Msg, "unknown window: account [ACCT:…567] and [ACCT:…321]")
+              assert_eq!(.Props.title, "Notice for [ACCT:…234]")
+              shipped = encode_json(.)
+              assert!(!contains(shipped, "DU1234567"), "full account id shipped")
+              assert!(!contains(shipped, "U7654321"), "full account id shipped")
+              assert!(!contains(shipped, "F0001234"), "full account id shipped")
+              assert!(!contains(shipped, "DF98765"), "full account id shipped")
+              assert!(contains(shipped, "[ACCT:…765]"), "tail missing")
+
+  # Azure stamps a row whose TimeGenerated is more than two days old with its ARRIVAL time, so
+  # replayed history would land at the wrong place; lines older than 36 hours are not shipped.
+  - name: events - a line older than 36 hours is dropped, not back-filled
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) - 37 * 3600), "%Y-%m-%dT%H:%M:%S%.3fZ"),
+            "src": "ibc", "level": "info", "event": "login_completed", "msg": "login_completed",
+            "boot_id": "443d261aecbd4789", "seq": 20
+          })
+    no_outputs_from:
+      - events_out
+
+  - name: events - a line 35 hours old is still shipped
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) - 35 * 3600), "%Y-%m-%dT%H:%M:%S%.3fZ"),
+            "src": "ibc", "level": "info", "event": "login_completed", "msg": "login_completed",
+            "boot_id": "443d261aecbd4789", "seq": 21
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Seq, 21)

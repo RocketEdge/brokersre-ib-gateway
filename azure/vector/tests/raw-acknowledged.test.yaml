@@ -1,0 +1,18 @@
+# Unit tests for raw-log shipping WITHOUT a user-name file (SHIP_RAW_LOGS=yes acknowledgement).
+# Run by azure/tests/run.sh with IBGW_RAW_MODE=acknowledged and no IBGW_REDACT_USERNAME: account
+# ids are still redacted; the user name is not known to the shipper and therefore stays.
+tests:
+  - name: raw - acknowledged mode ships lines with account ids redacted
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "2026-11-12 01:02:03:456 IBC: account DU1234567 selected"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "2026-11-12 01:02:03:456 IBC: account [ACCT:…567] selected")
+              assert_eq!(.Truncated, false)

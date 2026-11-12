@@ -1,0 +1,44 @@
+# Account-id redaction for every row that leaves the host. Loaded by the transforms
+# events_out and raw_redacted in vector.yaml (remap `file:`), so the rules exist exactly once.
+#
+# Input   Any event (.). Output: the same event with every string value, at any depth,
+#         rewritten: an IBKR account id keeps only its last three characters, as [ACCT:…567].
+#         Keys, numbers, booleans and timestamps are untouched.
+# Rules   An account id is the prefix DU, DF, U or F followed by 5 to 9 digits and then NOT a
+#         letter or digit. It is recognised
+#           1. in any case, when it stands on its own: start of text, punctuation, white space
+#              or an underscore before it (U1234567, =u1234567;, acct_DU1234567, U1234567_x);
+#           2. in upper case, glued to the end of a lower-case word (acctDU1234567);
+#           3. in any case, right after an escaped line break or tab as text (\nU1234567).
+#         Left alone on purpose: more than 9 digits (U1234567890), an id followed by letters
+#         (f1234567abc is the middle of a hash), an upper-case letter before it (XDU1234567).
+# How     Rust regular expressions have no look-around. An underscore counts as a word
+#         character, so it is swapped for a private-use character (U+E000) while rule 1 runs
+#         with \b, and swapped back afterwards; text that already contains U+E000 keeps it.
+# Why     "An account id may leave the container only as its last three characters" must hold
+#         for every column of every stream, including keys the gateway adds later; walking all
+#         string values makes that true by construction instead of per column.
+. = map_values(., recursive: true) -> |value| {
+  if is_string(value) {
+    text = string!(value)
+    marked = !contains(text, "\u{E000}")
+    if marked {
+      text = replace(text, "_", "\u{E000}")
+    }
+    text = replace_with(text, r'(?i)\b(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
+      "[ACCT:…" + slice!(m.string, -3) + "]"
+    }
+    text = replace_with(text, r'(?P<lead>[a-z])(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
+      string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
+    }
+    text = replace_with(text, r'(?P<lead>\\[nrt])(?i:DU|DF|U|F)\d{5,9}\b') -> |m| {
+      string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
+    }
+    if marked {
+      text = replace(text, "\u{E000}", "_")
+    }
+    text
+  } else {
+    value
+  }
+}

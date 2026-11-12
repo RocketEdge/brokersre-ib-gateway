@@ -1,0 +1,107 @@
+# Compose override: ships the gateway's events, metrics and (opt-in, redacted) raw logs to YOUR
+# Azure Log Analytics workspace with Vector. Use it together with the reference compose:
+#
+#   docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml \
+#     --profile azure up -d          # Azure VM: the VM's managed identity
+#   docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml \
+#     --profile azure-cert up -d     # Windows / on-premises: Entra app with a certificate
+#
+# Start exactly ONE of the two profiles: both services share the vector-data volume (the file
+# checkpoints) and the second instance refuses to start on its lock.
+# Variables come from compose/.env; azure/README.md lists them. Set IBGW_INSTANCE (or
+# HOST_LABEL) to a name of your own: the shipper refuses to start with the label "default" and
+# no host label, because two unlabelled gateways could not be told apart. The gateway never depends on
+# this service: if the shipper is down, the gateway keeps running and the dead-man alert fires.
+#
+# Security: no published port, no docker.sock, uid 1000, read-only root filesystem, no Linux
+# capability. Nothing leaves the host before azure/vector/vector.yaml has redacted it.
+
+x-vector-service: &vector-service
+  # Pinned by tag AND digest (multi-arch index). Bump both together; azure/tests/run.sh and the
+  # azure-pack workflow run this exact image. The alpine variant is used because the entrypoint
+  # is a POSIX shell script (the distroless variants have no shell).
+  image: timberio/vector:0.61.0-alpine@sha256:3bb7ed5152910ed51729e256937b1d8a4bf67ff624e9d565e8e5877bffd015c7
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  # The entrypoint validates the environment, decides whether raw logs may be shipped and then
+  # replaces itself with Vector. Run through /bin/sh so the script needs no execute bit on a
+  # Windows checkout.
+  entrypoint: ["/bin/sh", "/etc/vector/entrypoint.sh"]
+  # Vector flushes its buffers for up to 60 s on SIGTERM; give it time before SIGKILL.
+  stop_grace_period: 75s
+  # The shipper shares the host with the gateway and must never starve it: half a core,
+  # 512 MB and 256 processes are several times what it uses when idle, and a burst (a first
+  # start with megabytes of old log lines) is merely slower under the cap.
+  cpus: 0.5
+  mem_limit: 512m
+  pids_limit: 256
+  volumes:
+    - ibgw-logs:/var/log/ibgateway:ro
+    - ../azure/vector:/etc/vector:ro
+    # The only writable path: the file checkpoints (which line of which file was delivered).
+    # Rows in flight live in memory; an undelivered line is read again after a restart. It is
+    # mounted at /var/tmp because a new named volume inherits owner and mode of the image
+    # directory it covers, and /var/tmp is the image's world-writable sticky directory: uid
+    # 1000 can create its data directory there without a root init container.
+    - vector-data:/var/tmp
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-vector-environment: &vector-environment
+  # Deployment outputs logsIngestionEndpoint and dcrImmutableId of azure/bicep/main.bicep.
+  DCR_LOGS_ENDPOINT: ${DCR_LOGS_ENDPOINT:-}
+  DCR_IMMUTABLE_ID: ${DCR_IMMUTABLE_ID:-}
+  # Labels stamped on every row (letters, digits, dot, underscore, hyphen; at most 64).
+  # IBGW_INSTANCE is the gateway's own instance label; give every gateway a different one,
+  # the alert rules tell gateways apart by Instance and Host.
+  IBGW_INSTANCE: ${IBGW_INSTANCE:-default}
+  HOST_LABEL: ${HOST_LABEL:-}
+  # Raw IBC/launcher logs are NOT shipped unless you opt in: set
+  # IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username (the user name is replaced by [USER]), or
+  # SHIP_RAW_LOGS=yes to ship them with account ids redacted but the user name left in place.
+  IBGW_REDACT_USERNAME_FILE: ${IBGW_REDACT_USERNAME_FILE:-}
+  SHIP_RAW_LOGS: ${SHIP_RAW_LOGS:-no}
+  # Vector's own log lines as JSON on stdout, next to its counters (docker logs).
+  VECTOR_LOG_FORMAT: json
+
+services:
+  # Azure VM: authenticates with the VM's system-assigned managed identity (no secret at all).
+  vector:
+    <<: *vector-service
+    profiles: ["azure"]
+    environment:
+      <<: *vector-environment
+      AZURE_AUTH: managed-identity
+    secrets:
+      - ib-username
+
+  # Windows / on-premises: authenticates as an Entra application with a certificate (PKCS#12).
+  vector-cert:
+    <<: *vector-service
+    profiles: ["azure-cert"]
+    environment:
+      <<: *vector-environment
+      AZURE_AUTH: certificate
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_CERTIFICATE_PATH: /run/secrets/azure-client-cert
+    secrets:
+      - ib-username
+      - azure-client-cert
+
+secrets:
+  # Passwordless PKCS#12 file with the application's RSA private key; readable by uid 1000.
+  # Only the vector-cert service mounts it, so the file need not exist for the azure profile.
+  azure-client-cert:
+    file: ${AZURE_CLIENT_CERTIFICATE_FILE:-./secrets/azure-client-cert.pfx}
+
+volumes:
+  vector-data:

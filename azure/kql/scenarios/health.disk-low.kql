@@ -1,0 +1,18 @@
+// Scenario for rule B: the gateway reported disk_low three hours ago and never disk_ok. A
+// state that was reported once must still be known hours later: disk_low.
+// Query: alert-health.kql
+// Expect: fulldisk|disk_low
+let IbGwEvents_CL =
+    union
+        (print Offset = 5h, Event = "container_start"),
+        (print Offset = 3h, Event = "disk_low")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "fulldisk", Host = "ibgw-vm",
+        BootId = "ffffffffffffffff", Seq = tolong(row_number()), Src = "metrics", Level = "warn", Event,
+        Msg = "disk_low: 3 % free on the log volume";
+let IbGwMetrics_CL =
+    range Step from 0 to 20 step 1
+    | extend Offset = 10m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "fulldisk", Host = "ibgw-vm",
+        BootId = "ffffffffffffffff", Seq = tolong(Step), Phase = "logged-in",
+        MemWorkingSetBytes = tolong(900000000), MemLimitBytes = tolong(2147483648), OomKills = tolong(0);

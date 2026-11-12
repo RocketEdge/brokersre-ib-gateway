@@ -1,0 +1,109 @@
+# Sink template for a host outside Azure (Windows with Docker Desktop, on-premises Linux): the
+# three row streams of vector.yaml go to the Azure Monitor Logs Ingestion API of YOUR data
+# collection rule, authenticated as an Entra application with a certificate. The certificate
+# is a passwordless PKCS#12 file with an RSA private key, mounted as a Docker secret.
+#
+# entrypoint.sh renders this file when AZURE_AUTH=certificate: it replaces the __NAME__
+# placeholders with validated values and writes /var/tmp/vector-config/sinks.yaml.
+# Keep in step with sinks-managed-identity.yaml: the two files differ ONLY in the header and in
+# the `auth` blocks (azure/tests/run.sh fails when anything else differs). The numbers are
+# explained in that file.
+#
+# Option names verified against Vector 0.61.0 (src/sinks/azure_common/config.rs):
+# azure_credential_kind client_certificate_credential takes azure_tenant_id, azure_client_id,
+# certificate_path and an optional certificate_password (not used here: a password would have
+# to live in the environment; the file's permissions protect the key instead).
+
+sinks:
+  azure_events:
+    type: azure_logs_ingestion
+    inputs:
+      - events_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IbGwEvents_CL
+    auth:
+      azure_credential_kind: client_certificate_credential
+      azure_tenant_id: "__AZURE_TENANT_ID__"
+      azure_client_id: "__AZURE_CLIENT_ID__"
+      certificate_path: "__AZURE_CLIENT_CERTIFICATE_PATH__"
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 900000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]
+
+  azure_metrics:
+    type: azure_logs_ingestion
+    inputs:
+      - metrics_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IbGwMetrics_CL
+    auth:
+      azure_credential_kind: client_certificate_credential
+      azure_tenant_id: "__AZURE_TENANT_ID__"
+      azure_client_id: "__AZURE_CLIENT_ID__"
+      certificate_path: "__AZURE_CLIENT_CERTIFICATE_PATH__"
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 900000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: block
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]
+
+  azure_raw:
+    type: azure_logs_ingestion
+    inputs:
+      - raw_out
+    endpoint: "__DCR_LOGS_ENDPOINT__"
+    dcr_immutable_id: "__DCR_IMMUTABLE_ID__"
+    stream_name: Custom-IBGatewayLogs_CL
+    auth:
+      azure_credential_kind: client_certificate_credential
+      azure_tenant_id: "__AZURE_TENANT_ID__"
+      azure_client_id: "__AZURE_CLIENT_ID__"
+      certificate_path: "__AZURE_CLIENT_CERTIFICATE_PATH__"
+    acknowledgements:
+      enabled: true
+    batch:
+      max_bytes: 450000
+      max_events: 1000
+      timeout_secs: 5
+    buffer:
+      type: memory
+      max_events: 500
+      when_full: drop_newest
+    request:
+      timeout_secs: 30
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 300
+      retry_jitter_mode: Full
+    retry_strategy:
+      type: custom
+      status_codes: [401, 403, 404, 408, 429, 500, 502, 503, 504]

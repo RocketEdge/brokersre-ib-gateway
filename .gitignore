@@ -9,6 +9,8 @@ downloads/*
 tests/.bats-core/
 # Local evaluation secrets for the compose example.
 compose/secrets/
+# Values of the Azure pack (endpoints, tenant and client ids) for the compose files.
+compose/.env
 *.log
 !tests/fixtures/
 !tests/fixtures/*.log

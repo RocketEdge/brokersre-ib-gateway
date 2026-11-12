@@ -1,0 +1,11 @@
+// Scenario for rule C: rows exist, but the newest sample was taken 20 minutes ago (a shipper
+// replaying a backlog, or a gateway that stopped sampling): stale_samples.
+// (no_metrics cannot be shown with literal rows: it depends on the arrival time the service
+// records, ingestion_time(), which literal rows do not have.)
+// Query: alert-dead-man.kql
+// Expect: lagging|ibgw-vm|stale_samples
+let IbGwMetrics_CL =
+    range Step from 0 to 20 step 1
+    | extend Offset = 30m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "lagging", Host = "ibgw-vm",
+        BootId = "cdcdcdcdcdcdcdcd", Seq = tolong(Step), Phase = "logged-in";

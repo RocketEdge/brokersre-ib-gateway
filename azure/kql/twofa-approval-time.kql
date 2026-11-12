@@ -1,0 +1,30 @@
+// Second-factor approval time: how long a human took to approve a login, per week.
+//
+// A login episode runs from the first twofa_initiated event after the previous completed login
+// to the next login_completed event of the same instance; a second factor that timed out and
+// was requested again stays in the same episode (Prompts > 1), so the time counts from the
+// FIRST request. Episodes without a completed login are left out (they are still open, or the
+// login never succeeded; alert rule A reports those while they last).
+// Source: IbGwEvents_CL. Columns: Instance, Week, Logins, P50Seconds, P90Seconds, P99Seconds,
+// MaxSeconds, AvgPrompts.
+IbGwEvents_CL
+| where Event in ("twofa_initiated", "login_completed")
+| sort by Instance asc, TimeGenerated asc
+| extend NewEpisode = Instance != prev(Instance) or prev(Event) == "login_completed"
+| extend Episode = row_cumsum(toint(NewEpisode))
+| summarize
+    FirstPrompt = minif(TimeGenerated, Event == "twofa_initiated"),
+    Prompts = countif(Event == "twofa_initiated"),
+    Completed = maxif(TimeGenerated, Event == "login_completed")
+    by Instance, Episode
+| where isnotnull(FirstPrompt) and isnotnull(Completed) and Completed >= FirstPrompt
+| extend SecondsToApprove = datetime_diff("second", Completed, FirstPrompt)
+| summarize
+    Logins = count(),
+    P50Seconds = percentile(SecondsToApprove, 50),
+    P90Seconds = percentile(SecondsToApprove, 90),
+    P99Seconds = percentile(SecondsToApprove, 99),
+    MaxSeconds = max(SecondsToApprove),
+    AvgPrompts = round(avg(Prompts), 2)
+    by Instance, Week = startofweek(FirstPrompt)
+| sort by Instance asc, Week asc

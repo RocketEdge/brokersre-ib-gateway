@@ -5,6 +5,56 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Azure Log Analytics pack (`azure/`)
+
+- **What changed:** a pack that ships the gateway's events and resource samples (and, opt-in
+  and redacted, its raw logs) to the user's own Log Analytics workspace. Bicep: three tables,
+  a Direct data collection rule, the publisher role on that rule only, an action group, three
+  alert rules (a person is needed; health; dead man), a workbook and a query pack. A pinned
+  Vector container reads the log volume read-only (`compose/docker-compose.azure.yml`,
+  managed identity or certificate). An optional second template runs the gateway on an Azure
+  VM whose settings can change after creation. ADR 0012, workflow `azure-pack.yml`.
+- **Result:** the pack's offline suite passes (counts in the pull request): the templates
+  compile, the shipper maps and redacts lines of a real gateway run, its rows match the schema
+  the templates declare, queries and scenarios type-check, the VM's host scripts run against
+  fakes. Nothing has been deployed to Azure.
+- **What did NOT work / root cause:**
+  - *Alerting on "phase `2fa-pending` for N minutes" never fires.* With the gateway's defaults
+    an unanswered prompt times out after about three minutes and the phase flips to `login`
+    and back for hours. The rule is built on events: the earliest prompt without a completed
+    login after it.
+  - *Vector's disk buffers* sometimes held rows read at start-up until the next row of that
+    stream arrived (1 start in 20), and kept already-mapped rows across a change of the
+    redaction mode. The shipper buffers in memory with end-to-end acknowledgements and saves a
+    file position only after delivery: at least once, never zero times while the line is
+    still in the gateway's files.
+  - *Vector logs the start of every over-long line it discards*, raw text included, whether
+    raw logs are shipped or not. Its file source's log target is switched off and counters
+    are printed instead; a canary test guards it at every Vector bump.
+  - *A byte-order mark in the username file disabled the redaction of the username*: the file
+    is normalised on its bytes, as the gateway does, and anything else is refused.
+  - *Settings in the VM's customData cannot change after creation*, and `Requires=docker.service`
+    stops the gateway when Docker restarts: settings travel in userData and are applied by a
+    script; the unit uses `Wants=` and Docker keeps containers alive across its own restart
+    (by reading systemd's and Docker's rules; not observed on a VM).
+  - *The suite passed on the development host and failed on its first run in GitHub Actions.*
+    Several checks compare a tool's output together with its standard error; on a machine
+    that has not pulled a helper image yet, Docker's "Unable to find image ... Pulling" notice
+    lands in the compared value. Reproduced locally by removing the cached image; the suite
+    now pulls every helper image before any check runs, and the workflow runs every group
+    even after one failed, so one run shows all that is wrong.
+  - *The second run failed on a counter that was there.* The suite runs under `pipefail`, and
+    `docker logs | grep -q` fails when the quiet grep exits at its first match and the writer
+    dies of SIGPIPE: the check reported "no such counter" 58 seconds into a 90-second wait,
+    the moment the counter appeared. Shown on Linux (`seq | grep -q` under pipefail exits
+    141); no pipeline in the pack ends in a quiet grep any more, including the Docker key
+    check of the VM's `install.sh`, where the same race would have rejected the right key.
+  - Not established: everything that needs Azure (L19). The alert queries were type-checked,
+    not executed: the only local engine is Microsoft's Kusto emulator, whose licence must be
+    accepted by a person first (`KUSTO_EMULATOR_EULA=accept azure/tests/run.sh kql-run`).
+- **Next step:** one deployment to a test subscription with a gateway shipping for a day; run
+  each alert rule's condition once; run the `kql-run` group.
+
 ### 2026-11-12 — A rejected login is not repeated: the latch on the log volume
 
 - **What changed:** when IBKR rejects the credentials the classifier records it in

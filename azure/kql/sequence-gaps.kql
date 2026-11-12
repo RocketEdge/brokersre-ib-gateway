@@ -1,0 +1,18 @@
+// Sequence gaps: events that the gateway wrote but that never reached the workspace.
+//
+// Every event carries Seq, a counter that only goes up within one container start (BootId).
+// A jump from n to n + k (k > 1) inside one BootId means k - 1 events are missing: the shipper
+// was down longer than the log files were kept, a malformed line was dropped, or Azure
+// rejected a batch. No row = no gap in the selected time range (a gap at the very edge of the
+// range can be an artefact of the range; widen it before concluding).
+// The check runs per table: this query covers IbGwEvents_CL. Replace the table name with
+// IbGwMetrics_CL to check the metric samples, which carry their own Seq.
+// Columns: Instance, BootId, MissingFrom, MissingTo, Missing, NextEventTime, NextEvent.
+IbGwEvents_CL
+| where isnotempty(BootId) and isnotnull(Seq)
+| sort by Instance asc, BootId asc, Seq asc
+| extend PreviousSeq = iff(Instance == prev(Instance) and BootId == prev(BootId), prev(Seq), long(null))
+| where isnotnull(PreviousSeq) and Seq > PreviousSeq + 1
+| project Instance, BootId, MissingFrom = PreviousSeq + 1, MissingTo = Seq - 1,
+    Missing = Seq - PreviousSeq - 1, NextEventTime = TimeGenerated, NextEvent = Event
+| sort by NextEventTime desc

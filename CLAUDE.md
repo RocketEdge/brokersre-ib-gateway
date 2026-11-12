@@ -18,6 +18,7 @@ IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh     
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy); offline
 (cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
 (cd examples/csharp && dotnet build -warnaserror && dotnet test && dotnet format GatewayClient.slnx --verify-no-changes)
+bash azure/tests/run.sh [group...]                                                       # Azure pack, offline (Docker + Bicep CLI, no Azure login); the group kql-run is opt-in
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
@@ -29,7 +30,11 @@ All of these must be green before claiming a change done; run them fresh.
 
 1. **Every input is pinned and verified**: `versions.json` holds the base digest, the Gateway
    version and installer SHA-256 per architecture, and the IBC release tag and SHA-256. The
-   Dockerfile fails the build on any mismatch. No other file carries a version.
+   Dockerfile fails the build on any mismatch. No other file carries a version of anything
+   that goes INTO the gateway image. A companion that runs next to it pins its own third-party
+   image by digest in the file that uses it: the Vector shipper in
+   `compose/docker-compose.azure.yml`, repeated as the default of `vectorImage` in
+   `azure/bicep/vm.bicep`; `azure/tests/run.sh` fails when the two differ.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
@@ -87,7 +92,9 @@ scripts/check-compose-usernames.sh                    no two gateways with the s
 scripts/migrate-from-gnzsnz.sh                        gnzsnz .env -> this image's .env; report on stderr, never a value
 examples/                                             wait-for-gateway.sh, compose-with-client.yml, python/ (uv, ib_async), csharp/ (.NET 10; the user supplies IBKR's CSharpAPI.dll), README.md
 tests/compose/run.sh                                  both compose files above, started as shipped (docker CLI)
-.github/workflows/  ci, publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
+azure/                                                Log Analytics pack: bicep/ (tables, DCR, alerts, workbook, query pack; vm.bicep), vector/ (shipper config, redact.vrl, entrypoint), kql/ (alert and report queries, scenarios), vm/ + cloud-init/ (optional gateway VM), tests/run.sh; README.md (ADR 0012)
+compose/docker-compose.azure.yml                      the shipper next to the gateway (profiles azure, azure-cert); Vector pinned by digest
+.github/workflows/  ci, azure-pack (the pack's offline suite), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
 
@@ -170,3 +177,21 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - Adding a preflight check changes the count in about ten assertions of `doctor.bats` (rows,
   "n passed", indexes into the event list) and the list in `docs/log-contract.md`; a new
   variable goes into `doctor.sh`, `docs/env-vars.md` and `scripts/migrate-from-gnzsnz.sh`.
+- Azure pack: `bash azure/tests/run.sh [group...]` is the whole gate; never edit `run.sh` while
+  it runs. Vector logs discarded over-long lines, hence the `VECTOR_LOG` override in
+  `azure/vector/entrypoint.sh`; the pipeline canary guards it at every Vector bump.
+  `azure/cloud-init/gateway.yaml` is pinned by `gateway.yaml.sha256`: change both
+  deliberately, because existing VMs keep the old bootstrap. `vmConfig` in `vm.bicep` and
+  `required_keys` in `azure/vm/apply-config.sh` change together. The account-id pattern
+  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`. A helper image used by a
+  check must be listed in `helper_images` in `run.sh` (pulled before any check): a first
+  `docker run` of an image writes its pull notice to standard error, and a check that
+  compares standard error then fails on a fresh machine only.
+- Never end a pipeline with `grep -q` in a script that sets `pipefail`: the quiet grep exits
+  at its first match, the writer gets SIGPIPE (exit 141) and the pipeline is "false" although
+  the text was found. In an `if ...; then fail; else pass` check for a leaked secret that is
+  a false pass. Write `grep ... >/dev/null`. It does not show on the Windows development
+  host; it showed on the first Linux run.
+- A consumer must not alert on how long a phase has lasted: an unanswered second-factor
+  prompt flips the phase between `2fa-pending` and `login` every three minutes. Use events
+  (`docs/log-contract.md`), as the Azure rule "human needed" does.

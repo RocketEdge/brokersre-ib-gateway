@@ -1,0 +1,100 @@
+#cloud-config
+# cloud-init for the one-click gateway VM (azure/bicep/vm.bicep): the smallest possible
+# first-boot bootstrap, and nothing that depends on a deployment parameter.
+#
+# Why so small  This file is the VM's customData, and customData cannot change after the VM
+#           was created: a redeployment with different customData is refused. Everything an
+#           operator may want to change later (image digests, the commit of this repository,
+#           labels, the raw-log switch) is therefore in the VM's userData, which can change in
+#           place, and everything that may need a fix later (the host scripts, the systemd
+#           unit of the stack) lives in the repository under azure/vm and is installed from
+#           the pinned commit. azure/tests/run.sh fails when this file contains a template
+#           placeholder or when its content changes without the recorded checksum changing
+#           with it (a reminder that existing VMs keep the old bootstrap).
+# What it does  Installs git, jq and chrony; ibgw-bootstrap.service then reads the userData,
+#           checks out the pinned commit and runs its azure/vm/install.sh bootstrap (Docker
+#           Engine, host scripts, configuration, the stack unit). The unit retries with a
+#           growing delay until it succeeded once, also across reboots.
+# Secrets   None here, none in userData. The IBKR credentials exist only in your Key Vault and
+#           in tmpfs on the VM (azure/vm/fetch-secrets.sh).
+package_update: true
+packages:
+  - ca-certificates
+  - chrony
+  - curl
+  - git
+  - gnupg
+  - jq
+
+write_files:
+  - path: /usr/local/sbin/ibgw-bootstrap.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # ibgw-bootstrap.sh: first boot of the gateway host. Idempotent.
+      #
+      # Reads the VM's userData from the instance metadata service, checks out the commit of
+      # the repository it names (a commit id is content-addressed: what is checked out is
+      # exactly what the operator reviewed) and hands over to that commit's
+      # azure/vm/install.sh. Leaves /var/lib/ibgateway/bootstrap.done behind on success, which
+      # stops ibgw-bootstrap.service from running again.
+      # Exit: 0 done; anything else failed (the unit retries; see journalctl -u ibgw-bootstrap).
+      set -euo pipefail
+      root=/opt/ibgateway
+      url='http://169.254.169.254/metadata/instance/compute/userData?api-version=2021-01-01&format=text'
+      work="$(mktemp -d)"
+      cleanup() { rm -rf "${work}"; }
+      trap cleanup EXIT
+
+      curl --silent --show-error --fail --retry 5 --retry-delay 3 --max-time 20 \
+        --header 'Metadata: true' "${url}" --output "${work}/userdata.b64"
+      base64 --decode "${work}/userdata.b64" >"${work}/userdata.json"
+      if ! repository="$(jq --raw-output --exit-status '.packRepository | select(type == "string" and test("^https://[A-Za-z0-9./_-]+$"))' "${work}/userdata.json")" \
+        || ! commit="$(jq --raw-output --exit-status '.packCommit | select(type == "string" and test("^[0-9a-f]{40}$"))' "${work}/userdata.json")"; then
+        echo "ibgw-bootstrap: the VM's userData has no valid packRepository and packCommit" >&2
+        exit 2
+      fi
+
+      install -m 0755 -d "${root}/pack" /var/lib/ibgateway
+      git -C "${root}/pack" init --quiet
+      git -C "${root}/pack" fetch --quiet --depth 1 "${repository}" "${commit}"
+      git -C "${root}/pack" checkout --quiet --detach FETCH_HEAD
+      if [[ "$(git -C "${root}/pack" rev-parse HEAD)" != "${commit}" ]]; then
+        echo "ibgw-bootstrap: the checkout is not the pinned commit" >&2
+        exit 1
+      fi
+
+      "${root}/pack/azure/vm/install.sh" bootstrap
+      touch /var/lib/ibgateway/bootstrap.done
+
+  - path: /etc/systemd/system/ibgw-bootstrap.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # First-boot installation of the gateway host, retried until it succeeded once.
+      # A failure (no network yet, a registry or package mirror down) is retried with a
+      # growing delay: 30 s doubling up to 15 minutes, and again after a reboot.
+      [Unit]
+      Description=IB Gateway host bootstrap (pinned checkout, Docker, host scripts)
+      ConditionPathExists=!/var/lib/ibgateway/bootstrap.done
+      Wants=network-online.target
+      After=network-online.target cloud-final.service
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/ibgw-bootstrap.sh
+      Restart=on-failure
+      RestartSec=30
+      RestartSteps=6
+      RestartMaxDelaySec=900
+      TimeoutStartSec=1800
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, ibgw-bootstrap.service]
+  - [systemctl, start, --no-block, ibgw-bootstrap.service]

@@ -1,0 +1,21 @@
+// Scenario for rule A: an unanswered second-factor prompt with the gateway's defaults.
+// The prompt times out after about three minutes, the phase flips to `login` for a few
+// seconds (twofa_timeout) and back to `2fa-pending` with a new prompt, for 35 minutes, and
+// nobody approves. No phase lasts 5 minutes; the rule must fire all the same.
+// Query: alert-human-needed.kql
+// Expect: flip|ibgw-vm|twofa_pending
+let IbGwEvents_CL =
+    union
+        (print Offset = 40m, Event = "container_start"),
+        (range Cycle from 0 to 11 step 1 | project Offset = 35m - Cycle * 3m, Event = "twofa_initiated"),
+        (range Cycle from 0 to 10 step 1 | project Offset = 35m - Cycle * 3m - 170s, Event = "twofa_timeout")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "flip", Host = "ibgw-vm",
+        BootId = "aaaaaaaaaaaaaaaa", Seq = tolong(row_number()), Src = "ibc", Level = "warn", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 80 step 1
+    | extend Offset = 40m - Step * 30s
+    | extend SincePrompt = (35m - Offset) % 3m
+    | project TimeGenerated = now() - Offset, Instance = "flip", Host = "ibgw-vm",
+        BootId = "aaaaaaaaaaaaaaaa", Seq = tolong(Step),
+        Phase = case(Offset > 35m, "login", SincePrompt < 170s, "2fa-pending", "login");

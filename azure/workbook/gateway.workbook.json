@@ -1,0 +1,232 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## IB Gateway\nEvents, metrics and (when you opted in) redacted raw log lines of your gateway containers, shipped by the Vector profile of `brokersre-ib-gateway`. Times are UTC. An empty chart means no row arrived in the selected time range: the state is **not measured**, not healthy. The queries behind every tile are documented in `azure/kql/` of the repository."
+      },
+      "name": "intro"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "7b0f3c52-5f0e-4c1e-9b1a-0d6c2f1a9e01",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 3600000 },
+                { "durationMs": 14400000 },
+                { "durationMs": 86400000 },
+                { "durationMs": 259200000 },
+                { "durationMs": 604800000 },
+                { "durationMs": 2592000000 }
+              ],
+              "allowCustom": true
+            },
+            "value": { "durationMs": 86400000 }
+          },
+          {
+            "id": "7b0f3c52-5f0e-4c1e-9b1a-0d6c2f1a9e02",
+            "version": "KqlParameterItem/1.0",
+            "name": "Instance",
+            "label": "Gateway instance",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "IbGwMetrics_CL\n| distinct Instance\n| sort by Instance asc",
+            "typeSettings": {
+              "additionalResourceOptions": [ "value::all" ],
+              "selectAllValue": "*",
+              "showDefault": false
+            },
+            "timeContext": { "durationMs": 0 },
+            "timeContextFromParameter": "TimeRange",
+            "defaultValue": "value::all",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces"
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces"
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where isnotempty(Phase)\n| summarize Samples = count() by bin(TimeGenerated, {TimeRange:grain}), Phase",
+        "size": 0,
+        "title": "Phase timeline (30-second samples per phase)",
+        "noDataMessage": "No metrics row in this time range: the phase is not measured.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart"
+      },
+      "name": "phase-timeline"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where isnotempty(Phase)\n| sort by Instance asc, TimeGenerated asc\n| extend NewStretch = Instance != prev(Instance) or BootId != prev(BootId) or Phase != prev(Phase)\n| extend Stretch = row_cumsum(toint(NewStretch))\n| summarize From = min(TimeGenerated), To = max(TimeGenerated), Samples = count() by Instance, BootId, Phase, Stretch\n| project Instance, Phase, From, To, Duration = To - From, BootId\n| sort by From desc\n| take 200",
+        "size": 0,
+        "title": "Phase stretches (newest first)",
+        "noDataMessage": "No metrics row in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "phase-stretches"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event in ('twofa_initiated', 'login_completed')\n| sort by Instance asc, TimeGenerated asc\n| extend NewEpisode = Instance != prev(Instance) or prev(Event) == 'login_completed'\n| extend Episode = row_cumsum(toint(NewEpisode))\n| summarize FirstPrompt = minif(TimeGenerated, Event == 'twofa_initiated'), Prompts = countif(Event == 'twofa_initiated'), Completed = maxif(TimeGenerated, Event == 'login_completed') by Instance, Episode\n| where isnotnull(Completed)\n| extend SecondsToApprove = iff(isnotnull(FirstPrompt) and Completed >= FirstPrompt, datetime_diff('second', Completed, FirstPrompt), long(null))\n| summarize Logins = count(), LoginsWithSecondFactor = countif(isnotnull(SecondsToApprove)), P50SecondsToApprove = percentile(SecondsToApprove, 50), P90SecondsToApprove = percentile(SecondsToApprove, 90), MaxSecondsToApprove = max(SecondsToApprove) by Instance, Week = startofweek(Completed)\n| sort by Week desc, Instance asc",
+        "size": 0,
+        "title": "Logins and second-factor approvals per week (time from the first request to the completed login)",
+        "noDataMessage": "No completed login in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "logins-per-week"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| summarize WorkingSetMiB = avg(MemWorkingSetBytes) / 1048576.0, JavaRssMiB = avg(JavaRssBytes) / 1048576.0, LimitMiB = avg(MemLimitBytes) / 1048576.0 by bin(TimeGenerated, {TimeRange:grain}), Instance",
+        "size": 0,
+        "title": "Memory (MiB): container working set, JVM resident set, container limit",
+        "noDataMessage": "No metrics row in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "linechart"
+      },
+      "name": "memory"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where isnotnull(CpuUsageUsec)\n| summarize UsedUsec = max(CpuUsageUsec) - min(CpuUsageUsec), ThrottledUsec = max(CpuThrottledUsec) - min(CpuThrottledUsec), Span = max(TimeGenerated) - min(TimeGenerated) by Instance, BootId, bin(TimeGenerated, {TimeRange:grain})\n| where Span > 0s\n| summarize CpuCores = sum(UsedUsec / 1000000.0 / (Span / 1s)), ThrottledCores = sum(ThrottledUsec / 1000000.0 / (Span / 1s)) by TimeGenerated, Instance",
+        "size": 0,
+        "title": "CPU (cores used and cores throttled, from the cumulative counters)",
+        "noDataMessage": "No CPU sample in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "linechart"
+      },
+      "name": "cpu"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwMetrics_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| summarize JavaThreads = max(JavaThreads), OpenFds = max(OpenFds), CloseWaitSockets = max(CloseWaitSockets), Pids = max(Pids) by bin(TimeGenerated, {TimeRange:grain}), Instance",
+        "size": 0,
+        "title": "JVM threads, open file descriptors, API sockets in CLOSE_WAIT, processes (maximum per interval)",
+        "noDataMessage": "No metrics row in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "linechart"
+      },
+      "name": "threads-fds"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "union\n    (IbGwEvents_CL | project TimeGenerated, Instance, BootId, Event),\n    (IbGwMetrics_CL | project TimeGenerated, Instance, BootId, Event = '')\n| where '*' in ({Instance}) or Instance in ({Instance})\n| summarize Boots = dcount(BootId), OomKillEvents = countif(Event == 'oom_kill') by bin(TimeGenerated, 1d), Instance\n| sort by TimeGenerated desc, Instance asc",
+        "size": 0,
+        "title": "Container starts and OOM kills per day",
+        "noDataMessage": "No row in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "boots-ooms"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event == 'container_start'\n| extend GatewayVersion = tostring(Props.gateway_version), Channel = tostring(Props.channel), IbcVersion = tostring(Props.ibc_version), IbcRelease = tostring(Props.ibc_release), TradingMode = tostring(Props.trading_mode)\n| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Starts = count() by Instance, GatewayVersion, Channel, IbcVersion, IbcRelease, TradingMode\n| sort by LastSeen desc",
+        "size": 0,
+        "title": "Gateway and IBC versions over time (from the container_start events)",
+        "noDataMessage": "No container_start event in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "versions"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Event in ('config_rendered', 'config_custom')\n| extend ConfigHash = tostring(Props.config_hash), TradingMode = tostring(Props.trading_mode), ReadOnlyApi = tostring(Props.read_only_api), AutoRestartTime = tostring(Props.auto_restart_time), TimeZone = tostring(Props.time_zone)\n| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated), Starts = count() by Instance, ConfigHash, Event, TradingMode, ReadOnlyApi, AutoRestartTime, TimeZone\n| sort by FirstSeen desc",
+        "size": 0,
+        "title": "Configuration changes (a new config_hash means the non-secret configuration changed)",
+        "noDataMessage": "No config_rendered or config_custom event in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "configuration"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IbGwEvents_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| where Level in ('warn', 'error')\n| project TimeGenerated, Instance, Level, Src, Event, Msg\n| sort by TimeGenerated desc\n| take 100",
+        "size": 0,
+        "title": "Latest warnings and errors",
+        "noDataMessage": "No warning or error event in this time range.",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "latest-warnings"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IBGatewayLogs_CL\n| where '*' in ({Instance}) or Instance in ({Instance})\n| project TimeGenerated, Instance, Level, Code, FilePath, Truncated, RawData\n| sort by TimeGenerated desc\n| take 200",
+        "size": 0,
+        "title": "Latest raw IBC and launcher lines (redacted; only when raw-log shipping is switched on)",
+        "noDataMessage": "No raw line in this time range. Raw logs are shipped only after you opted in (IBGW_REDACT_USERNAME_FILE or SHIP_RAW_LOGS=yes).",
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "raw-lines"
+    }
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

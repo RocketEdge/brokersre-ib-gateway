@@ -1,0 +1,3 @@
+{"ts":"2026-11-12T01:52:46.410Z","src":"entrypoint","level":"info","event":"shutdown_complete","msg":"all processes stopped","boot_id":"443d261aecbd4789","seq":13}
+{"ts":"2026-11-12T01:53:05.010Z","src":"entrypoint","level":"info","event":"container_start","msg":"brokersre-ib-gateway 10.50.1g (stable) IBC 3.24.2 starting as uid 1000","data":{"gateway_version":"10.50.1g","channel":"stable","ibc_version":"3.24.2","ibc_release":"3.24.2-rocketedge.1","trading_mode":"paper","instance":"paper-1"},"boot_id":"9f1c02d47ab35e60","seq":1}
+{"ts":"2026-11-12T01:53:10.120Z","src":"ibc","level":"warn","event":"unknown_window","msg":"unknown window: Notice for account DU1234567","data":{"title":"Notice"},"boot_id":"9f1c02d47ab35e60","seq":2}

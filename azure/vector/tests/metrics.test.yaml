@@ -1,0 +1,145 @@
+# Unit tests for the metrics mapping (transform metrics_out in ../vector.yaml).
+# Run by azure/tests/run.sh with IBGW_INSTANCE=test-instance and HOST_LABEL=test-host.
+# Inputs have the shape of the gateway's real samples (log contract v2); `ts` is built from
+# the current date at 00:00:00.456 UTC so the tests do not age.
+tests:
+  - name: metrics - a full sample maps to every IbGwMetrics_CL column
+    inputs:
+      - insert_at: metrics_out
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/metrics/metrics.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "metrics", "boot_id": "443d261aecbd4789", "seq": 2, "phase": "logged-in",
+            "mem_working_set_bytes": 304349184, "mem_limit_bytes": 2147483648, "oom_kills": 0,
+            "cpu_usage_usec": 9098339, "cpu_throttled_usec": 0, "pids": 128,
+            "java_rss_bytes": 392282112, "java_threads": 114, "open_fds": 60,
+            "api_close_wait_sockets": 0, "disk_free_bytes_logs": 964645339136,
+            "disk_free_bytes_settings": 964645339136, "disk_total_bytes_logs": 1081101176832,
+            "disk_total_bytes_settings": 1081101176832
+          })
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(format_timestamp!(timestamp!(.timestamp), "%H:%M:%S%.3f"), "00:00:00.456")
+              assert_eq!(.Instance, "test-instance")
+              assert_eq!(.Host, "test-host")
+              assert_eq!(.BootId, "443d261aecbd4789")
+              assert_eq!(.Seq, 2)
+              assert_eq!(.Phase, "logged-in")
+              assert_eq!(.MemWorkingSetBytes, 304349184)
+              assert_eq!(.MemLimitBytes, 2147483648)
+              assert_eq!(.OomKills, 0)
+              assert_eq!(.CpuUsageUsec, 9098339)
+              assert_eq!(.CpuThrottledUsec, 0)
+              assert_eq!(.Pids, 128)
+              assert_eq!(.JavaRssBytes, 392282112)
+              assert_eq!(.JavaThreads, 114)
+              assert_eq!(.OpenFds, 60)
+              assert_eq!(.CloseWaitSockets, 0)
+              assert_eq!(.DiskFreeBytesLogs, 964645339136)
+              assert_eq!(.DiskFreeBytesSettings, 964645339136)
+              assert_eq!(.DiskTotalBytesLogs, 1081101176832)
+              assert_eq!(.DiskTotalBytesSettings, 1081101176832)
+              assert_eq!(keys(.), ["BootId", "CloseWaitSockets", "CpuThrottledUsec", "CpuUsageUsec", "DiskFreeBytesLogs", "DiskFreeBytesSettings", "DiskTotalBytesLogs", "DiskTotalBytesSettings", "Host", "Instance", "JavaRssBytes", "JavaThreads", "MemLimitBytes", "MemWorkingSetBytes", "OomKills", "OpenFds", "Phase", "Pids", "Seq", "timestamp"])
+
+  - name: metrics - a key that was not measured stays empty, never 0 (the shutdown sample)
+    inputs:
+      - insert_at: metrics_out
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/metrics/metrics.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "metrics", "boot_id": "443d261aecbd4789", "seq": 10, "phase": "stopping",
+            "mem_working_set_bytes": 26427392, "oom_kills": 0, "cpu_usage_usec": 10590335,
+            "cpu_throttled_usec": 0, "pids": 14, "api_close_wait_sockets": 0
+          })
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.MemWorkingSetBytes, 26427392)
+              assert_eq!(.OomKills, 0)
+              assert_eq!(.JavaThreads, null)
+              assert!(!exists(.JavaThreads), "JavaThreads must be absent, not 0")
+              assert!(!exists(.MemLimitBytes), "MemLimitBytes must be absent, not 0")
+              assert!(!exists(.OpenFds), "OpenFds must be absent, not 0")
+              assert!(!exists(.DiskFreeBytesLogs), "DiskFreeBytesLogs must be absent, not 0")
+              assert_eq!(keys(.), ["BootId", "CloseWaitSockets", "CpuThrottledUsec", "CpuUsageUsec", "Host", "Instance", "MemWorkingSetBytes", "OomKills", "Phase", "Pids", "Seq", "timestamp"])
+
+  - name: metrics - a malformed line is dropped
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: 'mem_working_set_bytes=1'
+    no_outputs_from:
+      - metrics_out
+
+  - name: metrics - a line without a parseable ts is dropped
+    inputs:
+      - insert_at: metrics_out
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/metrics/metrics.jsonl
+          message: '{"src":"metrics","boot_id":"443d261aecbd4789","seq":9,"phase":"logged-in","pids":3}'
+    no_outputs_from:
+      - metrics_out
+
+  - name: metrics - a float is truncated to an integer, a non-number stays empty, an unknown key is ignored
+    inputs:
+      - insert_at: metrics_out
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/metrics/metrics.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "metrics", "boot_id": "443d261aecbd4789", "seq": 10, "phase": "logged-in",
+            "cpu_usage_usec": 1234.9, "pids": "many", "open_fds": null, "unknown_future_key": 5
+          })
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.CpuUsageUsec, 1234)
+              assert!(!exists(.Pids), "a non-numeric value must be absent")
+              assert!(!exists(.OpenFds), "a null value must be absent")
+              assert!(!exists(.unknown_future_key), "unknown keys are ignored")
+              assert_eq!(keys(.), ["BootId", "CpuUsageUsec", "Host", "Instance", "Phase", "Seq", "timestamp"])
+
+  - name: metrics - a sample older than 36 hours is dropped, not back-filled
+    inputs:
+      - insert_at: metrics_out
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/metrics/metrics.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) - 37 * 3600), "%Y-%m-%dT%H:%M:%S%.3fZ"),
+            "src": "metrics", "boot_id": "443d261aecbd4789", "seq": 30, "phase": "logged-in", "pids": 3
+          })
+    no_outputs_from:
+      - metrics_out
+
+  - name: metrics - a sample 35 hours old is still shipped
+    inputs:
+      - insert_at: metrics_out
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/metrics/metrics.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) - 35 * 3600), "%Y-%m-%dT%H:%M:%S%.3fZ"),
+            "src": "metrics", "boot_id": "443d261aecbd4789", "seq": 31, "phase": "logged-in", "pids": 3
+          })
+    outputs:
+      - extract_from: metrics_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Seq, 31)

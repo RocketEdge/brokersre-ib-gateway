@@ -1,0 +1,1 @@
+{"ts":"2026-11-12T01:53:12.000Z","src":"entrypoint","level":"info","event":"config_rendered","msg":"IBC config rendered to /run/brokersre/config.ini (mode 0600)","data":{"config_hash":"c7c60feb79adfd61","trading_mode":"paper","read_only_api":"yes","auto_restart_time":"11:45 PM","time_zone":"America/New_York"},"boot_id":"9f1c02d47ab35e60","seq":4}

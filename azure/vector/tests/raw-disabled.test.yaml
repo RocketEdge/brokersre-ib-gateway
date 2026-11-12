@@ -1,0 +1,13 @@
+# Unit tests for the raw-log gate (transforms raw_gate -> raw_redacted -> raw_out in ../vector.yaml) in its DEFAULT state.
+# Run by azure/tests/run.sh WITHOUT IBGW_RAW_MODE: raw-log shipping is opt-in, so nothing may
+# come out, and an unknown mode must be treated like "off" (fail closed).
+tests:
+  - name: raw - nothing is shipped unless the operator opted in
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "2026-11-12 01:02:03:456 IBC: Login has completed for CANARY_USER_zq7"
+    no_outputs_from:
+      - raw_out

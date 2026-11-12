@@ -1,0 +1,4 @@
+// Deliberately wrong (test fixture): a syntax error.
+IbGwEvents_CL
+| where Code ==
+| take 1

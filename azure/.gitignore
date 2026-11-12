@@ -1,0 +1,5 @@
+# The repository ignores *.log; the shipper's test fixtures are log files and must be committed.
+!tests/fixtures/**/*.log
+# Compiled ARM templates and scratch output of azure/tests/run.sh.
+tests/.out/
+*.bicep.json

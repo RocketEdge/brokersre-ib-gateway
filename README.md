@@ -25,6 +25,7 @@ by or endorsed by Interactive Brokers.
 - [Environment variables](#environment-variables)
 - [Ports, volumes and the sidecar contract](#ports-volumes-and-the-sidecar-contract)
 - [Health, phases and logs](#health-phases-and-logs)
+- [Shipping to Azure Log Analytics](#shipping-to-azure-log-analytics)
 - [Security posture](#security-posture)
 - [Verifying an image](#verifying-an-image)
 - [Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login)
@@ -288,6 +289,26 @@ failed check stops the container before any login is attempted.
 All log files on the volume are size-capped and rotated (`LOG_MAX_BYTES`, `LOG_KEEP`). The
 contract is specified in [docs/log-contract.md](docs/log-contract.md).
 
+## Shipping to Azure Log Analytics
+
+[`azure/`](azure/README.md) ships the gateway's events and resource samples (and, only when you
+opt in, its raw logs with the username and account ids redacted) to **your own** Log Analytics
+workspace. It is a Bicep template (tables, a data collection rule, three alert rules, a
+workbook, a query pack) and a compose profile that runs a pinned Vector container next to the
+gateway, reading the log volume read-only. The shipper authenticates with a managed identity or
+a certificate, and its only permission is to publish to that one data collection rule. A second,
+optional template starts the gateway on an Azure VM.
+
+```bash
+docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml --profile azure up -d
+```
+
+Every gateway needs its own `IBGW_INSTANCE` label: the alert rules tell gateways apart by it.
+The pack is tested offline (the templates compile, the shipper runs on lines of a real gateway
+run, the queries are type-checked against the schema). Nothing has been deployed to Azure yet,
+so ingestion, authentication and the alert rules are unproven until you deploy;
+[azure/README.md](azure/README.md) lists exactly what is and is not established.
+
 ## Security posture
 
 No `sudo`, no SSH or telnet client; runs as uid 1000; works with `read_only: true` (tmpfs on
@@ -465,7 +486,7 @@ every variable it dropped or renamed on stderr, without printing a value.
 [docs/changes.md](docs/changes.md), [docs/limitations.md](docs/limitations.md),
 [docs/env-vars.md](docs/env-vars.md), [docs/log-contract.md](docs/log-contract.md),
 [docs/upgrade-policy.md](docs/upgrade-policy.md), [compose/README.md](compose/README.md),
-[examples/README.md](examples/README.md).
+[examples/README.md](examples/README.md), [azure/README.md](azure/README.md).
 
 ## License
 

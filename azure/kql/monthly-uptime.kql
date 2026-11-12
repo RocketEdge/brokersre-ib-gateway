@@ -1,0 +1,48 @@
+// Monthly uptime: share of the minutes of the current month in which the gateway was logged in,
+// leaving out IBKR's daily reset window (disconnects inside it are normal).
+//
+// Method (minute resolution, from the 30-second samples of IbGwMetrics_CL):
+//   ExpectedMinutes   minutes from the start of the month until now, outside the reset window;
+//   UpMinutes         minutes with at least one sample in phase logged-in;
+//   SeenMinutes       minutes with at least one sample of any phase.
+//   UptimePct       = UpMinutes / ExpectedMinutes
+//   NotMeasuredPct  = (ExpectedMinutes - SeenMinutes) / ExpectedMinutes
+// A minute without a sample counts AGAINST uptime (the state is unknown, and unknown is never
+// healthy); NotMeasuredPct shows how much of the shortfall is missing data rather than a
+// gateway that was seen in another phase. For an instance that started during the month, set
+// period_start to its first day, otherwise the time before it existed counts as not measured.
+//
+// Reset window: set the three values for the region of your IBKR account (local time of that
+// region): North America 00:15-01:45 America/New_York (default below); Europe 06:25-07:45
+// Europe/Zurich; Asia 04:45-06:05 and 20:15-21:15 Asia/Hong_Kong (run twice or extend the
+// function). The Saturday 00:00-02:00 America/New_York maintenance is always left out.
+let reset_timezone = "America/New_York";
+let reset_start = 15m;
+let reset_end = 1h + 45m;
+let period_start = startofmonth(now());
+let period_end = now();
+let in_reset = (t: datetime) {
+    let local_time = datetime_utc_to_local(t, reset_timezone);
+    let eastern_time = datetime_utc_to_local(t, "America/New_York");
+    ((local_time - startofday(local_time)) >= reset_start and (local_time - startofday(local_time)) < reset_end)
+        or (dayofweek(eastern_time) == 6d and (eastern_time - startofday(eastern_time)) < 2h)
+};
+let expected_minutes = toscalar(
+    range Minute from bin(period_start, 1m) to period_end step 1m
+    | where not(in_reset(Minute))
+    | count);
+IbGwMetrics_CL
+| where TimeGenerated between (period_start .. period_end)
+| where isnotempty(Phase)
+| where not(in_reset(TimeGenerated))
+| extend Minute = bin(TimeGenerated, 1m)
+| summarize
+    UpMinutes = count_distinctif(Minute, Phase == "logged-in"),
+    SeenMinutes = count_distinct(Minute)
+    by Instance
+| extend ExpectedMinutes = expected_minutes
+| extend
+    UptimePct = round(100.0 * UpMinutes / ExpectedMinutes, 3),
+    NotMeasuredPct = round(100.0 * (ExpectedMinutes - SeenMinutes) / ExpectedMinutes, 3)
+| project Instance, UptimePct, NotMeasuredPct, UpMinutes, SeenMinutes, ExpectedMinutes
+| sort by Instance asc

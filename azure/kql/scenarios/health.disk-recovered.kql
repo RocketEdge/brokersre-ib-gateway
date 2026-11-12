@@ -1,0 +1,18 @@
+// Scenario for rule B: disk_low three hours ago, disk_ok two hours ago. The state is over;
+// the rule must be silent.
+// Query: alert-health.kql
+// Expect: (no rows)
+let IbGwEvents_CL =
+    union
+        (print Offset = 5h, Event = "container_start"),
+        (print Offset = 3h, Event = "disk_low"),
+        (print Offset = 2h, Event = "disk_ok")
+    | sort by Offset desc
+    | project TimeGenerated = now() - Offset, Instance = "recovered", Host = "ibgw-vm",
+        BootId = "abababababababab", Seq = tolong(row_number()), Src = "metrics", Level = "info", Event, Msg = Event;
+let IbGwMetrics_CL =
+    range Step from 0 to 20 step 1
+    | extend Offset = 10m - Step * 30s
+    | project TimeGenerated = now() - Offset, Instance = "recovered", Host = "ibgw-vm",
+        BootId = "abababababababab", Seq = tolong(Step), Phase = "logged-in",
+        MemWorkingSetBytes = tolong(900000000), MemLimitBytes = tolong(2147483648), OomKills = tolong(0);

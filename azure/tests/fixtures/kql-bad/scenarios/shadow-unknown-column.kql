@@ -1,0 +1,5 @@
+// Deliberately wrong (test fixture): the stand-in for IbGwEvents_CL has a column the
+// deployed table does not have, so the scenario would prove nothing about the real table.
+// Query: alert-ok.kql
+// Expect: x|x
+let IbGwEvents_CL = print TimeGenerated = now(), Instance = "x", Phase = "logged-in";

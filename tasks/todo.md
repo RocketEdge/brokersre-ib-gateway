@@ -56,3 +56,9 @@
 - [x] Preflight check `login_latch`; events `login_latch_set`, `login_rejected_latched`, `login_latch_cleared`, `login_latch_unreadable`
 - [ ] Observe one real cycle: rejection, corrected secret file, login (L18)
 - [ ] Real logs of other rejections (expired password, locked account) and whether they need the latch too (L18)
+
+## Roadmap P2/P4: Azure Log Analytics pack (2026-11-12, branch `feat/azure-pack`)
+
+- [x] `azure/`: Bicep (tables, data collection rule, role, alerts, workbook, query pack), Vector shipper with redaction, compose profiles, optional gateway VM, offline suite, ADR 0012
+- [ ] First deployment to a test subscription (owner's go-ahead: it creates billable resources); then L19
+- [ ] Run the `kql-run` group once (needs a person to accept the Kusto emulator's licence)

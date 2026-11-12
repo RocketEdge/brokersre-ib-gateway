@@ -1,0 +1,1 @@
+{"ts":"2026-10-01T04:05:00.000Z","src":"metrics","boot_id":"1b2c3d4e5f607182","seq":9,"phase":"stopping","mem_working_set_bytes":304349184,"oom_kills":0,"cpu_usage_usec":9098339,"cpu_throttled_usec":0,"pids":12,"java_rss_bytes":392282112,"java_threads":114,"open_fds":60,"api_close_wait_sockets":0}
