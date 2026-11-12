@@ -1,7 +1,9 @@
 # Sidecar CI: lint, type-check and test the Python package (coverage gate 90 %), lint the
-# Dockerfile and the smoke script, build the image for amd64, run the container smoke test and
-# scan with Trivy. Nothing here has credentials and nothing contacts IBKR: the API probe is
-# tested against an in-process fake gateway.
+# Dockerfile and the test scripts, build the image for amd64, run the container smoke test,
+# scan with Trivy, and run the end-to-end check with the gateway image built from this
+# commit. Nothing here has IBKR credentials and nothing contacts IBKR: the API probe is tested
+# against an in-process fake gateway, and the end-to-end check runs on a Docker network
+# without a route out.
 name: Sidecar
 
 on:
@@ -10,18 +12,22 @@ on:
     paths:
       - sidecar/**
       - compose/docker-compose.sidecar.yml
+      - compose/docker-compose.sidecar-shared.yml
       - docs/sidecar.md
       - docs/adr/0010-sidecar-for-probe-status-and-alerts.md
       - .github/workflows/sidecar.yml
       - .github/workflows/sidecar-publish.yml
+      - .github/workflows/sidecar-rescan.yml
   pull_request:
     paths:
       - sidecar/**
       - compose/docker-compose.sidecar.yml
+      - compose/docker-compose.sidecar-shared.yml
       - docs/sidecar.md
       - docs/adr/0010-sidecar-for-probe-status-and-alerts.md
       - .github/workflows/sidecar.yml
       - .github/workflows/sidecar-publish.yml
+      - .github/workflows/sidecar-rescan.yml
 
 permissions:
   contents: read
@@ -59,21 +65,23 @@ jobs:
         run: uv run pytest --cov --cov-report=term-missing:skip-covered --cov-report=xml
       - name: The committed status schema is what the code generates
         run: uv run brokersre-sidecar print-schema status | diff - schemas/status.v1.schema.json
-      - name: The override compose file merges with the reference file
+      - name: Each override compose file merges with the reference file
         working-directory: compose
-        run: docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml config -q
+        run: |
+          docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml config -q
+          docker compose -f docker-compose.example.yml -f docker-compose.sidecar-shared.yml config -q
       - uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: sidecar/Dockerfile
           config: .hadolint.yaml
-      - name: shellcheck (smoke script)
+      - name: shellcheck (smoke and end-to-end scripts)
         working-directory: .
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -x sidecar/tests/container/run.sh
+          shellcheck -x sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh
       - name: shfmt (diff only)
         working-directory: .
-        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d sidecar/tests/container/run.sh
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
@@ -107,7 +115,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sidecar
           provenance: false
           sbom: false
-      - name: Container smoke test (read-only, uid 1000, endpoints, notification, shutdown)
+      - name: Container smoke test (own network, endpoints, notification, dead-man ping, shutdown)
         run: IMAGE="$TEST_IMAGE" sidecar/tests/container/run.sh
       - name: Trivy gate (fixable CRITICAL/HIGH in OS packages and Python libraries)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -126,3 +134,41 @@ jobs:
         with:
           sarif_file: trivy-sidecar.sarif
           category: sidecar
+
+  e2e:
+    name: end to end with the gateway image
+    needs: test
+    # The gateway build reads archived installers with a repository secret, which a pull
+    # request from a fork does not get: there the job is skipped and runs after the merge.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
+      TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+      SIDECAR_IMAGE: brokersre-ib-gateway-sidecar:ci
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      # The next two steps are the gateway build of ci.yml, unchanged.
+      - name: Pre-fetch archived stable installers (IBKR serves only its newest build)
+        env:
+          GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          scripts/prefetch-installers.sh stable "$STABLE_VERSION" "$STABLE_SHA256_X64" "$STABLE_SHA256_ARM" downloads
+      - name: Build the gateway image (stable, amd64) and load
+        run: |
+          eval "$(scripts/bake-env.sh)"
+          docker buildx bake stable --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --load
+      - name: Build the sidecar image (amd64) and load
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: sidecar
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.SIDECAR_IMAGE }}
+          cache-from: type=gha,scope=sidecar
+          provenance: false
+          sbom: false
+      - name: End-to-end check (internal Docker network; a notification after the gateway stops)
+        run: sidecar/tests/e2e/run.sh "$TEST_IMAGE" "$SIDECAR_IMAGE"
