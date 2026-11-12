@@ -1,0 +1,134 @@
+# A gateway and the strategy that uses it, on one host, with the API reachable ONLY from the
+# strategy container: the relay is not published on the host at all.
+#
+#   docker compose -f examples/compose-with-client.yml up -d
+#
+# What this shows (examples/README.md has the rules in plain words):
+#   - the strategy starts only after the gateway is healthy (`depends_on: service_healthy`);
+#   - then wait-for-gateway.sh makes sure the API really answers before the strategy's command
+#     runs. Healthy and ready are a moment, not a promise: the strategy must still handle a
+#     lost connection and the daily restart (examples/python, examples/csharp);
+#   - the strategy reaches the gateway by service name on a network that has no route in or
+#     out (`internal: true`); only the gateway has a second network, to reach IBKR.
+#
+# If the gateway is not healthy in time (a second factor is still waiting for approval),
+# `up` stops with "dependency failed to start": approve the prompt, then run `up -d` again.
+#
+# Secrets are the two files of the README's Quick start (compose/secrets/). Pin the image by
+# DIGEST in production. This file is started as shipped by tests/compose/run.sh.
+
+# Its own project name, so it does not share a project with another compose file of this
+# repository.
+name: ibgw-with-client
+
+services:
+  ib-gateway:
+    # The gateway service of compose/docker-compose.example.yml, setting for setting
+    # (tests/compose/run.sh compares the two), minus `ports:` and plus `networks:`.
+    image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /run/brokersre:size=16m,uid=1000,gid=1000,mode=0750
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 90s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    pids_limit: 2048
+    mem_limit: ${IBGW_MEM_LIMIT:-2g}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    environment:
+      TWS_USERID_FILE: /run/secrets/ib-username
+      TWS_PASSWORD_FILE: /run/secrets/ib-password
+      # Paper, so the relay is on 4004. For live: TRADING_MODE live here AND port 4003 in the
+      # strategy's entrypoint below.
+      TRADING_MODE: paper
+      READ_ONLY_API: ${READ_ONLY_API:-yes}
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      TWOFA_EXIT_INTERVAL: "60"
+      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-11:45 PM}   # exchange-local; outside IBKR reset windows
+      TIME_ZONE: ${TIME_ZONE:-America/New_York}
+      EXISTING_SESSION_DETECTED_ACTION: primary
+      IBC_COMMAND_SERVER_PORT: "7462"
+      IBC_LAUNCH: ${IBC_LAUNCH:-yes}                # "no" starts everything except IBC (offline tests)
+    secrets:
+      - ib-username
+      - ib-password
+    volumes:
+      - ibgw-settings:/home/ibgateway/Jts/settings
+      - ibgw-logs:/var/log/ibgateway
+    networks:
+      - egress    # the way out to IBKR's servers
+      - private   # where the strategy finds the relay as ib-gateway:4004
+    # No `ports:` on purpose: nothing on the host or beyond it can reach the API.
+    healthcheck:
+      test: ["CMD", "/usr/local/lib/brokersre/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+
+  # A placeholder: replace image and command with your strategy. The gateway image is used
+  # here only because it is already on the host and has bash and coreutils, which
+  # wait-for-gateway.sh needs; your own image needs them too, or its own readiness check.
+  strategy:
+    image: ${STRATEGY_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+    restart: unless-stopped
+    depends_on:
+      ib-gateway:
+        condition: service_healthy
+    # Wait up to 10 minutes for the API handshake to be answered, then start the command.
+    entrypoint: ["/usr/local/bin/wait-for-gateway.sh", "--host", "ib-gateway", "--port", "4004", "--timeout", "600", "--"]
+    command: ["bash", "-c", "echo 'strategy placeholder: the gateway is ready, replace this service with your strategy'; exec sleep infinity"]
+    # PID 1 ignores SIGTERM unless it installs a handler; an init process makes `down` prompt.
+    init: true
+    # The gateway image's own health check makes no sense for the placeholder. A strategy can
+    # use the wait script instead (one short connection per check):
+    #   test: ["CMD", "/usr/local/bin/wait-for-gateway.sh", "--host", "ib-gateway", "--port", "4004", "--timeout", "5", "--quiet"]
+    healthcheck:
+      disable: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./wait-for-gateway.sh:/usr/local/bin/wait-for-gateway.sh:ro
+    networks:
+      - private
+
+networks:
+  # An ordinary bridge network: outbound connections only (nothing is published).
+  egress:
+  # No route in or out: containers attached to it can only talk to each other.
+  private:
+    internal: true
+
+# The files are read relative to this compose file, i.e. the Quick start's compose/secrets/.
+secrets:
+  ib-username:
+    file: ${IBGW_SECRETS_DIR:-../compose/secrets}/ib-username
+  ib-password:
+    file: ${IBGW_SECRETS_DIR:-../compose/secrets}/ib-password
+
+volumes:
+  ibgw-settings:
+  ibgw-logs:
