@@ -110,15 +110,21 @@ function Resolve-GwFullPath {
     .DESCRIPTION
     The file APIs of .NET resolve relative paths against the process directory, which is not the
     PowerShell location. Every path handed to System.IO goes through this function first.
+    A trailing backslash (tab completion adds one to folders) is removed, except on a drive
+    root, so the same folder always has the same text in the state file, in task command
+    lines and in comparisons.
     .PARAMETER Path
     Relative or absolute path; it may not exist yet.
     .OUTPUTS
-    System.String, absolute path.
+    System.String, absolute path without trailing backslash (a drive root keeps its backslash).
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory = $true)][string]$Path)
-    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $rootPath = [System.IO.Path]::GetPathRoot($full)
+    if ($full.Length -gt $rootPath.Length) { $full = $full.TrimEnd([char]92, [char]47) }
+    return $full
 }
 
 function Move-GwFileOverwrite {

@@ -305,6 +305,17 @@ Describe 'Write-GwLog' {
     }
 }
 
+Describe 'Resolve-GwFullPath' {
+    It 'removes a trailing backslash, which tab completion adds to folders' {
+        Resolve-GwFullPath -Path 'C:\BrokerSRE\gateway\' | Should -Be 'C:\BrokerSRE\gateway'
+        Resolve-GwFullPath -Path 'C:\BrokerSRE\gateway' | Should -Be 'C:\BrokerSRE\gateway'
+    }
+
+    It 'keeps the backslash of a drive root' {
+        Resolve-GwFullPath -Path 'C:\' | Should -Be 'C:\'
+    }
+}
+
 Describe 'Get-GwPropertyValue' {
     It 'returns the value of an existing property' {
         Get-GwPropertyValue -InputObject ([pscustomobject]@{ A = 5 }) -Name 'A' | Should -Be 5

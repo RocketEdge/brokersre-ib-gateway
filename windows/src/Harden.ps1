@@ -300,9 +300,13 @@ function Set-GwUpdateActiveWindow {
         $previousValue = 0
         if ($existed) { $previousValue = [int]$previous }
         $description = 'Windows Update policy value {0} set to {1}' -f $name, $desired[$name]
-        Add-GwJournalEntry -Path $Path -Action 'SetActiveHours' -Kind 'RegistryValue' -Description $description `
-            -Data @{ Path = $key; Name = $name; Existed = $existed; PreviousValue = $previousValue; ValueKind = 'DWord' } | Out-Null
-        Invoke-GwRegistry -Operation Set -Path $key -Name $name -Value ([int]$desired[$name]) -Kind 'DWord'
+        $entry = Add-GwJournalEntry -Path $Path -Action 'SetActiveHours' -Kind 'RegistryValue' -Description $description `
+            -Data @{ Path = $key; Name = $name; Existed = $existed; PreviousValue = $previousValue; ValueKind = 'DWord' }
+        try { Invoke-GwRegistry -Operation Set -Path $key -Name $name -Value ([int]$desired[$name]) -Kind 'DWord' }
+        catch {
+            Set-GwJournalEntryState -Path $Path -Id $entry.Id -Note ('not applied: {0}' -f $_.Exception.Message)
+            throw
+        }
     }
     Write-GwConsole -Message ('Windows Update active hours: {0}. Windows can still restart outside this window.' -f $window) -Status 'PASS'
 }
@@ -546,7 +550,11 @@ function Register-GwStartTask {
     if (-not $PSCmdlet.ShouldProcess($taskName, ('Register scheduled task ({0})' -f $when))) { return }
     if ($atBoot) { Assert-GwElevated -Operation 'Registering a task that runs at startup without sign-in' }
 
-    $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Path "{1}"' -f (Join-Path $KitRoot 'start.ps1'), $folder
+    # Quoted by the kit's own rule, never by hand: in a hand-written "...\" a trailing backslash
+    # escapes the closing quote and swallows the next argument.
+    $startScript = ConvertTo-GwNativeArgument -Argument (Join-Path $KitRoot 'start.ps1')
+    $folderArgument = ConvertTo-GwNativeArgument -Argument $folder
+    $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File {0} -Path {1}' -f $startScript, $folderArgument
     $limit = 'PT1H'
     if ($keepAlive) {
         $arguments += ' -KeepAlive'
@@ -668,11 +676,15 @@ function Set-GwWslConfigValue {
     $sectionExisted = ((Find-GwIniKey -Line ([string[]]@(Split-GwIniLine -Text $text)) -Section $Section -Key $Key).SectionIndex -ge 0)
     $previousValue = ''
     if ($null -ne $current) { $previousValue = [string]$current }
-    Add-GwJournalEntry -Path $Path -Action 'WslConfig' -Kind 'IniValue' -Description $description -Data @{
+    $entry = Add-GwJournalEntry -Path $Path -Action 'WslConfig' -Kind 'IniValue' -Description $description -Data @{
         File = $file; Section = $Section; Key = $Key; Existed = ($null -ne $current); PreviousValue = $previousValue
         SectionExisted = $sectionExisted; FileExisted = $fileExisted; BackupPath = $backup
-    } | Out-Null
-    Write-GwFileAtomic -Path $file -Text (Set-GwIniValue -Text $text -Section $Section -Key $Key -Value $Value)
+    }
+    try { Write-GwFileAtomic -Path $file -Text (Set-GwIniValue -Text $text -Section $Section -Key $Key -Value $Value) }
+    catch {
+        Set-GwJournalEntryState -Path $Path -Id $entry.Id -Note ('not applied: {0}' -f $_.Exception.Message)
+        throw
+    }
     Write-GwConsole -Message ('{0}. Takes effect after WSL restarts (wsl --shutdown stops the gateway: do it in a maintenance window).' -f $description) -Status 'PASS'
 }
 
@@ -697,9 +709,15 @@ function Add-GwFirewallBlockRule {
     $description = 'Firewall: inbound block rule "{0}" for TCP ports 4001, 4002 and 9810' -f $script:GwFirewallRuleName
     if (-not $PSCmdlet.ShouldProcess('Windows Firewall', $description)) { return }
     Assert-GwElevated -Operation 'Adding a firewall rule'
-    Add-GwJournalEntry -Path $Path -Action 'FirewallLoopbackOnly' -Kind 'FirewallRule' -Description $description -Data @{ RuleName = $script:GwFirewallRuleName } | Out-Null
-    Invoke-GwFirewall -Operation Add -Name $script:GwFirewallRuleName -DisplayName 'BrokerSRE Gateway: block API ports from the network' `
-        -Description 'Created by the BrokerSRE Windows host kit (harden.ps1 -FirewallLoopbackOnly). Loopback is not affected.' -Port @(4001, 4002, 9810)
+    $entry = Add-GwJournalEntry -Path $Path -Action 'FirewallLoopbackOnly' -Kind 'FirewallRule' -Description $description -Data @{ RuleName = $script:GwFirewallRuleName }
+    try {
+        Invoke-GwFirewall -Operation Add -Name $script:GwFirewallRuleName -DisplayName 'BrokerSRE Gateway: block API ports from the network' `
+            -Description 'Created by the BrokerSRE Windows host kit (harden.ps1 -FirewallLoopbackOnly). Loopback is not affected.' -Port @(4001, 4002, 9810)
+    }
+    catch {
+        Set-GwJournalEntryState -Path $Path -Id $entry.Id -Note ('not applied: {0}' -f $_.Exception.Message)
+        throw
+    }
     Write-GwConsole -Message $description -Status 'PASS'
 }
 
@@ -715,7 +733,9 @@ function Undo-GwHardening {
     section or file the kit created, if it is empty again) while keeping the operator's other
     edits; FirewallRule removes the rule. Entries that need elevation are reported as
     NeedsElevation and stay in the journal for an elevated run. Each reverted entry is marked
-    in the journal immediately, so an interrupted undo can be resumed. ConfirmImpact is High.
+    in the journal immediately, so an interrupted undo can be resumed. An entry whose revert
+    throws is reported as Failed and stays in the journal; the remaining entries are still
+    processed. ConfirmImpact is High.
     .PARAMETER Path
     Gateway folder (holds the journal).
     .OUTPUTS
@@ -738,50 +758,57 @@ function Undo-GwHardening {
         }
         if (-not $PSCmdlet.ShouldProcess($entry.Description, 'Revert')) { continue }
         $result = 'Reverted'
-        switch ($entry.Kind) {
-            'PowerAcValue' {
-                $set = Invoke-GwPowerCfg -ArgumentList @('/setacvalueindex', [string]$data.Scheme, 'SUB_SLEEP', [string]$data.Setting, ([string][long]$data.PreviousSeconds))
-                if ($set.ExitCode -ne 0) { $result = 'Failed' }
-                elseif ((Get-GwActivePowerScheme) -eq ([string]$data.Scheme).ToLowerInvariant()) {
-                    Invoke-GwPowerCfg -ArgumentList @('/setactive', [string]$data.Scheme) | Out-Null
+        # One entry that cannot be reverted is reported and kept; the others are still reverted.
+        try {
+            switch ($entry.Kind) {
+                'PowerAcValue' {
+                    $set = Invoke-GwPowerCfg -ArgumentList @('/setacvalueindex', [string]$data.Scheme, 'SUB_SLEEP', [string]$data.Setting, ([string][long]$data.PreviousSeconds))
+                    if ($set.ExitCode -ne 0) { $result = 'Failed' }
+                    elseif ((Get-GwActivePowerScheme) -eq ([string]$data.Scheme).ToLowerInvariant()) {
+                        Invoke-GwPowerCfg -ArgumentList @('/setactive', [string]$data.Scheme) | Out-Null
+                    }
                 }
-            }
-            'RegistryValue' {
-                if ($data.Existed -eq $true) {
-                    Invoke-GwRegistry -Operation Set -Path ([string]$data.Path) -Name ([string]$data.Name) -Value ([int]$data.PreviousValue) -Kind 'DWord'
-                }
-                elseif ($null -ne (Invoke-GwRegistry -Operation Get -Path ([string]$data.Path) -Name ([string]$data.Name))) {
-                    Invoke-GwRegistry -Operation Remove -Path ([string]$data.Path) -Name ([string]$data.Name)
-                }
-            }
-            'ScheduledTask' {
-                if ($data.ExistedBefore -ne $true -and (Test-GwKitTask -Name ([string]$data.TaskName))) {
-                    $delete = Invoke-GwSchTasks -ArgumentList @('/Delete', '/TN', [string]$data.TaskName, '/F')
-                    if ($delete.ExitCode -ne 0) { $result = 'Failed' }
-                }
-            }
-            'IniValue' {
-                $file = [string]$data.File
-                $text = Read-GwTextFile -Path $file
-                if ($null -ne $text) {
+                'RegistryValue' {
                     if ($data.Existed -eq $true) {
-                        $text = Set-GwIniValue -Text $text -Section ([string]$data.Section) -Key ([string]$data.Key) -Value ([string]$data.PreviousValue)
+                        Invoke-GwRegistry -Operation Set -Path ([string]$data.Path) -Name ([string]$data.Name) -Value ([int]$data.PreviousValue) -Kind 'DWord'
                     }
-                    else {
-                        $createdSection = ((Get-GwPropertyValue -InputObject $data -Name 'SectionExisted' -Default $true) -ne $true)
-                        $text = Remove-GwIniValue -Text $text -Section ([string]$data.Section) -Key ([string]$data.Key) -RemoveEmptySection:$createdSection
+                    elseif ($null -ne (Invoke-GwRegistry -Operation Get -Path ([string]$data.Path) -Name ([string]$data.Name))) {
+                        Invoke-GwRegistry -Operation Remove -Path ([string]$data.Path) -Name ([string]$data.Name)
                     }
-                    $createdFile = ((Get-GwPropertyValue -InputObject $data -Name 'FileExisted' -Default $true) -ne $true)
-                    if ($createdFile -and [string]::IsNullOrEmpty($text)) { [System.IO.File]::Delete($file) }
-                    else { Write-GwFileAtomic -Path $file -Text ([string]$text) }
                 }
-            }
-            'FirewallRule' {
-                if (Invoke-GwFirewall -Operation Exists -Name ([string]$data.RuleName)) {
-                    Invoke-GwFirewall -Operation Remove -Name ([string]$data.RuleName)
+                'ScheduledTask' {
+                    if ($data.ExistedBefore -ne $true -and (Test-GwKitTask -Name ([string]$data.TaskName))) {
+                        $delete = Invoke-GwSchTasks -ArgumentList @('/Delete', '/TN', [string]$data.TaskName, '/F')
+                        if ($delete.ExitCode -ne 0) { $result = 'Failed' }
+                    }
                 }
+                'IniValue' {
+                    $file = [string]$data.File
+                    $text = Read-GwTextFile -Path $file
+                    if ($null -ne $text) {
+                        if ($data.Existed -eq $true) {
+                            $text = Set-GwIniValue -Text $text -Section ([string]$data.Section) -Key ([string]$data.Key) -Value ([string]$data.PreviousValue)
+                        }
+                        else {
+                            $createdSection = ((Get-GwPropertyValue -InputObject $data -Name 'SectionExisted' -Default $true) -ne $true)
+                            $text = Remove-GwIniValue -Text $text -Section ([string]$data.Section) -Key ([string]$data.Key) -RemoveEmptySection:$createdSection
+                        }
+                        $createdFile = ((Get-GwPropertyValue -InputObject $data -Name 'FileExisted' -Default $true) -ne $true)
+                        if ($createdFile -and [string]::IsNullOrEmpty($text)) { [System.IO.File]::Delete($file) }
+                        else { Write-GwFileAtomic -Path $file -Text ([string]$text) }
+                    }
+                }
+                'FirewallRule' {
+                    if (Invoke-GwFirewall -Operation Exists -Name ([string]$data.RuleName)) {
+                        Invoke-GwFirewall -Operation Remove -Name ([string]$data.RuleName)
+                    }
+                }
+                default { $result = 'Failed' }
             }
-            default { $result = 'Failed' }
+        }
+        catch {
+            $result = 'Failed'
+            Write-GwConsole -Message ('Reverting failed: {0}' -f $_.Exception.Message) -Status 'FAIL'
         }
         if ($result -eq 'Reverted') {
             Set-GwJournalEntryState -Path $Path -Id $entry.Id -Note 'reverted by harden.ps1 -Undo'

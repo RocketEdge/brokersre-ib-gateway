@@ -10,7 +10,8 @@ function ConvertTo-GwNativeArgument {
     Quotes one argument for a Windows command line.
     .DESCRIPTION
     Windows passes a process one command-line string; the program splits it again with the
-    rules of CommandLineToArgvW (used by docker, wsl, schtasks, powershell and the C runtime).
+    rules of CommandLineToArgvW (used by docker, schtasks, powershell and the C runtime; wsl.exe
+    parses its own options and, with --exec, hands the rest to the Linux program without a shell).
     An argument without space, tab or double quote is passed as it is. Otherwise it is wrapped
     in double quotes, each embedded quote becomes \" and backslashes are doubled only where
     they precede a quote (including the closing one). Doing this here, instead of relying on

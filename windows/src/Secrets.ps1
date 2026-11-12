@@ -54,6 +54,63 @@ function Write-GwSecretFile {
     }
 }
 
+function Get-GwSecretValueProblem {
+    <#
+    .SYNOPSIS
+    Says why a SecureString cannot be stored as a secret, without revealing it.
+    .DESCRIPTION
+    Lets setup validate the username AND the password before it writes either file, so a
+    refused password can never leave a new username next to an old password. Same rules as
+    Write-GwSecretFile: not empty, no line break, no NUL. The BSTR is zero-freed in a finally
+    block; the returned text never contains the value.
+    .PARAMETER SecureValue
+    The secret.
+    .OUTPUTS
+    System.String: empty when the value is acceptable, otherwise the reason.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][System.Security.SecureString]$SecureValue)
+    $pointer = [IntPtr]::Zero
+    $text = $null
+    try {
+        $pointer = Get-GwBstr -SecureValue $SecureValue
+        $text = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+        if ($text.Length -eq 0) { return 'the value is empty' }
+        if ($text.IndexOfAny([char[]]@([char]13, [char]10, [char]0)) -ge 0) { return 'the value contains a line break or a NUL character' }
+        return ''
+    }
+    finally {
+        $text = $null
+        Clear-GwBstr -Pointer $pointer
+    }
+}
+
+function Remove-GwSecretTempFile {
+    <#
+    .SYNOPSIS
+    Deletes temporary files an interrupted run left in the secrets folder.
+    .DESCRIPTION
+    Write-GwSecretFile writes '.<name>.<32 hex>.tmp' next to the target and removes it in a
+    finally block; a killed process can still leave one behind, holding a credential. setup
+    sweeps exactly those names (and the mount probe '.winkit-probe') before it writes. Nothing
+    else in the folder is touched.
+    .PARAMETER Path
+    The secrets folder.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $folder = Resolve-GwFullPath -Path $Path
+    if (-not [System.IO.Directory]::Exists($folder)) { return }
+    foreach ($file in [System.IO.Directory]::GetFiles($folder)) {
+        $name = [System.IO.Path]::GetFileName($file)
+        if ($name -cnotmatch '\A\.ib-(username|password)\.[0-9a-f]{32}\.tmp\z' -and $name -cne '.winkit-probe') { continue }
+        if ($PSCmdlet.ShouldProcess($file, 'Delete leftover temporary secret file')) { [System.IO.File]::Delete($file) }
+    }
+}
+
 function Protect-GwSecretFolder {
     <#
     .SYNOPSIS

@@ -99,6 +99,7 @@ Describe 'ConvertTo-GwComposeText' {
         @{ value = 'image:tag # comment' }
         @{ value = '"image"' }
         @{ value = 'image@sha256:short' }
+        @{ value = "a/b:c`n" }
         @{ value = '' }
     ) {
         { ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $value -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM' } | Should -Throw
@@ -193,7 +194,7 @@ Describe 'Get-GwRuntime' {
         $runtime.Mode | Should -Be 'WslEngine'
         $runtime.Distro | Should -Be 'Debian'
         Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter {
-            ($ArgumentList -join ' ') -eq '-d Debian -- docker info --format {{.OSType}}|{{.OperatingSystem}}|{{.ServerVersion}}'
+            ($ArgumentList -join ' ') -eq '-d Debian --exec docker info --format {{.OSType}}|{{.OperatingSystem}}|{{.ServerVersion}}'
         }
     }
 
@@ -223,7 +224,7 @@ Describe 'Invoke-GwContainerCli and Invoke-GwCompose' {
         Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { Get-TestNativeResult -Output @('ok') }
         Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { throw 'docker.exe must not be called' }
         Invoke-GwContainerCli -Runtime $script:engine -ArgumentList @('version') | Out-Null
-        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter { ($ArgumentList -join ' ') -eq '-d Ubuntu-24.04 -- docker version' }
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter { ($ArgumentList -join ' ') -eq '-d Ubuntu-24.04 --exec docker version' }
     }
 
     It 'runs compose with the full compose file path for Docker Desktop' {
@@ -238,7 +239,7 @@ Describe 'Invoke-GwContainerCli and Invoke-GwCompose' {
         Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { Get-TestNativeResult }
         Invoke-GwCompose -Runtime $script:engine -Path 'C:\BrokerSRE\gateway' -ArgumentList @('up', '-d') | Out-Null
         Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter {
-            ($ArgumentList -join '|') -eq '-d|Ubuntu-24.04|--cd|C:\BrokerSRE\gateway|--|docker|compose|-f|compose.yaml|up|-d'
+            ($ArgumentList -join '|') -eq '-d|Ubuntu-24.04|--cd|C:\BrokerSRE\gateway|--exec|docker|compose|-f|compose.yaml|up|-d'
         }
     }
 
@@ -394,6 +395,22 @@ Describe 'Wait-GwGatewayLogin' {
         Should -Invoke -ModuleName BrokerSre.Gateway Wait-GwDelay -Times 0 -Exactly
     }
 
+    It 'reports a rejected login even when the gateway process has already exited, so the caller can stop the stack' {
+        $script:phases.Enqueue('exited')
+        $script:logLines = @('{"ts":"2026-11-12T01:00:05.000Z","src":"ibc","level":"error","event":"login_failed","msg":"login_failed"}')
+        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'LoginFailed'
+    }
+
+    It 'reports a rejected login even when the container is no longer running' {
+        $script:containerState = 'exited'
+        $script:logLines = @('{"ts":"2026-11-12T01:00:05.000Z","src":"ibc","level":"error","event":"login_failed_dialog","msg":"login_failed_dialog"}')
+        (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'LoginFailed'
+    }
+
+    It 'refuses a since value that is not a timestamp' {
+        { Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -Since '10m; rm -rf /' } | Should -Throw
+    }
+
     It 'also treats the login_failed_dialog event as a failed login' {
         $script:phases.Enqueue('login')
         $script:logLines = @('{"ts":"2026-11-12T01:00:05.000Z","src":"ibc","level":"error","event":"login_failed_dialog","msg":"login_failed_dialog"}')
@@ -402,7 +419,7 @@ Describe 'Wait-GwGatewayLogin' {
 
     It 'asks docker logs only for events since the follow started' {
         foreach ($phase in @('login', 'logged-in')) { $script:phases.Enqueue($phase) }
-        Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2 -SinceUtc $script:now | Out-Null
+        Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2 -Since '2026-11-12T01:00:00Z' | Out-Null
         @($script:dockerCalls | Where-Object { $_ -eq 'logs --since 2026-11-12T01:00:00Z --tail 400 ctr' }).Count | Should -Be 1
     }
 
@@ -430,6 +447,21 @@ Describe 'Wait-GwGatewayLogin' {
         $script:phases.Enqueue('starting')
         $script:phases.Enqueue('logged-in')
         (Wait-GwGatewayLogin -Runtime $script:desktop -ContainerName 'ctr' -ApiPort 4002 -TimeoutSeconds 600 -PollSeconds 2).Outcome | Should -Be 'LoggedIn'
+    }
+}
+
+Describe 'Get-GwEngineTime' {
+    It 'returns the engine clock as text' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('2026-11-12T00:59:58.123456789Z') }
+        Get-GwEngineTime -Runtime $script:desktop | Should -Be '2026-11-12T00:59:58.123456789Z'
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwDocker -Times 1 -Exactly -ParameterFilter { ($ArgumentList -join ' ') -eq 'info --format {{.SystemTime}}' }
+    }
+
+    It 'returns null when the engine does not answer or prints something else' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -ExitCode 1 -Output @('error') }
+        Get-GwEngineTime -Runtime $script:desktop | Should -BeNullOrEmpty
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('not a time') }
+        Get-GwEngineTime -Runtime $script:desktop | Should -BeNullOrEmpty
     }
 }
 

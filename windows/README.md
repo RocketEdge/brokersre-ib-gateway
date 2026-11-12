@@ -36,7 +36,7 @@ Every script that changes something accepts `-WhatIf` (show what would happen, c
 
 - It never automates or bypasses two-factor authentication. You approve every login on your phone.
 - It never restarts a running gateway. A restart forces a new login.
-- It never retries a rejected login. After one rejection it stops the gateway, because repeated failures can lock an IBKR account.
+- It never retries a rejected login. After one rejection it stops the gateway and records the rejection; `start.ps1` and a plain `setup.ps1` then refuse to start it until you enter the credentials again (`-ResetSecrets`), because repeated failures can lock an IBKR account.
 - It never places, changes or cancels an order. The API is read-only unless you pass `-AllowApiOrders`.
 - It never puts your username or password in `compose.yaml`, on a command line, in a log or on the screen.
 - It never sets up Windows auto-logon and never stores a Windows password.
@@ -263,7 +263,7 @@ You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-li
 | `FAIL ContainerRuntime: Docker is set to Windows containers` | Docker Desktop is in Windows-container mode | Tray icon > "Switch to Linux containers..." |
 | `FAIL Port4002: Another program is listening` | Trader Workstation or another gateway uses the port | Close it, or find it: `Get-NetTCPConnection -LocalPort 4002 -State Listen` |
 | No prompt arrives on the phone | IBKR Mobile is not enrolled for this username, or notifications are off | Open IBKR Mobile; enrol IB Key for the username; the gateway prompts again by itself |
-| `IBKR rejected the username or password` and the gateway was stopped | Wrong credentials, or the live username used for paper trading | `.\setup.ps1 -ResetSecrets` (the kit stopped the gateway so the rejection is not repeated) |
+| `IBKR rejected the username or password` and the gateway was stopped; later `Not started: IBKR rejected the stored credentials` | Wrong credentials, or the live username used for paper trading | `.\setup.ps1 -ResetSecrets`. Until then neither `setup.ps1` nor the start task sends the rejected credentials again |
 | `Another session is using this IBKR username` | TWS, the mobile app or another gateway is logged in with the same username | Log that session out, or use a second username for the gateway |
 | `Logged in`, but your program cannot connect | Wrong port, or the program is on another computer | Paper is `127.0.0.1:4002`, live `127.0.0.1:4001`; the API is reachable from this computer only |
 | Your program connects but orders are refused | The API is read-only by default | `.\setup.ps1 -AllowApiOrders -Force` (recreates the container: new login) |
@@ -291,14 +291,19 @@ credential); `kit.log` in the gateway folder shows what the scheduled tasks did.
 You should see: one `Reverted:` line per change, then the container and the scheduled tasks
 removed, and `Kept C:\BrokerSRE\gateway with your secret files and the Docker volumes`.
 
-To delete the gateway settings, the logs, the folder and the secret files as well:
+To delete the gateway settings and logs (Docker volumes) and the files the kit wrote, including the secret files:
 
 ```powershell
 .\uninstall.ps1 -RemoveData
 ```
 
-PowerShell asks before each removal. While changes made by `harden.ps1` are still in place,
-`-RemoveData` refuses to delete the folder, because it holds the journal that can revert them.
+PowerShell asks before each removal. Only files the kit wrote are deleted, by name; anything
+else you keep in the folder stays, and the folder is removed only when it is empty. A folder
+without the kit's `kit-state.json` is never touched. While changes made by `harden.ps1` are
+still in place, `-RemoveData` refuses, because the folder holds the journal that can revert them.
+
+If you registered the start-at-boot task from an elevated PowerShell, run `uninstall.ps1` from an
+elevated PowerShell too: a non-elevated session may not see that task.
 
 ## Files the kit creates
 
@@ -326,7 +331,7 @@ intentions, not facts. `doctor.ps1` tells you the outcome on your computer.
 
 | Item | Why it is open | How to validate |
 |---|---|---|
-| Option B as a whole (Docker Engine inside WSL) | Exercised with mocked `wsl.exe` only | Run `.\setup.ps1 -Runtime WslEngine` and `.\doctor.ps1` |
+| Option B as a whole (Docker Engine inside WSL) | Exercised with mocked `wsl.exe`; only the way arguments reach Linux (`wsl --exec`, no shell) was observed for real, with `echo` | Run `.\setup.ps1 -Runtime WslEngine` and `.\doctor.ps1` |
 | The boot task starting WSL with nobody signed in | Microsoft tracks "Store WSL isn't accessible from Session 0" as open (microsoft/WSL#9231); reports differ by WSL version | Restart, do not sign in, wait for the phone prompt; otherwise use `-AfterSignIn` |
 | `hwclock -s` correcting the clock after a real resume | Only a dry run (`hwclock -s --test`) was observed, in Docker Desktop's distribution | Sleep the computer, resume, run `.\doctor.ps1` (line `ContainerClock`) |
 | Registering the sign-in and resume tasks without elevation | No task was registered during development; the task definitions were checked against the Task Scheduler schema only | If `harden.ps1` reports a `schtasks` error, repeat it elevated |

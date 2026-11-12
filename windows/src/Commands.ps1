@@ -106,7 +106,11 @@ function Write-GwGatewayFolder {
     Steps 2 to 5 of setup: the folder, the two secret files, the access list, compose.yaml and kit-state.json.
     .DESCRIPTION
     Everything setup writes to disk, in one place, so the caller can turn an access or I/O
-    error into one plain message. Each write is behind ShouldProcess; under -WhatIf nothing is
+    error into one plain message. The secrets folder is restricted to the current account as
+    soon as it exists, before a secret is written into it, and leftover temporary secret
+    files of an interrupted run are removed. Both values are validated before either file is
+    written. kit-state.json keeps a recorded rejected login until the credentials are
+    entered again. Each write is behind ShouldProcess; under -WhatIf nothing is
     created, nothing is asked and no probe container runs. Existing secret files are kept
     unless -ResetSecrets is given. The values are read with a hidden prompt (or taken from the
     SecureString parameters), written byte-exact by Write-GwSecretFile and never printed.
@@ -134,11 +138,12 @@ function Write-GwGatewayFolder {
     .PARAMETER PasswordSecure
     Password as a SecureString instead of the prompt.
     .OUTPUTS
-    System.String: empty when everything was written, 'InvalidCredential' when a value was
-    refused (empty or containing a line break). Access and I/O errors are thrown.
+    PSCustomObject: Outcome (empty when everything was written, 'InvalidCredential' when a
+    value was refused; then neither secret file was changed) and SecretsWritten (bool). Access
+    and I/O errors are thrown.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
-    [OutputType([string])]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory = $true)][string]$Folder,
         [Parameter(Mandatory = $true)][pscustomobject]$Detected,
@@ -155,13 +160,20 @@ function Write-GwGatewayFolder {
     $secrets = Join-Path $Folder 'secrets'
     $composePath = Join-Path $Folder 'compose.yaml'
     $hadCompose = $PSBoundParameters.ContainsKey('ExistingCompose') -and $null -ne $ExistingCompose -and $ExistingCompose.Length -gt 0
+    $secretsWritten = $false
+    $finish = { param([string]$Outcome) [pscustomobject]@{ Outcome = $Outcome; SecretsWritten = $secretsWritten } }
 
     Write-GwConsole -Message ''
-    Write-GwConsole -Message 'Step 2 of 8: folder'
+    Write-GwConsole -Message 'Step 2 of 8: folder (the secrets folder is restricted to your Windows account before anything is written into it)'
     foreach ($directory in @($Folder, $secrets)) {
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
             if ($PSCmdlet.ShouldProcess($directory, 'Create folder')) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
         }
+    }
+    $haveSecretsFolder = Test-Path -LiteralPath $secrets -PathType Container
+    if ($haveSecretsFolder) {
+        Protect-GwSecretFolder -Path $secrets
+        Remove-GwSecretTempFile -Path $secrets
     }
 
     Write-GwConsole -Message ''
@@ -177,36 +189,40 @@ function Write-GwGatewayFolder {
         if ($null -eq $userValue) { $userValue = Read-GwSecureInput -Prompt 'IBKR username (typing is hidden)' }
         $passwordValue = $PasswordSecure
         if ($null -eq $passwordValue) { $passwordValue = Read-GwSecureInput -Prompt 'IBKR password (typing is hidden)' }
-        try {
-            Write-GwSecretFile -Path $userFile -SecureValue $userValue
-            Write-GwSecretFile -Path $passwordFile -SecureValue $passwordValue
+        # Both are checked before either is written: a refused password must not leave a new
+        # username next to the old password.
+        $problems = @(
+            @{ Label = 'username'; Problem = (Get-GwSecretValueProblem -SecureValue $userValue) }
+            @{ Label = 'password'; Problem = (Get-GwSecretValueProblem -SecureValue $passwordValue) }
+        ) | Where-Object { $_.Problem -ne '' }
+        if (@($problems).Count -gt 0) {
+            foreach ($problem in @($problems)) {
+                Write-GwConsole -Message ('The {0} was refused: {1}. Neither secret file was changed.' -f $problem.Label, $problem.Problem) -Status 'FAIL'
+            }
+            return (& $finish 'InvalidCredential')
         }
-        catch [System.ArgumentException] {
-            Write-GwConsole -Message ('The credentials were not stored: {0}' -f $_.Exception.Message) -Status 'FAIL'
-            return 'InvalidCredential'
-        }
+        Write-GwSecretFile -Path $userFile -SecureValue $userValue
+        Write-GwSecretFile -Path $passwordFile -SecureValue $passwordValue
+        $secretsWritten = $true
         Write-GwConsole -Message 'Secret files written (UTF-8, no byte-order mark, no newline).' -Status 'PASS'
     }
 
     Write-GwConsole -Message ''
-    Write-GwConsole -Message 'Step 4 of 8: restricting the secrets folder to your Windows account'
-    if (Test-Path -LiteralPath $secrets -PathType Container) {
-        Protect-GwSecretFolder -Path $secrets
-        if (-not $WhatIfPreference) {
-            $mount = Test-GwSecretMount -Runtime $Detected -SecretsPath $secrets
-            switch ($mount.Result) {
-                'Readable' { Write-GwConsole -Message 'Only your account can read the folder, and a container can still read the files.' -Status 'PASS' }
-                'NotReadable' {
-                    Protect-GwSecretFolder -Path $secrets -IncludeSystem
-                    $second = Test-GwSecretMount -Runtime $Detected -SecretsPath $secrets
-                    $status = 'WARN'
-                    if ($second.Result -eq 'NotReadable') { $status = 'FAIL' }
-                    $explanation = ('With access for your account only, {0}. The folder now also allows SYSTEM and Administrators ' +
-                        '(inheritance stays off), the tightest setting this Docker installation accepts. Result of the second check: {1}.') -f $mount.Reason, $second.Result
-                    Write-GwConsole -Status $status -Message $explanation
-                }
-                default { Write-GwConsole -Message ('The folder is restricted to your account; whether a container can read it was not verified: {0}.' -f $mount.Reason) -Status 'WARN' }
+    Write-GwConsole -Message 'Step 4 of 8: checking that a container can read the restricted secrets folder'
+    if ($haveSecretsFolder -and -not $WhatIfPreference) {
+        $mount = Test-GwSecretMount -Runtime $Detected -SecretsPath $secrets
+        switch ($mount.Result) {
+            'Readable' { Write-GwConsole -Message 'Only your account can read the folder, and a container can still read the files.' -Status 'PASS' }
+            'NotReadable' {
+                Protect-GwSecretFolder -Path $secrets -IncludeSystem
+                $second = Test-GwSecretMount -Runtime $Detected -SecretsPath $secrets
+                $status = 'WARN'
+                if ($second.Result -eq 'NotReadable') { $status = 'FAIL' }
+                $explanation = ('With access for your account only, {0}. The folder now also allows SYSTEM and Administrators ' +
+                    '(inheritance stays off), the tightest setting this Docker installation accepts. Result of the second check: {1}.') -f $mount.Reason, $second.Result
+                Write-GwConsole -Status $status -Message $explanation
             }
+            default { Write-GwConsole -Message ('The folder is restricted to your account; whether a container can read it was not verified: {0}.' -f $mount.Reason) -Status 'WARN' }
         }
     }
 
@@ -233,19 +249,22 @@ function Write-GwGatewayFolder {
         Write-GwConsole -Message 'API clients may place orders (READ_ONLY_API=no). The kit itself never places, changes or cancels an order.' -Status 'WARN'
     }
     if ($PSCmdlet.ShouldProcess((Get-GwKitStatePath -Path $Folder), 'Write kit-state.json')) {
+        # A recorded rejected login survives until the credentials are entered again.
+        $rejected = ''
+        if (-not $secretsWritten) { $rejected = [string](Get-GwPropertyValue -InputObject (Get-GwKitState -Path $Folder) -Name 'LoginRejectedUtc' -Default '') }
         Save-GwKitState -Path $Folder -State ([pscustomobject][ordered]@{
-                Runtime       = [string]$Detected.Mode
-                Distro        = [string]$Detected.Distro
-                TradingMode   = $Setting.TradingMode
-                ContainerName = $Setting.ContainerName
-                ProjectName   = $Setting.ProjectName
-                ApiPort       = $Setting.ApiPort
-                ImageRef      = $ImageRef
+                Runtime          = [string]$Detected.Mode
+                Distro           = [string]$Detected.Distro
+                TradingMode      = $Setting.TradingMode
+                ContainerName    = $Setting.ContainerName
+                ProjectName      = $Setting.ProjectName
+                ApiPort          = $Setting.ApiPort
+                ImageRef         = $ImageRef
+                LoginRejectedUtc = (ConvertTo-GwTimestampText -Value $rejected)
             })
     }
-    return ''
+    return (& $finish '')
 }
-
 function Invoke-GwSetup {
     <#
     .SYNOPSIS
@@ -265,7 +284,9 @@ function Invoke-GwSetup {
        paper to live or recreate a running gateway.
     6. 'docker compose up -d' (skipped with -NoStart).
     7. Follows the login through the phase file and tells the operator when to approve 2FA.
-       A rejected login stops the stack once, so Docker's restart policy cannot retry it.
+       A rejected login is recorded in kit-state.json and stops the stack once, so neither
+       Docker's restart policy, nor the start tasks, nor a plain re-run of setup send the same
+       credentials again; only -ResetSecrets clears the record.
     8. Prints a Python and a C# connection snippet.
     Idempotent. Under -WhatIf nothing is created, changed, asked or started.
     .PARAMETER Path
@@ -348,7 +369,8 @@ function Invoke-GwSetup {
     }
     $composePath = Join-Path $folder 'compose.yaml'
     $existingCompose = Read-GwTextFile -Path $composePath
-    $composeDiffers = ($null -ne $existingCompose -and $existingCompose -ne $composeText)
+    # Case-sensitive: 'america/new_york' and 'America/New_York' are different files.
+    $composeDiffers = ($null -ne $existingCompose -and $existingCompose -cne $composeText)
     if ($composeDiffers -and -not $Force) {
         Write-GwConsole -Message ('{0} exists and differs from what these options generate (for example another trading mode, image or time zone).' -f $composePath) -Status 'FAIL'
         Write-GwConsole -Message 'Run setup.ps1 with the options you used before, or add -Force to replace the file (a backup is kept; a running gateway is then recreated and needs a new login).'
@@ -369,7 +391,7 @@ function Invoke-GwSetup {
         Write-GwConsole -Status 'FAIL' -Message ('A file in {0} could not be written: {1}' -f $folder, $_.Exception.Message)
         return (& $done 1 'WriteFailed')
     }
-    if ($written -ne '') { return (& $done 1 $written) }
+    if ($written.Outcome -ne '') { return (& $done 1 $written.Outcome) }
 
     if ($NoStart) {
         Write-GwConsole -Message ''
@@ -377,9 +399,21 @@ function Invoke-GwSetup {
         return (& $done 0 'NotStarted')
     }
 
+    $rejectedEarlier = [string](Get-GwPropertyValue -InputObject (Get-GwKitState -Path $folder) -Name 'LoginRejectedUtc' -Default '')
+    if ($rejectedEarlier -ne '' -and -not $WhatIfPreference) {
+        $refusal = ('IBKR rejected these credentials at {0}. The kit does not send them again: repeated failed logins can lock the account. ' +
+            'Enter them again with: setup.ps1 -ResetSecrets') -f $rejectedEarlier
+        Write-GwConsole -Status 'FAIL' -Message $refusal
+        return (& $done 1 'LoginRejectedEarlier')
+    }
+
     Write-GwConsole -Message ''
     Write-GwConsole -Message 'Step 6 of 8: starting the gateway (the first start downloads the image, about 1 GB)'
-    $since = Get-GwUtcNow
+    # The window for "login failed" events starts at the engine's clock: docker filters its
+    # logs by the VM clock, which can lag the Windows clock after a resume from sleep.
+    $since = ''
+    if (-not $WhatIfPreference) { $since = [string](Get-GwEngineTime -Runtime $detected) }
+    if ($since -eq '') { $since = ConvertTo-GwTimestampText -Value (Get-GwUtcNow) }
     $started = Start-GwStack -Runtime $detected -Path $folder -ShowProgress
     if ($WhatIfPreference) {
         Write-GwConsole -Message 'Preview only (-WhatIf): nothing was created, changed, asked or started.'
@@ -392,16 +426,23 @@ function Invoke-GwSetup {
 
     Write-GwConsole -Message ''
     Write-GwConsole -Message 'Step 7 of 8: logging in (have your phone with IBKR Mobile ready)'
-    $login = Wait-GwGatewayLogin -Runtime $detected -ContainerName $setting.ContainerName -ApiPort $setting.ApiPort -TimeoutSeconds $LoginTimeoutSeconds -SinceUtc $since
+    $login = Wait-GwGatewayLogin -Runtime $detected -ContainerName $setting.ContainerName -ApiPort $setting.ApiPort -TimeoutSeconds $LoginTimeoutSeconds -Since $since
     if ($login.Outcome -eq 'LoginFailed') {
-        # Stop once, explicitly: with restart "unless-stopped" Docker would otherwise start the
-        # container again and send the same rejected credentials to IBKR.
-        Stop-GwStack -Runtime $detected -Path $folder -Confirm:$false | Out-Null
-        Write-GwConsole -Message 'The gateway was stopped so the rejected credentials are not sent again.' -Status 'WARN'
+        # Record it first, so the start tasks and a plain re-run refuse to send the same
+        # credentials; then stop explicitly, because with restart "unless-stopped" Docker would
+        # otherwise start the container again.
+        $state = Get-GwKitState -Path $folder
+        $state | Add-Member -NotePropertyName 'LoginRejectedUtc' -NotePropertyValue (ConvertTo-GwTimestampText -Value (Get-GwUtcNow)) -Force
+        Save-GwKitState -Path $folder -State $state
+        if (Stop-GwStack -Runtime $detected -Path $folder -Confirm:$false) {
+            Write-GwConsole -Message 'The gateway was stopped so the rejected credentials are not sent again.' -Status 'WARN'
+        }
+        else {
+            Write-GwConsole -Status 'FAIL' -Message ('The gateway could not be stopped. Stop it now so the rejected credentials are not sent again: docker compose -f "{0}" stop' -f $composePath)
+        }
         return (& $done 2 'LoginFailed')
     }
     if ($login.Outcome -ne 'LoggedIn') { return (& $done 2 $login.Outcome) }
-
     Write-GwConsole -Message ''
     Write-GwConsole -Message 'Step 8 of 8: connect your program'
     $snippet = Get-GwConnectionSnippet -ApiPort $setting.ApiPort
@@ -641,7 +682,8 @@ function Invoke-GwStart {
     .DESCRIPTION
     Uses the runtime recorded by setup, waits (bounded) for that engine to answer and runs
     'docker compose up -d --no-recreate': a stopped stack is started, a running gateway is never
-    replaced or restarted. It never prompts and never touches 2FA; after a Windows restart the
+    replaced or restarted. After a login IBKR rejected (recorded by setup) it starts nothing
+    until the credentials are entered again. It never prompts and never touches 2FA; after a Windows restart the
     gateway logs in by itself and IBKR sends the 2FA prompt to the operator's phone.
     With -KeepAlive and Docker Engine in WSL the function then holds one wsl.exe session open
     ('sleep infinity') and returns only when that session ends, because WSL shuts an idle
@@ -672,6 +714,13 @@ function Invoke-GwStart {
         Write-GwConsole -Message ('No kit-state.json in {0}: run setup.ps1 for this folder first.' -f $folder) -Status 'FAIL'
         return [pscustomobject]@{ ExitCode = 1 }
     }
+    $rejected = [string](Get-GwPropertyValue -InputObject $state -Name 'LoginRejectedUtc' -Default '')
+    if ($rejected -ne '') {
+        # Starting the stack would send credentials IBKR has already rejected.
+        Write-GwLog -Path $log -Message ('start: not started, IBKR rejected the stored credentials at {0}; run setup.ps1 -ResetSecrets' -f $rejected)
+        Write-GwConsole -Status 'FAIL' -Message ('Not started: IBKR rejected the stored credentials at {0}. Enter them again with: setup.ps1 -ResetSecrets' -f $rejected)
+        return [pscustomobject]@{ ExitCode = 1 }
+    }
     $runtime = Get-GwRuntimeFromState -State $state
     Write-GwLog -Path $log -Message ('start: waiting up to {0} s for the container engine ({1})' -f $WaitSeconds, $runtime.Mode)
     if (-not (Wait-GwContainerEngine -Runtime $runtime -TimeoutSeconds $WaitSeconds)) {
@@ -699,10 +748,14 @@ function Invoke-GwUninstall {
     .SYNOPSIS
     Removes the gateway stack and the kit's scheduled tasks (the logic of uninstall.ps1).
     .DESCRIPTION
-    Stops the stack ('docker compose stop', then 'down'), deletes the kit's scheduled tasks and,
-    only with -RemoveData, also deletes the named volumes (gateway settings and logs) and the
-    gateway folder with its secrets. Without -RemoveData the folder, the secrets and the
-    volumes stay. Host changes made by harden.ps1 are not reverted here: while the journal
+    Acts only on a folder that holds the kit-state.json setup wrote; any other folder is
+    refused untouched. Stops the stack ('docker compose stop', then 'down'), deletes the
+    scheduled tasks of this gateway (the per-computer clock task only when this gateway
+    registered it) and, only with -RemoveData, also deletes the named volumes (gateway settings
+    and logs) and the files the kit wrote: the two secret files, compose.yaml and its backups,
+    the state file, the journal and the log. Files the kit did not write are never deleted;
+    the folder is removed only when it is empty afterwards. Without -RemoveData the folder,
+    the secrets and the volumes stay. Host changes made by harden.ps1 are not reverted here: while the journal
     still lists some, -RemoveData refuses to delete the folder (the journal is what undo
     needs) unless -KeepHostChanges says to leave them in place. ConfirmImpact is High, so
     PowerShell asks before anything is removed unless -Confirm:$false is given; secrets are
@@ -726,13 +779,18 @@ function Invoke-GwUninstall {
     $folder = Resolve-GwFullPath -Path $Path
     $exitCode = 0
     $state = Get-GwKitState -Path $folder
+    if ($null -eq $state) {
+        # A mistyped -Path must not stop another compose project, remove another gateway's
+        # tasks or delete anyone's files: without the marker setup wrote, nothing is touched.
+        Write-GwConsole -Status 'FAIL' -Message ('{0} has no kit-state.json, so it is not a folder setup.ps1 prepared. Nothing was deleted or changed.' -f $folder)
+        return [pscustomobject]@{ ExitCode = 1 }
+    }
     $tradingMode = [string](Get-GwPropertyValue -InputObject $state -Name 'TradingMode' -Default 'paper')
     if (@('paper', 'live') -notcontains $tradingMode) { $tradingMode = 'paper' }
 
-    $pendingHostChanges = @()
-    if (Test-Path -LiteralPath (Get-GwJournalPath -Path $folder)) {
-        $pendingHostChanges = @((Get-GwJournal -Path $folder).Entries | Where-Object { -not $_.Reverted -and $_.Kind -ne 'ScheduledTask' })
-    }
+    $journalEntries = @()
+    if (Test-Path -LiteralPath (Get-GwJournalPath -Path $folder)) { $journalEntries = @((Get-GwJournal -Path $folder).Entries) }
+    $pendingHostChanges = @($journalEntries | Where-Object { -not $_.Reverted -and $_.Kind -ne 'ScheduledTask' })
     if ($RemoveData -and $pendingHostChanges.Count -gt 0 -and -not $KeepHostChanges) {
         $refusal = ('{0} host change(s) made by harden.ps1 are still in place and the folder holds the journal that can revert them. ' +
             'Run harden.ps1 -Undo first, or add -KeepHostChanges to leave them as they are.') -f $pendingHostChanges.Count
@@ -743,12 +801,10 @@ function Invoke-GwUninstall {
     if (Test-Path -LiteralPath (Join-Path $folder 'compose.yaml')) {
         $preference = 'Auto'
         $distro = ''
-        if ($null -ne $state) {
-            $recorded = Get-GwRuntimeFromState -State $state
-            if ($recorded.Mode -eq 'WslEngine') {
-                $preference = 'WslEngine'
-                $distro = $recorded.Distro
-            }
+        $recorded = Get-GwRuntimeFromState -State $state
+        if ($recorded.Mode -eq 'WslEngine') {
+            $preference = 'WslEngine'
+            $distro = $recorded.Distro
         }
         $runtime = Get-GwRuntime -Preference $preference -Distro $distro
         if ([string]$runtime.Mode -eq 'None') {
@@ -767,11 +823,15 @@ function Invoke-GwUninstall {
         }
     }
 
-    $taskNames = @(
-        (Get-GwTaskName -Kind 'Boot' -TradingMode $tradingMode)
-        (Get-GwTaskName -Kind 'SignIn' -TradingMode $tradingMode)
-        (Get-GwTaskName -Kind 'ClockFix')
-    )
+    # The start tasks belong to this gateway (they carry its trading mode). The clock task is
+    # one per computer: it is removed only when this gateway's journal shows it registered it.
+    $taskNames = New-Object System.Collections.Generic.List[string]
+    $taskNames.Add((Get-GwTaskName -Kind 'Boot' -TradingMode $tradingMode))
+    $taskNames.Add((Get-GwTaskName -Kind 'SignIn' -TradingMode $tradingMode))
+    $clockTask = Get-GwTaskName -Kind 'ClockFix'
+    if (@($journalEntries | Where-Object { $_.Kind -eq 'ScheduledTask' -and [string](Get-GwPropertyValue -InputObject $_.Data -Name 'TaskName' -Default '') -eq $clockTask }).Count -gt 0) {
+        $taskNames.Add($clockTask)
+    }
     foreach ($taskName in $taskNames) {
         if (-not (Test-GwKitTask -Name $taskName)) { continue }
         if (-not $PSCmdlet.ShouldProcess($taskName, 'Delete scheduled task')) { continue }
@@ -786,9 +846,37 @@ function Invoke-GwUninstall {
     }
 
     if ($RemoveData) {
-        if ((Test-Path -LiteralPath $folder) -and $PSCmdlet.ShouldProcess($folder, 'Delete the gateway folder, including the IBKR secret files')) {
-            Remove-Item -LiteralPath $folder -Recurse -Force
-            Write-GwConsole -Message ('Deleted {0}, including the secret files.' -f $folder) -Status 'PASS'
+        # Only the files the kit writes are deleted, by name. Anything else the operator keeps
+        # in the folder stays, and the folder itself is removed only when it is empty.
+        if ($PSCmdlet.ShouldProcess($folder, 'Delete the files the kit wrote here, including the IBKR secret files')) {
+            $secrets = Join-Path $folder 'secrets'
+            $files = New-Object System.Collections.Generic.List[string]
+            foreach ($name in @('ib-username', 'ib-password', '.winkit-probe')) { $files.Add((Join-Path $secrets $name)) }
+            foreach ($name in @('compose.yaml', 'harden-journal.json', 'kit.log', 'kit.log.1')) { $files.Add((Join-Path $folder $name)) }
+            if ([System.IO.Directory]::Exists($secrets)) {
+                foreach ($file in [System.IO.Directory]::GetFiles($secrets)) {
+                    if ([System.IO.Path]::GetFileName($file) -cmatch '\A\.ib-(username|password)\.[0-9a-f]{32}\.tmp\z') { $files.Add($file) }
+                }
+            }
+            foreach ($file in [System.IO.Directory]::GetFiles($folder)) {
+                if ([System.IO.Path]::GetFileName($file) -cmatch '\Acompose\.yaml\.bak-\d{8}T\d{6}Z\z') { $files.Add($file) }
+            }
+            # The marker goes last: until then a failed run can be repeated.
+            $files.Add((Get-GwKitStatePath -Path $folder))
+            foreach ($file in $files) {
+                if ([System.IO.File]::Exists($file)) { [System.IO.File]::Delete($file) }
+            }
+            foreach ($directory in @($secrets, $folder)) {
+                if ([System.IO.Directory]::Exists($directory) -and @([System.IO.Directory]::GetFileSystemEntries($directory)).Count -eq 0) {
+                    [System.IO.Directory]::Delete($directory)
+                }
+            }
+            if ([System.IO.Directory]::Exists($folder)) {
+                Write-GwConsole -Message ('Deleted the kit''s files, including the secret files. {0} still holds other files and was kept.' -f $folder) -Status 'PASS'
+            }
+            else {
+                Write-GwConsole -Message ('Deleted {0}, including the secret files.' -f $folder) -Status 'PASS'
+            }
         }
     }
     else {

@@ -11,6 +11,10 @@
 # No ternary, no '&&' / '||', no '??', ASCII-only source (5.1 reads BOM-less files as ANSI).
 
 Set-StrictMode -Version Latest
+# Module scope, so it holds however a script was started: a cmdlet that fails (a registry write,
+# a folder that cannot be created, a file that cannot be removed) stops the operation instead of
+# being reported as done. The preference of the calling script does not reach module functions.
+$ErrorActionPreference = 'Stop'
 
 $script:GwModuleRoot = $PSScriptRoot
 

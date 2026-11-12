@@ -29,6 +29,7 @@ BeforeAll {
         $script:dockerCalls.Add($joined)
         if ($ArgumentList[0] -eq 'run') { return (& $script:probeHandler $ArgumentList) }
         if ($joined -match ' up -d') { return (Get-TestNativeResult -ExitCode $script:upExitCode -Output @('started')) }
+        if ($joined -match ' stop$') { return (Get-TestNativeResult -ExitCode $script:stopExitCode) }
         if ($ArgumentList[0] -eq 'info') { return (& $script:infoHandler) }
         return (Get-TestNativeResult)
     }
@@ -53,6 +54,7 @@ BeforeAll {
     }
     Mock -ModuleName BrokerSre.Gateway Wait-GwGatewayLogin {
         $script:waitCalls++
+        $script:waitSince = $Since
         return [pscustomobject]@{ Outcome = $script:loginOutcome; Phase = 'login'; ElapsedSeconds = 5; Message = 'message' }
     }
     Mock -ModuleName BrokerSre.Gateway Invoke-GwRegistry { return $null }
@@ -75,6 +77,8 @@ Describe 'Commands' {
         $script:probeHandler = { Get-TestNativeResult -Output @('winkit-probe') }
         $script:infoHandler = { Get-TestNativeResult -Output @('29.9.3') }
         $script:upExitCode = 0
+        $script:stopExitCode = 0
+        $script:waitSince = ''
         $script:loginOutcome = 'LoggedIn'
         $script:waitCalls = 0
         $script:now = New-Object DateTime(2026, 11, 12, 1, 0, 0, [DateTimeKind]::Utc)
@@ -151,6 +155,21 @@ Describe 'Commands' {
             }
         }
 
+        It 'restricts the secrets folder before the first secret is written into it' {
+            $script:othersAtWrite = -1
+            Mock -ModuleName BrokerSre.Gateway Write-GwSecretFile { $script:othersAtWrite = @(Get-GwAclOtherIdentity -Path (Split-Path -Parent $Path)).Count }
+            Invoke-GwSetup -Path $script:folder -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:othersAtWrite | Should -Be 0
+        }
+
+        It 'removes a temporary secret file left behind by an interrupted run' {
+            New-Item -ItemType Directory -Path (Join-Path $script:folder 'secrets') -Force | Out-Null
+            $stale = Join-Path $script:folder 'secrets\.ib-password.0123456789abcdef0123456789abcdef.tmp'
+            [System.IO.File]::WriteAllText($stale, 'stale-fake-value')
+            Invoke-GwSetup -Path $script:folder -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            Test-Path -LiteralPath $stale | Should -BeFalse
+        }
+
         It 'renders live mode with -Live' {
             Invoke-GwSetup -Path $script:folder -Live -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
             [System.IO.File]::ReadAllText((Join-Path $script:folder 'compose.yaml')) | Should -Match '- "127\.0\.0\.1:4001:4003"'
@@ -181,6 +200,23 @@ Describe 'Commands' {
             $script:prompts.Count | Should -Be 0
             (Get-Item -LiteralPath (Join-Path $script:folder 'secrets\ib-password')).LastWriteTimeUtc | Should -Be $script:firstWrite
             [System.IO.File]::ReadAllText((Join-Path $script:folder 'secrets\ib-password')) | Should -Be $script:fakePassword
+        }
+
+        It 'validates both values before writing either: a refused password leaves the stored username as it was' {
+            $newUser = ConvertTo-TestSecureString -Text ('CANARY_' + 'other_user')
+            $empty = ConvertTo-TestSecureString -Text ''
+            $result = Invoke-GwSetup -Path $script:folder -NoStart -ResetSecrets -UserNameSecure $newUser -PasswordSecure $empty -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'secrets\ib-username')) | Should -Be $script:fakeUser
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'secrets\ib-password')) | Should -Be $script:fakePassword
+        }
+
+        It 'treats a compose file that differs only in letter case as different' {
+            $other = Join-Path $TestDrive ('gw-' + [guid]::NewGuid().ToString('N'))
+            Invoke-GwSetup -Path $other -TimeZone 'america/new_york' -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            (Invoke-GwSetup -Path $other -TimeZone 'America/New_York' -NoStart -Confirm:$false).ExitCode | Should -Be 1
+            (Invoke-GwSetup -Path $other -TimeZone 'America/New_York' -NoStart -Force -Confirm:$false).ExitCode | Should -Be 0
+            [System.IO.File]::ReadAllText((Join-Path $other 'compose.yaml')) | Should -MatchExactly 'TIME_ZONE: America/New_York'
         }
 
         It 'asks again and rewrites with -ResetSecrets' {
@@ -298,6 +334,51 @@ Describe 'Commands' {
             @($script:dockerCalls | Where-Object { $_ -match ' restart' }).Count | Should -Be 0
             $script:waitCalls | Should -Be 1
             $script:dockerCalls[$script:dockerCalls.Count - 1] | Should -Match ' stop$'
+        }
+
+        It 'records a rejected login, and neither start.ps1 nor a plain re-run sends the same credentials again' {
+            $script:loginOutcome = 'LoginFailed'
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            (Get-GwKitState -Path $script:folder).LoginRejectedUtc | Should -Not -BeNullOrEmpty
+            $script:dockerCalls.Clear()
+
+            (Invoke-GwStart -Path $script:folder).ExitCode | Should -Be 1
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'kit.log')) | Should -Match 'rejected'
+
+            $script:loginOutcome = 'LoggedIn'
+            $again = Invoke-GwSetup -Path $script:folder -Confirm:$false
+            $again.ExitCode | Should -Be 1
+            ($script:console -join "`n") | Should -Match '-ResetSecrets'
+            @($script:dockerCalls | Where-Object { $_ -match ' up ' }).Count | Should -Be 0
+        }
+
+        It 'starts again after the credentials were entered again, and clears the record' {
+            $script:loginOutcome = 'LoginFailed'
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:loginOutcome = 'LoggedIn'
+            $result = Invoke-GwSetup -Path $script:folder -ResetSecrets -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 0
+            [string](Get-GwPropertyValue -InputObject (Get-GwKitState -Path $script:folder) -Name 'LoginRejectedUtc' -Default '') | Should -Be ''
+        }
+
+        It 'says so, with the command to run, when the stack could not be stopped after a rejected login' {
+            $script:loginOutcome = 'LoginFailed'
+            $script:stopExitCode = 1
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            ($script:console -join "`n") | Should -Match 'could not be stopped'
+            ($script:console -join "`n") | Should -Match 'docker compose -f .* stop'
+            ($script:console -join "`n") | Should -Not -Match 'The gateway was stopped so'
+        }
+
+        It 'starts the login-failure window at the engine clock, not the Windows clock' {
+            $script:infoHandler = { Get-TestNativeResult -Output @('2026-11-12T00:00:00.500000000Z') }
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:waitSince | Should -Be '2026-11-12T00:00:00.500000000Z'
+        }
+
+        It 'falls back to the Windows clock when the engine does not report its time' {
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:waitSince | Should -Be '2026-11-12T01:00:00Z'
         }
 
         It 'leaves the gateway running and returns 2 when the wait times out' {
@@ -519,7 +600,7 @@ Describe 'Commands' {
                     Runtime = 'WslEngine'; Distro = 'Ubuntu-24.04'; TradingMode = 'paper'; ContainerName = 'c'; ProjectName = 'p'; ApiPort = 4002; ImageRef = 'i'
                 })
             Invoke-GwStart -Path $script:folder -KeepAlive | Out-Null
-            $script:wslCalls | Should -Contain ('-d Ubuntu-24.04 --cd {0} -- docker compose -f compose.yaml up -d --no-recreate' -f $script:folder)
+            $script:wslCalls | Should -Contain ('-d Ubuntu-24.04 --cd {0} --exec docker compose -f compose.yaml up -d --no-recreate' -f $script:folder)
             $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d Ubuntu-24.04 --exec sleep infinity'
         }
 
@@ -537,6 +618,8 @@ Describe 'Commands' {
         }
 
         It 'stops and removes the container, removes the kit tasks and keeps the folder, the secrets and the volumes' {
+            Add-GwJournalEntry -Path $script:folder -Action 'ResumeClockFix' -Kind 'ScheduledTask' -Description 'clock task' `
+                -Data @{ TaskName = '\BrokerSRE\Gateway - clock fix after resume'; ExistedBefore = $false } | Out-Null
             $result = Invoke-GwUninstall -Path $script:folder -Confirm:$false
             $result.ExitCode | Should -Be 0
             $composePath = Join-Path $script:folder 'compose.yaml'
@@ -551,6 +634,36 @@ Describe 'Commands' {
             $result.ExitCode | Should -Be 0
             ($script:dockerCalls -join "`n") | Should -Match 'down --volumes'
             Test-Path -LiteralPath $script:folder | Should -BeFalse
+        }
+
+        It 'leaves the per-computer clock task alone when this gateway did not register it' {
+            Invoke-GwUninstall -Path $script:folder -Confirm:$false | Out-Null
+            $script:tasks | Should -Be @('\BrokerSRE\Gateway - clock fix after resume')
+        }
+
+        It 'deletes only the files the kit wrote: other content and the folder stay, also with -RemoveData' {
+            New-Item -ItemType Directory -Path (Join-Path $script:folder 'my-strategies') | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $script:folder 'my-strategies\notes.txt'), 'keep me')
+            [System.IO.File]::WriteAllText((Join-Path $script:folder 'secrets\other-key'), 'not ours')
+            $result = Invoke-GwUninstall -Path $script:folder -RemoveData -Confirm:$false
+            $result.ExitCode | Should -Be 0
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'my-strategies\notes.txt')) | Should -Be 'keep me'
+            [System.IO.File]::ReadAllText((Join-Path $script:folder 'secrets\other-key')) | Should -Be 'not ours'
+            foreach ($gone in @('compose.yaml', 'kit-state.json', 'secrets\ib-username', 'secrets\ib-password')) {
+                Test-Path -LiteralPath (Join-Path $script:folder $gone) | Should -BeFalse -Because $gone
+            }
+            ($script:console -join "`n") | Should -Match 'other files'
+        }
+
+        It 'does not touch a folder that only holds someone else''s compose.yaml' {
+            $foreign = Join-Path $TestDrive ('foreign-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $foreign | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $foreign 'compose.yaml'), "services: {}`n")
+            $result = Invoke-GwUninstall -Path $foreign -RemoveData -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            $script:dockerCalls.Count | Should -Be 0
+            $script:tasks.Count | Should -Be 2
+            Test-Path -LiteralPath (Join-Path $foreign 'compose.yaml') | Should -BeTrue
         }
 
         It 'refuses to delete the folder while host changes are still journaled, unless told to keep them' {
@@ -576,11 +689,22 @@ Describe 'Commands' {
             $attribute.ConfirmImpact | Should -Be 'High'
         }
 
+        It 'refuses to delete a folder that setup did not create, even with -RemoveData and -Confirm:$false' {
+            $other = Join-Path $TestDrive ('not-a-gateway-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $other 'documents') -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $other 'documents\important.txt'), 'keep me')
+            $before = Get-TestTreeSnapshot -Path $other
+            $result = Invoke-GwUninstall -Path $other -RemoveData -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            Get-TestTreeSnapshot -Path $other | Should -Be $before
+            ($script:console -join "`n") | Should -Match 'kit-state\.json'
+        }
+
         It 'still removes tasks and reports when no container runtime answers' {
             $script:runtime = [pscustomobject]@{ Mode = 'None'; Distro = ''; EngineName = ''; OsType = ''; ServerVersion = ''; Detail = 'nothing' }
             $result = Invoke-GwUninstall -Path $script:folder -Confirm:$false
             $result.ExitCode | Should -Be 1
-            $script:tasks.Count | Should -Be 0
+            $script:tasks | Should -Be @('\BrokerSRE\Gateway - clock fix after resume')
             $script:dockerCalls.Count | Should -Be 0
         }
     }

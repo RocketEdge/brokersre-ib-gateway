@@ -42,7 +42,10 @@ BeforeAll {
             'Get' { return $script:registry[$key] }
             'Test' { return $false }
             'GetValues' { return @{} }
-            'Set' { $script:registry[$key] = $Value }
+            'Set' {
+                if ($script:registrySetThrows) { throw 'Requested registry access is not allowed.' }
+                $script:registry[$key] = $Value
+            }
             'Remove' { $script:registry.Remove($key) }
         }
     }
@@ -72,10 +75,14 @@ BeforeAll {
         switch ($Operation) {
             'Exists' { return ($script:firewall -contains $Name) }
             'Add' {
+                if ($script:firewallAddThrows) { throw 'Access is denied.' }
                 $script:firewall += $Name
                 $script:firewallAdd = [pscustomobject]@{ Name = $Name; DisplayName = $DisplayName; Port = $Port }
             }
-            'Remove' { $script:firewall = @($script:firewall | Where-Object { $_ -ne $Name }) }
+            'Remove' {
+                if ($script:firewallRemoveThrows) { throw 'The firewall service is not running.' }
+                $script:firewall = @($script:firewall | Where-Object { $_ -ne $Name })
+            }
             'List' { return @() }
         }
     }
@@ -102,6 +109,9 @@ Describe 'Hardening' {
         $script:taskCreateFails = $false
         $script:firewall = @()
         $script:firewallAdd = $null
+        $script:firewallAddThrows = $false
+        $script:firewallRemoveThrows = $false
+        $script:registrySetThrows = $false
         $script:isAdmin = $true
         Save-GwKitState -Path $script:folder -State ([pscustomobject]@{
                 Runtime = 'DockerDesktop'; Distro = ''; TradingMode = 'paper'; ContainerName = 'brokersre-ib-gateway-paper'
@@ -318,11 +328,24 @@ Describe 'Hardening' {
             $document.Task.Triggers.LogonTrigger.UserId | Should -Be 'TESTPC\trader'
             $document.Task.Principals.Principal.LogonType | Should -Be 'InteractiveToken'
             $document.Task.Actions.Exec.Command | Should -Match 'powershell\.exe$'
-            $document.Task.Actions.Exec.Arguments | Should -Be ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\kit\windows\start.ps1" -Path "{0}"' -f $script:folder)
+            $expected = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\kit\windows\start.ps1 -Path ' + (ConvertTo-GwNativeArgument -Argument $script:folder)
+            $document.Task.Actions.Exec.Arguments | Should -Be $expected
             $entry = @((Get-GwJournal -Path $script:folder).Entries)[0]
             $entry.Kind | Should -Be 'ScheduledTask'
             $entry.Data.TaskName | Should -Be $name
             $entry.Data.ExistedBefore | Should -BeFalse
+        }
+
+        It 'quotes a folder with a space and a trailing backslash so the task still receives -Path and -KeepAlive' {
+            $spaced = Join-Path $TestDrive ('my gw ' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+            New-Item -ItemType Directory -Path $spaced | Out-Null
+            Save-GwKitState -Path $spaced -State ([pscustomobject]@{
+                    Runtime = 'WslEngine'; Distro = 'Ubuntu-24.04'; TradingMode = 'paper'; ContainerName = 'c'; ProjectName = 'p'; ApiPort = 4002; ImageRef = 'i'
+                })
+            Register-GwStartTask -Path ($spaced + '\') -Mode 'WslEngine' -AfterSignIn -KitRoot 'C:\my kit\windows' -Confirm:$false
+            $arguments = ([xml]$script:tasks['\BrokerSRE\Gateway paper - start after sign-in']).Task.Actions.Exec.Arguments
+            $arguments | Should -Be ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\my kit\windows\start.ps1" -Path "{0}" -KeepAlive' -f $spaced)
+            $arguments | Should -Not -Match '\\" -KeepAlive'
         }
 
         It 'passes the task definition to schtasks as a UTF-16 XML file and deletes the file afterwards' {
@@ -490,6 +513,43 @@ Describe 'Hardening' {
         }
     }
 
+    Context 'A change that fails is recorded as not applied, so undo never reverts what did not happen' {
+        It 'marks a refused registry write' {
+            $script:registry["$script:policyKey|ActiveHoursStart"] = 8
+            $script:registrySetThrows = $true
+            { Set-GwUpdateActiveWindow -Path $script:folder -Start 6 -End 23 -Confirm:$false } | Should -Throw
+            $entries = @((Get-GwJournal -Path $script:folder).Entries)
+            $entries.Count | Should -Be 1
+            $entries[0].Reverted | Should -BeTrue
+            $entries[0].Note | Should -Match 'not applied'
+            $script:registrySetThrows = $false
+            @(Undo-GwHardening -Path $script:folder -Confirm:$false).Count | Should -Be 0
+            $script:registry["$script:policyKey|ActiveHoursStart"] | Should -Be 8
+        }
+
+        It 'marks a refused firewall rule' {
+            $script:firewallAddThrows = $true
+            { Add-GwFirewallBlockRule -Path $script:folder -Confirm:$false } | Should -Throw
+            $entry = @((Get-GwJournal -Path $script:folder).Entries)[0]
+            $entry.Reverted | Should -BeTrue
+            $entry.Note | Should -Match 'not applied'
+        }
+
+        It 'marks a .wslconfig that could not be written' {
+            [System.IO.File]::WriteAllText($script:wslConfig, "[wsl2]`nmemory=8GB`n")
+            (Get-Item -LiteralPath $script:wslConfig).IsReadOnly = $true
+            try {
+                { Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value '4GB' -Confirm:$false } | Should -Throw
+            }
+            finally {
+                (Get-Item -LiteralPath $script:wslConfig).IsReadOnly = $false
+            }
+            $entry = @((Get-GwJournal -Path $script:folder).Entries)[0]
+            $entry.Reverted | Should -BeTrue
+            [System.IO.File]::ReadAllText($script:wslConfig) | Should -Be "[wsl2]`nmemory=8GB`n"
+        }
+    }
+
     Context 'Undo-GwHardening: round trip' {
         It 'restores the fake host exactly after every kind of change' {
             [System.IO.File]::WriteAllText($script:wslConfig, "# mine`n[wsl2]`nnetworkingMode=mirrored`n")
@@ -519,6 +579,24 @@ Describe 'Hardening' {
             $summary.Count | Should -Be 10
             @($summary | Where-Object { $_.Result -ne 'Reverted' }).Count | Should -Be 0
             @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted }).Count | Should -Be 0
+        }
+
+        It 'reports an entry that cannot be reverted as Failed, keeps it for later and still reverts the others' {
+            Set-GwWslConfigValue -Path $script:folder -WslConfigPath $script:wslConfig -Section 'wsl2' -Key 'memory' -Value '4GB' -Confirm:$false
+            Add-GwFirewallBlockRule -Path $script:folder -Confirm:$false
+            Disable-GwSleep -Path $script:folder -Confirm:$false
+            $script:firewallRemoveThrows = $true
+            $summary = @(Undo-GwHardening -Path $script:folder -Confirm:$false)
+            @($summary | Where-Object { $_.Result -eq 'Failed' }).Count | Should -Be 1
+            @($summary | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 3
+            $script:power.STANDBYIDLE | Should -Be 1800
+            Test-Path -LiteralPath $script:wslConfig | Should -BeFalse
+            $pending = @((Get-GwJournal -Path $script:folder).Entries | Where-Object { -not $_.Reverted })
+            $pending.Count | Should -Be 1
+            $pending[0].Kind | Should -Be 'FirewallRule'
+            $script:firewallRemoveThrows = $false
+            @(Undo-GwHardening -Path $script:folder -Confirm:$false | Where-Object { $_.Result -eq 'Reverted' }).Count | Should -Be 1
+            $script:firewall.Count | Should -Be 0
         }
 
         It 'reverts in reverse order and removes the file the kit created once it is empty again' {

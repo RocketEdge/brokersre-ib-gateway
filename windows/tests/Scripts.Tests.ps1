@@ -59,13 +59,24 @@ Describe 'harden.ps1 and uninstall.ps1 as processes' {
         Test-Path -LiteralPath $folder | Should -BeFalse
     }
 
-    It 'uninstall.ps1 -WhatIf on a folder without a stack changes nothing under <edition>' -ForEach $script:editions {
+    It 'uninstall.ps1 -RemoveData -WhatIf on a gateway folder without a stack changes nothing under <edition>' -ForEach $script:editions {
         $folder = Join-Path $TestDrive ('uninstall-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $folder | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $folder 'kit-state.json'), '{"Schema":1,"Runtime":"DockerDesktop","Distro":"","TradingMode":"paper"}')
         [System.IO.File]::WriteAllText((Join-Path $folder 'keep.txt'), 'keep')
         $before = Get-TestTreeSnapshot -Path $folder
         & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:kitRoot 'uninstall.ps1') -Path $folder -RemoveData -WhatIf 2>&1 | Out-Null
         $LASTEXITCODE | Should -Be 0
         Get-TestTreeSnapshot -Path $folder | Should -Be $before
+    }
+
+    It 'uninstall.ps1 -RemoveData refuses a folder setup did not create, without asking, under <edition>' -ForEach $script:editions {
+        $folder = Join-Path $TestDrive ('other-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $folder | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $folder 'keep.txt'), 'keep')
+        $output = & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:kitRoot 'uninstall.ps1') -Path $folder -RemoveData 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ($output | Out-String) | Should -Match 'Nothing was deleted'
+        [System.IO.File]::ReadAllText((Join-Path $folder 'keep.txt')) | Should -Be 'keep'
     }
 }

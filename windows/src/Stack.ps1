@@ -77,13 +77,13 @@ function ConvertTo-GwComposeText {
         [Parameter(Mandatory = $true)][string]$AutoRestartTime,
         [switch]$AllowApiOrders
     )
-    if ($ImageRef -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}(@sha256:[0-9a-f]{64})?$') {
+    if ($ImageRef -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}(@sha256:[0-9a-f]{64})?\z') {
         throw (New-Object System.ArgumentException('ImageRef must be an image reference such as ghcr.io/rocketedge/brokersre-ib-gateway:stable or name@sha256:<64 hex digits>.'))
     }
-    if ($TimeZone -cnotmatch '^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$') {
+    if ($TimeZone -cnotmatch '\A[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}\z') {
         throw (New-Object System.ArgumentException('TimeZone must be an IANA zone name such as America/New_York or Etc/UTC.'))
     }
-    if ($AutoRestartTime -cnotmatch '^(0?[1-9]|1[0-2]):[0-5][0-9] (AM|PM)$') {
+    if ($AutoRestartTime -cnotmatch '\A(0?[1-9]|1[0-2]):[0-5][0-9] (AM|PM)\z') {
         throw (New-Object System.ArgumentException('AutoRestartTime must look like 11:45 PM.'))
     }
     $setting = Get-GwComposeSetting -TradingMode $TradingMode
@@ -170,7 +170,7 @@ function Get-GwRuntime {
             if ($candidates.Count -eq 0) { $reasons.Add('no WSL distribution other than Docker Desktop''s own was found') }
         }
         foreach ($candidate in $candidates) {
-            $probe = Invoke-GwWsl -ArgumentList @('-d', $candidate, '--', 'docker', 'info', '--format', $format)
+            $probe = Invoke-GwWsl -ArgumentList @('-d', $candidate, '--exec', 'docker', 'info', '--format', $format)
             $line = [string]($probe.Output | Where-Object { $_ -match '^[a-z]+\|.*\|' } | Select-Object -First 1)
             if ($probe.ExitCode -eq 0 -and $line.Length -gt 0) {
                 $parts = $line.Split('|')
@@ -193,7 +193,8 @@ function Invoke-GwContainerCli {
     Runs a docker command against the detected runtime.
     .DESCRIPTION
     The one place that decides between docker.exe (Docker Desktop, WindowsCli) and
-    'wsl -d <distro> -- docker' (Docker Engine in WSL). With a working directory the WSL form
+    'wsl -d <distro> --exec docker' (Docker Engine in WSL; no Linux shell is involved, so
+    arguments arrive exactly as given). With a working directory the WSL form
     uses 'wsl --cd <Windows path>', which wsl.exe translates itself, so the kit never converts
     paths. Mode None is an error: callers check the runtime first.
     .PARAMETER Runtime
@@ -228,7 +229,9 @@ function Invoke-GwContainerCli {
                 $wslArguments.Add('--cd')
                 $wslArguments.Add($WorkingDirectory)
             }
-            $wslArguments.Add('--')
+            # --exec, not --: with -- wsl.exe hands the line to the Linux shell, which would treat
+            # '|' in a format string as a pipe and expand '$' and ';' (observed 2026-11-12).
+            $wslArguments.Add('--exec')
             $wslArguments.Add('docker')
             foreach ($argument in $ArgumentList) { $wslArguments.Add($argument) }
             return (Invoke-GwWsl -ArgumentList $wslArguments.ToArray() -Interactive:$Interactive -TimeoutSeconds $TimeoutSeconds)
@@ -249,7 +252,7 @@ function Invoke-GwCompose {
     .DESCRIPTION
     Docker Desktop: 'docker compose -f <folder>\compose.yaml <arguments>' (the project directory
     is the file's folder, so './secrets/...' resolves there). Docker Engine in WSL:
-    'wsl -d <distro> --cd <folder> -- docker compose -f compose.yaml <arguments>'.
+    'wsl -d <distro> --cd <folder> --exec docker compose -f compose.yaml <arguments>'.
     .PARAMETER Runtime
     Object from Get-GwRuntime.
     .PARAMETER Path
@@ -463,6 +466,32 @@ function Get-GwContainerState {
     return $null
 }
 
+function Get-GwEngineTime {
+    <#
+    .SYNOPSIS
+    Returns the container engine's own clock as text, for use with 'docker logs --since'.
+    .DESCRIPTION
+    'docker logs --since' filters on timestamps the engine wrote with ITS clock (the clock of
+    the WSL VM), which can lag the Windows clock after a resume from sleep. A window that starts
+    at a Windows timestamp could then hide a fresh login failure or count an old one as new, so
+    the follower's window starts at the engine's time ('docker info --format {{.SystemTime}}').
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .OUTPUTS
+    System.String in RFC 3339 form, or null when the engine did not report its time.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Runtime)
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('info', '--format', '{{.SystemTime}}') -TimeoutSeconds 30
+    if ($result.ExitCode -ne 0) { return $null }
+    foreach ($line in $result.Output) {
+        $text = $line.Trim()
+        if ($text -cmatch '\A\d{4}-\d\d-\d\dT[0-9:.]+(Z|[+-]\d\d:\d\d)\z') { return $text }
+    }
+    return $null
+}
+
 function Test-GwLoginFailure {
     <#
     .SYNOPSIS
@@ -476,8 +505,9 @@ function Test-GwLoginFailure {
     Object from Get-GwRuntime.
     .PARAMETER ContainerName
     Container whose stdout is read.
-    .PARAMETER SinceUtc
-    Only events after this UTC time count, so an old failure does not stop a new attempt.
+    .PARAMETER Since
+    RFC 3339 timestamp, preferably the engine's own time (Get-GwEngineTime): only events after
+    it count, so an old failure does not stop a new attempt.
     .OUTPUTS
     System.Boolean.
     #>
@@ -486,17 +516,15 @@ function Test-GwLoginFailure {
     param(
         [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
         [Parameter(Mandatory = $true)][string]$ContainerName,
-        [Parameter(Mandatory = $true)][datetime]$SinceUtc
+        [Parameter(Mandatory = $true)][ValidatePattern('\A\d{4}-\d\d-\d\dT[0-9:.]+(Z|[+-]\d\d:\d\d)\z')][string]$Since
     )
-    $since = ConvertTo-GwTimestampText -Value $SinceUtc
-    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('logs', '--since', $since, '--tail', '400', $ContainerName) -TimeoutSeconds 30
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('logs', '--since', $Since, '--tail', '400', $ContainerName) -TimeoutSeconds 30
     if ($result.ExitCode -ne 0) { return $false }
     foreach ($line in $result.Output) {
         if ($line -match '"event"\s*:\s*"login_failed(_dialog)?"') { return $true }
     }
     return $false
 }
-
 function Get-GwPhaseMessage {
     <#
     .SYNOPSIS
@@ -582,11 +610,13 @@ function Wait-GwGatewayLogin {
     Polls the phase token and prints one plain-language line per change. Read-only: it only
     runs 'docker exec ... cat', 'docker logs' and 'docker inspect'. It never starts, restarts
     or recreates anything and never touches 2FA; the operator approves on the phone.
-    It ends on the first of: logged-in (LoggedIn); a phase that needs a person (NeedsHuman,
-    ExistingSession, Stopped, TestMode); a rejected login reported on stdout (LoginFailed, on
-    the first such event, without another poll: a failed login is never retried); a container
-    that is not running (ContainerNotRunning); or the deadline (Timeout). An unknown token is
-    never success: the follower keeps waiting until the deadline.
+    Each poll decides in this order: logged-in ends with LoggedIn; a rejected login reported on
+    stdout ends with LoginFailed, on the first such event and before any other exit (also when
+    the gateway process has already exited, so the caller can stop the stack before Docker's
+    restart policy sends the credentials again); a container that is not running ends with
+    ContainerNotRunning; a phase that needs a person ends with NeedsHuman, ExistingSession,
+    Stopped or TestMode; the deadline ends with Timeout. An unknown token is never success:
+    the follower keeps waiting until the deadline.
     .PARAMETER Runtime
     Object from Get-GwRuntime.
     .PARAMETER ContainerName
@@ -594,12 +624,13 @@ function Wait-GwGatewayLogin {
     .PARAMETER ApiPort
     Host API port, for the success message.
     .PARAMETER TimeoutSeconds
-    Overall deadline. Default 600: a first start pulls nothing here (the image is already
-    present) but the Gateway needs a few minutes and the 2FA prompt needs the operator.
+    Overall deadline. Default 600: the Gateway needs a few minutes and the 2FA prompt needs
+    the operator.
     .PARAMETER PollSeconds
     Pause between polls.
-    .PARAMETER SinceUtc
-    Start of the window for login_failed events; defaults to now.
+    .PARAMETER Since
+    Start of the window for login_failed events, as RFC 3339 text; pass the engine's time
+    (Get-GwEngineTime) taken before the stack was started. Defaults to the Windows time now.
     .OUTPUTS
     PSCustomObject: Outcome, Phase (last token seen, or empty), ElapsedSeconds, Message.
     #>
@@ -611,17 +642,38 @@ function Wait-GwGatewayLogin {
         [Parameter(Mandatory = $true)][int]$ApiPort,
         [ValidateRange(1, 86400)][int]$TimeoutSeconds = 600,
         [ValidateRange(1, 60)][int]$PollSeconds = 3,
-        [datetime]$SinceUtc = [DateTime]::MinValue
+        [string]$Since = ''
     )
     $started = Get-GwUtcNow
-    if ($SinceUtc -eq [DateTime]::MinValue) { $SinceUtc = $started }
+    if ([string]::IsNullOrEmpty($Since)) { $Since = ConvertTo-GwTimestampText -Value $started }
     $deadline = $started.AddSeconds($TimeoutSeconds)
     $lastShown = $null
     $lastPhase = ''
     $logsHint = 'See the events with: docker logs {0}' -f $ContainerName
+    $finish = {
+        param([string]$Outcome, [string]$Message)
+        [pscustomobject]@{ Outcome = $Outcome; Phase = $lastPhase; ElapsedSeconds = [int]((Get-GwUtcNow) - $started).TotalSeconds; Message = $Message }
+    }
 
     while ($true) {
         $phase = Get-GwGatewayPhase -Runtime $Runtime -ContainerName $ContainerName
+        if ($null -ne $phase) { $lastPhase = $phase }
+        $info = $null
+        if ($null -ne $phase) { $info = Get-GwPhaseMessage -Phase $phase -ApiPort $ApiPort -ContainerName $ContainerName }
+
+        if ($null -ne $info -and $info.Kind -eq 'Success') {
+            Write-GwConsole -Message $info.Text -Status 'PASS'
+            return (& $finish $info.Outcome $info.Text)
+        }
+
+        # A rejected login outranks every other state, including "exited" and "not running".
+        if (Test-GwLoginFailure -Runtime $Runtime -ContainerName $ContainerName -Since $Since) {
+            $message = ('IBKR rejected the username or password. The kit does not try again: repeated failed logins can lock the account. ' +
+                'Check the credentials, then run setup.ps1 -ResetSecrets.')
+            Write-GwConsole -Message $message -Status 'FAIL'
+            return (& $finish 'LoginFailed' $message)
+        }
+
         if ($null -eq $phase) {
             $state = Get-GwContainerState -Runtime $Runtime -ContainerName $ContainerName
             if ($state -ne 'running' -and $state -ne 'created') {
@@ -629,9 +681,7 @@ function Wait-GwGatewayLogin {
                 if ($null -ne $state) { $shownState = $state }
                 $message = 'The gateway container is not running (state: {0}). {1}' -f $shownState, $logsHint
                 Write-GwConsole -Message $message -Status 'FAIL'
-                return [pscustomobject]@{
-                    Outcome = 'ContainerNotRunning'; Phase = $lastPhase; ElapsedSeconds = [int]((Get-GwUtcNow) - $started).TotalSeconds; Message = $message
-                }
+                return (& $finish 'ContainerNotRunning' $message)
             }
             if ($lastShown -ne '<waiting>') {
                 Write-GwConsole -Message 'Waiting for the gateway container...'
@@ -639,30 +689,14 @@ function Wait-GwGatewayLogin {
             }
         }
         else {
-            $lastPhase = $phase
-            $info = Get-GwPhaseMessage -Phase $phase -ApiPort $ApiPort -ContainerName $ContainerName
             if ($lastShown -ne $phase) {
                 $status = 'INFO'
-                if ($info.Kind -eq 'Success') { $status = 'PASS' }
-                elseif ($info.Kind -eq 'Stop') { $status = 'FAIL' }
+                if ($info.Kind -eq 'Stop') { $status = 'FAIL' }
                 elseif ($phase -eq '2fa-pending') { $status = 'WARN' }
                 Write-GwConsole -Message $info.Text -Status $status
                 $lastShown = $phase
             }
-            if ($info.Kind -ne 'Progress') {
-                return [pscustomobject]@{
-                    Outcome = $info.Outcome; Phase = $phase; ElapsedSeconds = [int]((Get-GwUtcNow) - $started).TotalSeconds; Message = $info.Text
-                }
-            }
-        }
-
-        if (Test-GwLoginFailure -Runtime $Runtime -ContainerName $ContainerName -SinceUtc $SinceUtc) {
-            $message = ('IBKR rejected the username or password. The kit does not try again: repeated failed logins can lock the account. ' +
-                'Check the credentials, then run setup.ps1 -ResetSecrets.')
-            Write-GwConsole -Message $message -Status 'FAIL'
-            return [pscustomobject]@{
-                Outcome = 'LoginFailed'; Phase = $lastPhase; ElapsedSeconds = [int]((Get-GwUtcNow) - $started).TotalSeconds; Message = $message
-            }
+            if ($info.Kind -eq 'Stop') { return (& $finish $info.Outcome $info.Text) }
         }
 
         if ((Get-GwUtcNow) -ge $deadline) {
@@ -672,14 +706,11 @@ function Wait-GwGatewayLogin {
                     'approve the IBKR Mobile prompt on your phone, then run setup.ps1 again to see the result.') -f $TimeoutSeconds
             }
             Write-GwConsole -Message $message -Status 'WARN'
-            return [pscustomobject]@{
-                Outcome = 'Timeout'; Phase = $lastPhase; ElapsedSeconds = [int]((Get-GwUtcNow) - $started).TotalSeconds; Message = $message
-            }
+            return (& $finish 'Timeout' $message)
         }
         Wait-GwDelay -Seconds $PollSeconds
     }
 }
-
 function Get-GwConnectionSnippet {
     <#
     .SYNOPSIS
