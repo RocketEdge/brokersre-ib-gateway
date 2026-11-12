@@ -23,7 +23,8 @@ setup() {
   export TRADING_MODE=paper READ_ONLY_API=yes CUSTOM_CONFIG=no TIME_ZONE=America/New_York
   export AUTO_RESTART_TIME='11:45 PM' BOOT_ID=0123456789abcdef
   unset TWS_USERID TWS_PASSWORD AUTO_LOGOFF_TIME JAVA_HEAP_MB JAVA_USER_HOME DISK_MIN_FREE_PCT \
-    STRICT_ENV DOCTOR_STRICT DOCTOR_TCP DOCTOR_RESULT_FILE TZ VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD_FILE
+    STRICT_ENV DOCTOR_STRICT DOCTOR_TCP DOCTOR_RESULT_FILE TZ VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD_FILE \
+    LOGIN_LATCH LOGIN_CRED_FINGERPRINT
   RESULT="${RUN_DIR}/doctor.result"
   REAL_PATH="${PATH}"
   stub_df
@@ -420,6 +421,62 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   one_result WARN secret_values
   [[ "$(fix)" == *"use VNC_SERVER_PASSWORD_FILE"* ]]
   [[ "$output" != *"${CANARY}"* ]]
+}
+
+# ---------------------------------------------------------------------------------------------
+# 3b. login_latch: a rejection IBKR gave earlier, recorded on the log volume (login-latch.sh)
+# ---------------------------------------------------------------------------------------------
+
+# record_rejection: write the record the classifier writes for the current secret files.
+record_rejection() {
+  bash -uc "source '${BROKERSRE_LIB}/log.sh'; source '${BROKERSRE_LIB}/login-latch.sh'; login_latch_set"
+}
+
+@test "login_latch: PASS when no rejected login is recorded" {
+  run check login_latch
+  one_result PASS login_latch
+}
+
+@test "login_latch: WARN with the time and the way out when these secret files were rejected" {
+  record_rejection
+  run check login_latch
+  one_result WARN login_latch
+  [[ "$(detail)" =~ IBKR\ rejected\ these\ credentials\ at\ [0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+  [[ "$(detail)" == *"will not log in"* ]]
+  [[ "$(fix)" == *"secret file"* ]]
+  [[ "$(fix)" == *"LOGIN_LATCH=clear"* ]]
+  [[ "$output" != *"hunter2"* ]]
+}
+
+@test "login_latch: PASS again once a secret file was rewritten" {
+  record_rejection
+  printf 'corrected-password' >"${T}/secrets/p"
+  touch -d '2031-01-01 00:00:00' "${T}/secrets/p"
+  run check login_latch
+  one_result PASS login_latch
+}
+
+@test "login_latch: the preflight only reports; it never removes the record" {
+  record_rejection
+  run check login_latch
+  [ -s "${LOG_DIR}/state/login-rejected" ]
+  LOGIN_LATCH=clear run check login_latch
+  [ -s "${LOG_DIR}/state/login-rejected" ]
+}
+
+@test "login_latch: WARN for LOGIN_LATCH=clear (meant for one start) and for LOGIN_LATCH=off" {
+  LOGIN_LATCH=clear run check login_latch
+  one_result WARN login_latch
+  [[ "$(fix)" == *"remove LOGIN_LATCH"* ]]
+  LOGIN_LATCH=off run check login_latch
+  one_result WARN login_latch
+  [[ "$(detail)" == *"every start"* ]]
+}
+
+@test "login_latch: WARN for a value that is neither on, clear nor off" {
+  LOGIN_LATCH=yes run check login_latch
+  one_result WARN login_latch
+  [[ "$(detail)" == *"LOGIN_LATCH"*"treated as on"* ]]
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1267,11 +1324,11 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   run "${DOCTOR}"
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" =~ ^STATUS\ +CHECK\ +DETAIL$ ]]
-  for name in trading_mode credentials secret_values auto_restart_time restart_window time_zone \
+  for name in trading_mode credentials secret_values login_latch auto_restart_time restart_window time_zone \
     ignored_variables writable_dirs heap_vs_memory read_only_api relay_exposure disk_space; do
     grep -Eq "^(PASS|WARN|FAIL|SKIP) +${name} +[^ ]" <<<"$output"
   done
-  [ "${lines[-1]}" == "doctor: pass (10 passed, 0 warned, 0 failed, 2 skipped)" ]
+  [ "${lines[-1]}" == "doctor: pass (11 passed, 0 warned, 0 failed, 2 skipped)" ]
 }
 
 @test "the table columns line up and a fix is printed under its row" {
@@ -1297,7 +1354,7 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
       [[ "${line:${#before_detail}}" == "fix: "* ]]
     fi
   done
-  [ "${rows}" -eq 12 ]
+  [ "${rows}" -eq 13 ]
   [ "${fixes}" -ge 2 ]
   grep -Eq '^FAIL +trading_mode ' <<<"$output"
   grep -Eq '^WARN +auto_restart_time ' <<<"$output"
@@ -1319,10 +1376,10 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
   echo "$output" | jq -e 'keys == ["checks", "result", "schema"]' >/dev/null
-  echo "$output" | jq -e '.schema == "brokersre.doctor.v1" and .result == "pass" and (.checks | length) == 12' >/dev/null
+  echo "$output" | jq -e '.schema == "brokersre.doctor.v1" and .result == "pass" and (.checks | length) == 13' >/dev/null
   echo "$output" | jq -e 'all(.checks[]; keys == ["detail", "fix", "name", "status"])' >/dev/null
   echo "$output" | jq -e 'all(.checks[]; .status | IN("pass", "warn", "fail", "skip"))' >/dev/null
-  echo "$output" | jq -e '[.checks[].name] == ["trading_mode", "credentials", "secret_values", "auto_restart_time", "restart_window", "time_zone", "ignored_variables", "writable_dirs", "heap_vs_memory", "read_only_api", "relay_exposure", "disk_space"]' >/dev/null
+  echo "$output" | jq -e '[.checks[].name] == ["trading_mode", "credentials", "secret_values", "login_latch", "auto_restart_time", "restart_window", "time_zone", "ignored_variables", "writable_dirs", "heap_vs_memory", "read_only_api", "relay_exposure", "disk_space"]' >/dev/null
   echo "$output" | jq -e '[.checks[] | select(.status == "skip") | .name] == ["heap_vs_memory", "relay_exposure"]' >/dev/null
 }
 
@@ -1352,7 +1409,7 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
   echo "$output" | jq -e '.src == "doctor" and .level == "info" and .event == "doctor_ok" and .boot_id == "0123456789abcdef" and .seq == 1' >/dev/null
-  echo "$output" | jq -e '.msg | contains("10 passed") and contains("2 skipped")' >/dev/null
+  echo "$output" | jq -e '.msg | contains("11 passed") and contains("2 skipped")' >/dev/null
   [ "$(cat "${LOG_DIR}/events/events.jsonl")" == "$output" ]
 }
 
@@ -1607,7 +1664,7 @@ verdict_is() {
   run bash -c "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_cli --json"
   [ "$status" -eq 0 ]
   echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[] | select(.name == "time_zone") | .status == "warn" and .detail == $detail' >/dev/null
-  echo "$output" | jq -e '[.checks[] | select(.status == "pass")] | length == 9' >/dev/null
+  echo "$output" | jq -e '[.checks[] | select(.status == "pass")] | length == 10' >/dev/null
 }
 
 @test "--help prints the usage and exits 0; an unknown option exits 2" {
@@ -1642,7 +1699,7 @@ verdict_is() {
   export TRADING_MODE=both JAVA_HEAP_SIZE=1 TWS_PASWORD_FILE=/x
   run bash -euo pipefail -c "source '${DOCTOR}'; doctor_main --json"
   [ "$status" -eq 1 ]
-  echo "$output" | jq -e '.result == "fail" and (.checks | length) == 13' >/dev/null
+  echo "$output" | jq -e '.result == "fail" and (.checks | length) == 14' >/dev/null
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1656,7 +1713,7 @@ verdict_is() {
 @test "a check that exits is reported as WARN 'check crashed', the other checks still run and the exit code stays 0" {
   run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --json"
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.result == "warn" and (.checks | length) == 12' >/dev/null
+  echo "$output" | jq -e '.result == "warn" and (.checks | length) == 13' >/dev/null
   echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[] | select(.name == "time_zone") | .status == "warn" and .detail == $detail' >/dev/null
   echo "$output" | jq -e '.checks[] | select(.name == "time_zone") | .fix | contains("exit status 7")' >/dev/null
   echo "$output" | jq -e '[.checks[] | select(.status == "fail")] | length == 0' >/dev/null
@@ -1667,7 +1724,7 @@ verdict_is() {
   run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main"
   [ "$status" -eq 0 ]
   grep -Eq "^WARN +time_zone +${CRASH_DETAIL//[()]/.}\$" <<<"$output"
-  [[ "${lines[-1]}" == "doctor: warn (9 passed, 1 warned, 0 failed, 2 skipped)" ]]
+  [[ "${lines[-1]}" == "doctor: warn (10 passed, 1 warned, 0 failed, 2 skipped)" ]]
 }
 
 @test "an unset variable inside a check (nounset) crashes that check only" {
@@ -1675,7 +1732,7 @@ verdict_is() {
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
   echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[0] | .name == "trading_mode" and .status == "warn" and .detail == $detail' >/dev/null
-  echo "$output" | jq -e '(.checks | length) == 12' >/dev/null
+  echo "$output" | jq -e '(.checks | length) == 13' >/dev/null
 }
 
 @test "a check that prints something other than a result line is reported as crashed" {
@@ -1723,9 +1780,9 @@ verdict_is() {
   export STRICT_ENV=yes
   run bash -uc "source '${DOCTOR}'; for name in \"\${doctor_checks[@]}\"; do eval \"check_\${name}() { exit 9; }\"; done; doctor_main --startup"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 13 ]
-  echo "$output" | jq -es '[.[0:12][] | select(.event == "doctor_warning" and .level == "warn")] | length == 12' >/dev/null
-  echo "$output" | jq -es '.[12].event == "doctor_ok"' >/dev/null
+  [ "${#lines[@]}" -eq 14 ]
+  echo "$output" | jq -es '[.[0:13][] | select(.event == "doctor_warning" and .level == "warn")] | length == 13' >/dev/null
+  echo "$output" | jq -es '.[13].event == "doctor_ok"' >/dev/null
 }
 
 # ---------------------------------------------------------------------------------------------

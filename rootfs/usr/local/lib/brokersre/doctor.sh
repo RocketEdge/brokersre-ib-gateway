@@ -53,10 +53,14 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/log.sh"
 # with the same rule. Sourcing the file defines functions and starts nothing.
 # shellcheck source=/dev/null
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/start-socat.sh"
+# For login_latch_state: the preflight reports the rejected-login latch with the entrypoint's
+# own rule. Functions only.
+# shellcheck source=/dev/null
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/login-latch.sh"
 
 # The checks in the order they run and are reported. `ibkr_reachable` is appended by --online.
-doctor_checks=(trading_mode credentials secret_values auto_restart_time restart_window time_zone
-  ignored_variables writable_dirs heap_vs_memory read_only_api relay_exposure disk_space)
+doctor_checks=(trading_mode credentials secret_values login_latch auto_restart_time restart_window
+  time_zone ignored_variables writable_dirs heap_vs_memory read_only_api relay_exposure disk_space)
 
 # Every variable this image reads: the ones documented in docs/env-vars.md (a unit test keeps
 # the two in step), the ones newer components read, and the image's own ENV. A variable that
@@ -70,7 +74,7 @@ doctor_known_names=(
   CUSTOM_CONFIG IBC_LAUNCH SOCAT_RESTART_DELAY JAVA_USER_HOME _JAVA_OPTIONS LOG_MAX_BYTES LOG_KEEP
   JAVA_HEAP_MB RELAY_MODE TWOFA_MAX_PROMPTS LOGIN_STALL_S DOCTOR_STRICT STRICT_ENV SAMPLE_INTERVAL_S
   DISK_MIN_FREE_PCT IBGW_INSTANCE BOOT_ID DOCTOR_TCP DOCTOR_RESULT_FILE HEALTHCHECK_API
-  RELAY_ALLOW_CIDR RELAY_REFUSED_REPORT_S
+  RELAY_ALLOW_CIDR RELAY_REFUSED_REPORT_S LOGIN_LATCH LOGIN_CRED_FINGERPRINT
   MEM_HIGH_PCT MEM_HIGH_FOR_S RELAY_POLL_S IBC_KNOWN_WINDOWS IBC_CMD
   IB_GATEWAY_VERSION IB_GATEWAY_CHANNEL IBC_VERSION IBC_RELEASE_TAG IBC_PATH TWS_PATH LOG_DIR
   RUN_DIR IBC_PATTERNS IBC_TEMPLATE JTS_TEMPLATE BROKERSRE_LIB
@@ -78,7 +82,7 @@ doctor_known_names=(
 
 # Name prefixes that belong to this image: an unknown variable with one of them is most likely
 # a misspelt or outdated setting, and a setting that is silently ignored is the worst kind.
-doctor_watched_prefixes=(TWS_ TWOFA_ IBC_ AUTO_ JAVA_ VNC_ LOG_ RELAY_ DOCTOR_)
+doctor_watched_prefixes=(TWS_ TWOFA_ IBC_ AUTO_ JAVA_ VNC_ LOG_ LOGIN_ RELAY_ DOCTOR_)
 
 # IBKR's server reset windows, each in its own local time: the list of docs/env-vars.md
 # (AUTO_RESTART_TIME) plus the Saturday window. Disconnects are normal inside them.
@@ -497,6 +501,55 @@ check_secret_values() {
   if ((found == 0)); then
     doctor_result PASS "${name}" "no password is passed in a plain environment variable"
   fi
+  return 0
+}
+
+# check_login_latch: report the rejected-login latch (login-latch.sh). Read-only: the record is
+# acted on by the entrypoint, never here.
+#
+#   WARN  IBKR rejected these very credentials at an earlier start: the gateway will hold in
+#         phase needs-human instead of logging in. A WARN, not a FAIL: a failed preflight makes
+#         the container exit, and an exiting container is restarted by its policy for ever,
+#         while the hold keeps it up and quiet.
+#   WARN  LOGIN_LATCH=clear (meant for one start) or LOGIN_LATCH=off (a rejected login is then
+#         repeated at every start), or a value that is none of on, clear, off (treated as on).
+#   PASS  nothing recorded, or the record is for other credentials (it is removed at start).
+check_login_latch() {
+  local name=login_latch mode="${LOGIN_LATCH:-on}" state
+  case "${mode}" in
+    on) ;;
+    clear)
+      doctor_result WARN "${name}" "LOGIN_LATCH=clear removes the record of a rejected login at this start" \
+        "remove LOGIN_LATCH after this start; while it is set, credentials IBKR rejected are sent again at every start"
+      return 0
+      ;;
+    off)
+      doctor_result WARN "${name}" "LOGIN_LATCH=off: credentials that IBKR rejected are sent again at every start, which can lock the account" \
+        "remove LOGIN_LATCH unless something else stops repeated logins"
+      return 0
+      ;;
+    *)
+      doctor_result WARN "${name}" "LOGIN_LATCH is neither on, clear nor off; it is treated as on" \
+        "set LOGIN_LATCH=on, clear or off, or remove it"
+      return 0
+      ;;
+  esac
+  state="$(login_latch_state)"
+  case "${state}" in
+    held\ *)
+      doctor_result WARN "${name}" "IBKR rejected these credentials at ${state#held }; the gateway will not log in while the secret files are unchanged" \
+        "write the correct username and password into the secret files and start again (credentials passed as variables: set LOGIN_LATCH=clear for one start)"
+      ;;
+    unreadable)
+      doctor_result PASS "${name}" "a record of a rejected login exists but cannot be read; it is removed at the next start"
+      ;;
+    released)
+      doctor_result PASS "${name}" "a rejected login is recorded for other credentials than the current ones; the record is removed at the next start"
+      ;;
+    *)
+      doctor_result PASS "${name}" "no rejected login is recorded for these credentials"
+      ;;
+  esac
   return 0
 }
 
