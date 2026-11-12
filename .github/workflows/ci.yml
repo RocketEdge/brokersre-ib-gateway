@@ -92,6 +92,10 @@ jobs:
           output: trivy.sarif
           exit-code: "1"
           severity: CRITICAL,HIGH
+          # Without this the action drops the severity filter whenever the format is SARIF
+          # (its README: "SARIF format enforces output of all vulnerabilities regardless of
+          # configured severities"), and the gate would fail on a fixable LOW finding too.
+          limit-severities-for-sarif: "true"
           ignore-unfixed: true
           # OS packages are what this image can patch. IBKR's bundled jars are reported by the
           # next step but not gated: see docs/limitations.md L08.
