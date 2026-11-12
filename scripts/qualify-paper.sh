@@ -85,7 +85,7 @@ mkdir -p "${out_dir}"
 name="ibgw-qualify-$$"
 started_epoch="${EPOCHSECONDS:-$(date +%s)}"
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-checks=""      # newline-separated "status<TAB>name<TAB>detail"
+checks="" # newline-separated "status<TAB>name<TAB>detail"
 reason=""
 twofa_prompted=false
 login_seconds=""
