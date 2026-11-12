@@ -5,6 +5,35 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — A rejected login is not repeated: the latch on the log volume
+
+- **What changed:** when IBKR rejects the credentials the classifier records it in
+  `state/login-rejected` (`login_latch_set`). At every later start the entrypoint compares the
+  record with the current secret files before IBC is started: unchanged files mean no login,
+  phase `needs-human`, the container held (`login_rejected_latched`). A rewritten secret file,
+  `LOGIN_LATCH=clear` or a completed login removes the record (`login_latch_cleared`). The
+  preflight has a check `login_latch`. New setting `LOGIN_LATCH` (`on`, `clear`, `off`). ADR
+  0016.
+- **Result:** unit and container suites green (counts in the pull request). In the container
+  suite a recorded rejection stops the next start before any Java process exists, the
+  container stays up and unhealthy, the resource samples go on, and rewriting the password
+  file lets IBC start again.
+- **What did NOT work / root cause:** (1) *the hold in phase `needs-human` ended with the
+  container.* A restart policy, a reboot or a start task made a new attempt with the same
+  rejected credentials at every start; a review of the Windows host kit found the path, and
+  it existed on every host. (2) *A hash of the password was not an option*, keyed or not: the
+  key would lie next to it on the volume. The latch therefore identifies the secret FILES by
+  their modification times, which is why credentials in plain variables need an explicit
+  `LOGIN_LATCH=clear`. (3) *The preflight must not fail for a held latch*: a failed preflight
+  makes the container exit, and the restart policy would then loop for ever. It warns; the
+  entrypoint holds. (4) *Two container checks could not fail*: `pgrep -f ibcalpha.ibc` inside
+  `bash -c` matches the shell that runs it. The new "no Java process" check failed for that
+  reason, which showed that the older "IBC/Gateway Java process running" check had always
+  passed for it. Both now look at a process named `java` and its command line.
+- **Next step:** observe one real cycle of rejection, correction and login; collect real logs
+  of other rejections (expired password, locked account) and decide whether they set the
+  latch too (L18).
+
 ### 2026-11-12 — Client kit: several gateways per host, readiness samples, gnzsnz converter
 
 - **What changed:** new files, plus their entries in the README, the migration guide, the

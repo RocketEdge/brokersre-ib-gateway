@@ -119,6 +119,7 @@ You should see `logged-in`, and `(healthy)` in the status column. The API is the
 | event `doctor_failed` naming `credentials`, and the container stops | A secret file is missing, empty or UTF-16 | Write it again with the commands in step 1 |
 | event `doctor_failed` naming another check, and the container stops | The preflight found a setting the gateway cannot run with; the message says which and how to fix it | Fix the setting. `docker compose ... run --rm ib-gateway doctor` shows every check |
 | event `login_failed_dialog`, phase `needs-human` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
+| event `login_rejected_latched` right after a start, phase `needs-human`, no login | IBKR rejected these credentials at an earlier start and the secret files are unchanged; the gateway does not send them again (the latch, [ADR 0016](docs/adr/0016-rejected-login-latch.md)) | Write the correct username and password into the secret files and start again: a rewritten file releases the latch. `doctor` shows the same and when IBKR refused |
 | event `unknown_window` or `login_stalled`, phase stays `login` | The Gateway shows a window that IBC does not handle | Look at `ibc/ibc.log` on the log volume for the window title; report it |
 | event `existing_session` | The username is logged in somewhere else | Close the other session, or use a dedicated username |
 | event `dirs_not_writable` | A tmpfs or volume is not writable by uid 1000 | Keep the `uid=1000,gid=1000` mount options of the example |
@@ -141,6 +142,9 @@ Paper first. Before the same setup holds a live session, check each line:
       Every client that reaches the relay is trusted by the Gateway.
 - [ ] **The preflight is clean:**
       `docker compose -f compose/docker-compose.example.yml run --rm ib-gateway doctor`.
+- [ ] **The log volume is persistent** (a named volume, as in the example). It holds the
+      record that IBKR rejected a login, which is what stops a restart policy or a reboot from
+      sending a wrong password again and again until the account is locked.
 - [ ] **Someone is told when a person is needed.** The image records `2fa-pending`,
       `needs-human` and `unknown_window` as events and phases; it does not notify anybody by
       itself. Read `events/events.jsonl` with your own tooling, or run a companion that turns
@@ -214,6 +218,7 @@ Full reference with defaults and rationale: [docs/env-vars.md](docs/env-vars.md)
 | `TIME_ZONE` | `Etc/UTC` | IANA zone written to `jts.ini` on first start. |
 | `TWOFA_TIMEOUT_ACTION` / `RELOGIN_AFTER_TWOFA_TIMEOUT` / `TWOFA_EXIT_INTERVAL` | `restart` / `yes` / `60` | 2FA retry behaviour: re-prompt instead of giving up. |
 | `TWOFA_MAX_PROMPTS` | `0` (no limit) | After this many unanswered second-factor prompts the gateway stops asking and waits for a person (phase `needs-human`). It never answers a prompt itself. |
+| `LOGIN_LATCH` | `on` | After IBKR rejects the credentials, later starts with the same secret files do not log in again until a file is rewritten. `clear` removes the record once (for credentials passed as variables); `off` disables it. |
 | `RELAY_MODE` | `gated` | `gated`: the relay on 4003/4004 listens only while the Gateway is logged in. `always`: it listens from container start. |
 | `JAVA_HEAP_MB` | unset (768) | Gateway heap in megabytes, set at run time; `auto` takes half of the container memory limit (768 to 4096). |
 | `DOCTOR_STRICT` | `yes` | `no` lets the container start although a preflight check failed (see `doctor` below). |
@@ -259,7 +264,7 @@ unhealthy. The finer lifecycle lives in `/var/log/ibgateway/state/phase`:
 | `logged-in` | login completed, API available | nothing |
 | `restarting` | the daily restart | wait; clients retry |
 | `existing-session` | the username is logged in elsewhere | close the other session |
-| `needs-human` | nothing will change until a person acts (IBKR rejected the login, or the second factor was not approved after `TWOFA_MAX_PROMPTS` prompts) | fix the cause, then restart the container |
+| `needs-human` | nothing will change until a person acts (IBKR rejected the login, now or at an earlier start with the same secret files, or the second factor was not approved after `TWOFA_MAX_PROMPTS` prompts) | fix the cause, then restart the container |
 | `stopping`, `stopped`, `exited`, `test-mode` | shutting down, stopped, IBC ended, offline test | |
 
 **Events.** Every event is one JSON object on one line (`ts`, `src`, `level`, `event`, `msg`,
