@@ -382,3 +382,38 @@ def test_the_dead_man_url_is_a_secret_file_and_https_only(tmp_path: Path) -> Non
     assert "CANARY" not in text
     allowed = load_secrets(load_settings(plain | {"NOTIFY_ALLOW_HTTP": "yes"}), SecretRegistry())
     assert allowed.deadman_url is not None
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["tk_CANARY_caf\u00e9", "tk CANARY with space", "tk_CANARY_\u2713"],
+    ids=["latin-1", "space", "unicode"],
+)
+def test_an_ntfy_token_must_be_visible_ascii(tmp_path: Path, token: str) -> None:
+    # The token is sent as an HTTP header; a header value outside ASCII cannot be sent at
+    # all, and that must be found when the configuration is checked, not at the first alert.
+    env = channel_env(
+        tmp_path,
+        NOTIFY_NTFY_URL_FILE="https://ntfy.example.com/topic",
+        NOTIFY_NTFY_TOKEN_FILE=token,
+    )
+    with pytest.raises(ConfigError) as caught:
+        load_secrets(load_settings(env), SecretRegistry())
+    text = "\n".join(caught.value.problems)
+    assert "NOTIFY_NTFY_TOKEN_FILE" in text
+    assert "ASCII" in text
+    assert "CANARY" not in text
+
+
+@pytest.mark.parametrize(
+    "base",
+    ["https://runbooks.example.com/ibgw/caf\u00e9", "https://runbooks.example.com/a b"],
+    ids=["non-ascii", "space"],
+)
+def test_the_runbook_base_must_be_visible_ascii(base: str) -> None:
+    with pytest.raises(ConfigError) as caught:
+        load_settings({"NOTIFY_RUNBOOK_BASE": base})
+    (problem,) = caught.value.problems
+    assert problem.startswith("NOTIFY_RUNBOOK_BASE:")
+    assert "ASCII" in problem
+    assert "runbooks.example.com" not in problem

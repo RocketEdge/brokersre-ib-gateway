@@ -16,6 +16,7 @@ import pytest
 from brokersre_sidecar.config import Secret, SmtpTarget
 from brokersre_sidecar.notify import DeliveryError, HttpTransport, Message, MessageFactory
 from brokersre_sidecar.notify.channels import (
+    HttpRequest,
     NtfyChannel,
     PagerDutyChannel,
     SlackChannel,
@@ -484,3 +485,21 @@ def test_a_requested_stop_is_an_information_message() -> None:
     exited = message(MessageKind.FIRING, AlertClass.GATEWAY_EXITED, phase="exited")
     assert exited.severity == "critical"
     assert exited.title == "The gateway stopped unexpectedly"
+
+
+async def test_a_request_that_cannot_be_put_on_the_wire_is_a_final_delivery_failure() -> None:
+    # Belt and braces behind the configuration check: whatever reaches a header, the
+    # channel task must get a DeliveryError, not an encoding error that crashes it.
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the request must not be sent")
+
+    transport = HttpTransport(httpx.AsyncClient(transport=httpx.MockTransport(unreachable)))
+    request = HttpRequest(
+        url="https://ntfy.example.com/topic",
+        body=b"text",
+        headers={"Authorization": "Bearer CANARY_caf\u00e9\u2713"},
+    )
+    with pytest.raises(DeliveryError) as caught:
+        await transport.send(request)
+    assert (caught.value.category, caught.value.retryable) == ("invalid_request", False)
+    assert "CANARY" not in str(caught.value)

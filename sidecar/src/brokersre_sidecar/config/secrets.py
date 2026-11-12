@@ -152,6 +152,28 @@ def validate_http_url(value: str, variable: str, allow_http: bool) -> None:
         raise SecretFileError(f"{variable}: the URL has no host")
 
 
+def validate_header_value(value: str, variable: str) -> None:
+    """Check that ``value`` can be sent inside an HTTP header: visible ASCII, no blank.
+
+    A value outside ASCII cannot be encoded into a header at all, so the first
+    notification would fail; a blank would end a bearer token early.
+
+    Raises:
+        SecretFileError: The value contains a character outside ``!`` to ``~``. The
+            message names ``variable`` and the rule, never the value.
+    """
+    if not is_visible_ascii(value):
+        raise SecretFileError(
+            f"{variable}: the value must be visible ASCII without blanks "
+            "(it is sent as an HTTP header)"
+        )
+
+
+def is_visible_ascii(value: str) -> bool:
+    """Report whether every character of ``value`` is in ``!`` to ``~`` (no blank)."""
+    return all(0x21 <= ord(character) <= 0x7E for character in value)
+
+
 def validate_telegram_token(value: str, variable: str) -> None:
     """Check the shape ``<bot id>:<secret>`` of a Telegram bot token.
 

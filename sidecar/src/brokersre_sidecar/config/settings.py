@@ -30,8 +30,10 @@ from brokersre_sidecar.config.secrets import (
     Secret,
     SecretFileError,
     SmtpTarget,
+    is_visible_ascii,
     parse_smtp_url,
     read_secret_file,
+    validate_header_value,
     validate_http_url,
     validate_telegram_token,
 )
@@ -353,7 +355,13 @@ def _check_gateway_host(value: str) -> str | None:
 
 
 def _check_runbook(value: str) -> str | None:
-    """Accept an http(s) URL without credentials, query or fragment."""
+    """Accept an http(s) URL in visible ASCII without credentials, query or fragment.
+
+    ASCII because the runbook link is also sent as an HTTP header (ntfy's ``Click``),
+    which cannot carry anything else; write other characters percent-encoded.
+    """
+    if not is_visible_ascii(value):
+        return "must be visible ASCII without blanks (percent-encode other characters)"
     try:
         parts = urlsplit(value)
         host = parts.hostname
@@ -610,7 +618,7 @@ def load_secrets(settings: Settings, registry: SecretRegistry) -> ChannelSecrets
             settings.telegram_token_file, "NOTIFY_TELEGRAM_TOKEN_FILE", validate_telegram_token
         ),
         ntfy_url=read(settings.ntfy_url_file, "NOTIFY_NTFY_URL_FILE", http_url),
-        ntfy_token=read(settings.ntfy_token_file, "NOTIFY_NTFY_TOKEN_FILE"),
+        ntfy_token=read(settings.ntfy_token_file, "NOTIFY_NTFY_TOKEN_FILE", validate_header_value),
         pagerduty_key=read(settings.pagerduty_key_file, "NOTIFY_PAGERDUTY_KEY_FILE"),
         smtp=smtp,
         deadman_url=read(settings.deadman_url_file, "DEADMAN_PING_URL_FILE", http_url),

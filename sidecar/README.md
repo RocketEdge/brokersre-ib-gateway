@@ -151,7 +151,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
-| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. No credentials or query string. |
+| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. |
 | `NOTIFY_ALLOW_HTTP` | `no` | `yes`, `no` | Allows `http://` channel URLs. Only for a receiver on a private network, such as a local ntfy. |
 | `NOTIFY_CHANNELS` | all configured | list of channel names | Channels for first notifications, resolutions and heartbeats. |
 | `NOTIFY_ESCALATION_CHANNELS` | all configured | list of channel names | Channels for escalations. |
@@ -163,7 +163,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `NOTIFY_TELEGRAM_TOKEN_FILE` | unset | path | Telegram bot token. Needs `NOTIFY_TELEGRAM_CHAT_ID`. |
 | `NOTIFY_TELEGRAM_CHAT_ID` | unset | chat id or `@channel` | Telegram destination (not a secret). |
 | `NOTIFY_NTFY_URL_FILE` | unset | path | ntfy topic URL. |
-| `NOTIFY_NTFY_TOKEN_FILE` | unset | path | ntfy access token, sent as a bearer token. |
+| `NOTIFY_NTFY_TOKEN_FILE` | unset | path | ntfy access token, sent as a bearer token. Visible ASCII without blanks. |
 | `NOTIFY_PAGERDUTY_KEY_FILE` | unset | path | PagerDuty Events API v2 routing key. |
 | `NOTIFY_SMTP_URL_FILE` | unset | path | `smtps://user:pass@host:465` (implicit TLS) or `smtp://user:pass@host:587` (STARTTLS required). |
 | `NOTIFY_SMTP_FROM` | unset | address | Sender of e-mail notifications. |

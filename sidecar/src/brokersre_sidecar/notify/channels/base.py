@@ -98,8 +98,10 @@ class HttpTransport:
         """Send one request and require a 2xx answer.
 
         Raises:
-            DeliveryError: ``timeout``, ``connect`` or ``transport`` (all retryable), or
-                ``http_<status>`` (retryable for 5xx, 408, 425 and 429 only).
+            DeliveryError: ``timeout``, ``connect`` or ``transport`` (all retryable),
+                ``http_<status>`` (retryable for 5xx, 408, 425 and 429 only), or
+                ``invalid_url`` / ``invalid_request`` (final: the request cannot be
+                built, for example a header value outside ASCII).
         """
         try:
             response = await self._client.request(
@@ -118,6 +120,10 @@ class HttpTransport:
             raise DeliveryError("invalid_url", retryable=False) from None
         except httpx.HTTPError:
             raise DeliveryError("transport", retryable=True) from None
+        except UnicodeError:
+            # The request could not be put on the wire at all. The configuration check
+            # refuses such values; this keeps a miss from crashing the channel task.
+            raise DeliveryError("invalid_request", retryable=False) from None
         status = response.status_code
         if _OK_LOW <= status < _OK_HIGH:
             return
