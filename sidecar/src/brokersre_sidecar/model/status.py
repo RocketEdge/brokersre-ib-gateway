@@ -166,7 +166,10 @@ class StatusDocument(_Model):
     clock_skew_s: float | None = Field(description="IBKR time minus host time, seconds")
     close_wait_sockets: int | None = Field(description="Half-closed sockets on the API port")
     zombie: bool
-    in_reset_window: bool = Field(description="Inside a documented IBKR reset window")
+    in_reset_window: bool = Field(
+        description="Inside a reset window of the configured IBKR region; always false "
+        "with IBKR_REGION=none"
+    )
     boot_id: str | None = Field(pattern=r"^[0-9a-f]{16}$")
     boots_30m: int | None
     last_login: Timestamp | None

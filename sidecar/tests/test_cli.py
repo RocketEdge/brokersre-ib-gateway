@@ -89,6 +89,7 @@ def test_check_config_accepts_the_defaults_and_summarises_them() -> None:
     assert "configuration ok" in out
     assert "network mode: own network namespace\n" in out
     assert "probe: enabled, ib-gateway:4004, client id 999" in out
+    assert "reset windows: none (IBKR_REGION=none; API alerts are never held back)\n" in out
     assert "notifier: disabled (no channel configured)" in out
 
 
@@ -343,3 +344,9 @@ def test_check_config_names_the_shared_namespace_mode() -> None:
     assert code == 0
     assert "network mode: shared with the gateway (exits with 75 when orphaned)\n" in out
     assert "probe: enabled, 127.0.0.1:4002, client id 999" in out
+
+
+def test_check_config_names_the_region_whose_reset_windows_apply() -> None:
+    code, out, _ = run_cli("check-config", env={"IBKR_REGION": "asia"})
+    assert code == 0
+    assert "reset windows: asia (IBKR_REGION)\n" in out

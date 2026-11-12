@@ -24,6 +24,7 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     assert settings.instance == "default"
     assert settings.trading_mode == "paper"
     assert settings.gateway_host == "ib-gateway"
+    assert settings.ibkr_region == "none"
     assert settings.shared_namespace() is False
     assert settings.api_port == 4004  # the relay port: reachable from another container
     assert settings.time_zone == "Etc/UTC"
@@ -90,6 +91,7 @@ def test_explicit_values_are_parsed() -> None:
         ({"IBGW_INSTANCE": "has space"}, "IBGW_INSTANCE"),
         ({"IBGW_INSTANCE": "DU1234567"}, "IBGW_INSTANCE"),
         ({"PROBE_ENABLED": "maybe"}, "PROBE_ENABLED"),
+        ({"IBKR_REGION": "antarctica"}, "IBKR_REGION"),
         ({"GATEWAY_HOST": "has space"}, "GATEWAY_HOST"),
         ({"GATEWAY_HOST": "https://ib-gateway"}, "GATEWAY_HOST"),
         ({"EXIT_WHEN_ORPHANED": "maybe"}, "EXIT_WHEN_ORPHANED"),
@@ -346,3 +348,8 @@ def test_exit_when_orphaned_means_nothing_with_an_own_network_namespace() -> Non
     assert settings.shared_namespace() is False
     assert settings.exit_when_orphaned is False
     assert load_settings({"GATEWAY_HOST": "10.0.0.7", "API_PORT": "4012"}).api_port == 4012
+
+
+@pytest.mark.parametrize("region", ["america", "europe", "asia", "none", "Europe"])
+def test_the_ibkr_region_is_one_of_four_words(region: str) -> None:
+    assert load_settings({"IBKR_REGION": region}).ibkr_region == region.lower()

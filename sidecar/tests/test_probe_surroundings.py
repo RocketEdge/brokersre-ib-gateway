@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -71,37 +71,63 @@ def at(zone: str, year: int, month: int, day: int, hour: int, minute: int) -> da
 
 
 @pytest.mark.parametrize(
-    ("instant", "expected"),
+    ("region", "instant", "expected"),
     [
-        (at("America/New_York", 2026, 11, 12, 0, 14), None),
-        (at("America/New_York", 2026, 11, 12, 0, 15), "north_america"),
-        (at("America/New_York", 2026, 11, 12, 1, 44), "north_america"),
-        (at("America/New_York", 2026, 11, 12, 1, 45), None),
-        (at("America/New_York", 2026, 7, 15, 0, 30), "north_america"),  # daylight time
-        # Europe 06:25-07:45 is the same instant as 00:25-01:45 ET for most of the year, so
-        # the North America window names it; the two differ only while the US and the EU
-        # disagree about daylight time (here: mid-March).
-        (at("Europe/Zurich", 2026, 11, 12, 6, 25), "north_america"),
-        (at("Europe/Zurich", 2026, 11, 12, 7, 45), None),
-        (at("Europe/Zurich", 2026, 3, 16, 6, 24), "north_america"),
-        (at("Europe/Zurich", 2026, 3, 16, 7, 40), "europe"),
-        (at("Europe/Zurich", 2026, 3, 16, 7, 45), None),
-        (at("Asia/Hong_Kong", 2026, 11, 12, 4, 45), "asia"),
-        (at("Asia/Hong_Kong", 2026, 11, 12, 6, 5), None),
-        (at("Asia/Hong_Kong", 2026, 11, 12, 20, 15), "asia"),
-        (at("Asia/Hong_Kong", 2026, 11, 12, 21, 14), "asia"),
-        (at("Asia/Hong_Kong", 2026, 11, 12, 21, 15), None),
-        (at("America/New_York", 2026, 11, 14, 0, 5), "saturday"),  # a Saturday
-        (at("America/New_York", 2026, 11, 14, 1, 50), "saturday"),
-        (at("America/New_York", 2026, 11, 14, 2, 0), None),
-        (at("America/New_York", 2026, 11, 13, 0, 5), None),  # a Friday
-        (at("America/New_York", 2026, 11, 12, 10, 0), None),
+        ("america", at("America/New_York", 2026, 11, 12, 0, 14), None),
+        ("america", at("America/New_York", 2026, 11, 12, 0, 15), "north_america"),
+        ("america", at("America/New_York", 2026, 11, 12, 1, 44), "north_america"),
+        ("america", at("America/New_York", 2026, 11, 12, 1, 45), None),
+        ("america", at("America/New_York", 2026, 7, 15, 0, 30), "north_america"),  # daylight time
+        # Another region's window never counts for the chosen one.
+        ("america", at("Europe/Zurich", 2026, 3, 16, 7, 40), None),
+        ("america", at("Asia/Hong_Kong", 2026, 7, 15, 5, 0), None),
+        ("europe", at("Europe/Zurich", 2026, 11, 12, 6, 24), None),
+        ("europe", at("Europe/Zurich", 2026, 11, 12, 6, 25), "europe"),
+        ("europe", at("Europe/Zurich", 2026, 7, 15, 7, 44), "europe"),
+        ("europe", at("Europe/Zurich", 2026, 11, 12, 7, 45), None),
+        # Mid-March the US is on daylight time and Europe is not: 00:20 in New York is
+        # 05:20 in Zurich, outside the Europe window.
+        ("europe", at("America/New_York", 2026, 3, 16, 0, 20), None),
+        # Asia: the published Hong Kong times hold while North America is on daylight time...
+        ("asia", at("Asia/Hong_Kong", 2026, 7, 15, 4, 44), None),
+        ("asia", at("Asia/Hong_Kong", 2026, 7, 15, 4, 45), "asia"),
+        ("asia", at("Asia/Hong_Kong", 2026, 7, 15, 6, 5), None),
+        ("asia", at("Asia/Hong_Kong", 2026, 7, 15, 20, 15), "asia"),
+        ("asia", at("Asia/Hong_Kong", 2026, 7, 15, 21, 15), None),
+        # ...and are one hour later while it is not (the footnote on IBKR's page).
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 4, 45), None),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 5, 45), "asia"),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 7, 4), "asia"),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 7, 5), None),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 20, 15), None),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 21, 15), "asia"),
+        ("asia", at("Asia/Hong_Kong", 2026, 11, 12, 22, 15), None),
+        # The weekly window applies to every region.
+        ("america", at("America/New_York", 2026, 11, 14, 0, 5), "saturday"),  # a Saturday
+        ("europe", at("America/New_York", 2026, 11, 14, 1, 50), "saturday"),
+        ("asia", at("America/New_York", 2026, 11, 14, 0, 0), "saturday"),
+        ("asia", at("America/New_York", 2026, 11, 14, 2, 0), None),
+        ("america", at("America/New_York", 2026, 11, 13, 0, 5), None),  # a Friday
+        # No region: no window at all, not even the weekly one.
+        ("none", at("America/New_York", 2026, 11, 12, 0, 30), None),
+        ("none", at("America/New_York", 2026, 11, 14, 0, 30), None),
+        ("mars", at("America/New_York", 2026, 11, 12, 0, 30), None),
     ],
 )
-def test_reset_windows_follow_the_local_time_of_each_region(
-    instant: datetime, expected: str | None
+def test_reset_windows_follow_the_chosen_region(
+    region: str, instant: datetime, expected: str | None
 ) -> None:
-    assert active_reset_window(instant) == expected
+    assert active_reset_window(instant, region) == expected
+
+
+@pytest.mark.parametrize("region", ["america", "europe", "asia", "none"])
+@pytest.mark.parametrize("month", [1, 7])
+def test_no_region_has_a_window_over_the_us_close(region: str, month: int) -> None:
+    # The reviewer's finding: with fixed Hong Kong times the Asia window covered
+    # 15:45-17:05 New York time in winter, the close included.
+    for minute in range(0, 60, 5):
+        closing = at("America/New_York", 2026, month, 14, 15, 30) + timedelta(minutes=minute)
+        assert active_reset_window(closing, region) is None, closing
 
 
 def test_listeners_other_than_the_sidecars_own_port_are_counted(tmp_path: Path) -> None:

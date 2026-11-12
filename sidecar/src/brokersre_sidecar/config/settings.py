@@ -77,6 +77,8 @@ _TELEGRAM_CHAT_RE = re.compile(r"^(-?\d{1,20}|@[A-Za-z0-9_]{5,32})$")
 _TRUE = frozenset({"yes", "true", "1", "on"})
 _FALSE = frozenset({"no", "false", "0", "off"})
 _LOG_LEVELS = frozenset({"debug", "info", "warn", "warning", "error"})
+# Regions with reset windows (see ``probe.windows``), and ``none``.
+_REGIONS = ("america", "europe", "asia", "none")
 
 
 class ConfigError(Exception):
@@ -112,6 +114,7 @@ class Settings(BaseModel):
     log_level: str
 
     probe_enabled: bool
+    ibkr_region: str
     health_client_id: int
     probe_interval_s: float
     probe_timeout_s: float
@@ -494,6 +497,17 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         state_dir=Path(reader.raw("SIDECAR_STATE_DIR") or DEFAULT_STATE_DIR),
         log_level=log_level,
         probe_enabled=reader.flag("PROBE_ENABLED", True),
+        # No default region: a false alert is better than silence at the close.
+        ibkr_region=(
+            reader.text(
+                "IBKR_REGION",
+                "none",
+                lambda v: (
+                    None if v.lower() in _REGIONS else "must be america, europe, asia or none"
+                ),
+            )
+            or "none"
+        ).lower(),
         # Client id 0 is special in the IB API (it adopts orders placed by hand); the probe
         # must never be that client.
         health_client_id=reader.integer("HEALTH_CLIENT_ID", 999, 1, 2_147_483_647),

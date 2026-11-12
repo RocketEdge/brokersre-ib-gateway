@@ -60,7 +60,8 @@ class ProbeSnapshot:
         close_wait_sockets: Sockets in CLOSE_WAIT on the API port, or None when not
             measurable.
         zombie: True when half-closed API sockets have persisted and the API does not answer.
-        in_reset_window: True inside a documented IBKR reset window, when a disconnect is
+        in_reset_window: True inside a reset window of the configured IBKR region (never
+            with ``IBKR_REGION=none``), when a disconnect is
             normal.
     """
 

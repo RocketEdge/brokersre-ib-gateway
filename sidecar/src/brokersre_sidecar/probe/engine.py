@@ -64,6 +64,8 @@ class ProbeConfig:
         timeout_s: Bound of the handshake and of each round trip.
         login_grace_s: For this long after the phase became ``logged-in``, a connection
             that cannot be opened means "not open yet", not "down".
+        region: The IBKR region whose reset windows apply (``IBKR_REGION``); ``none``
+            means that no time of day is ever reported as a reset window.
         backoff_cap_s: Longest delay between attempts while failing.
         zombie_after_s: Half-closed API sockets must persist this long (and the API must
             not answer) before the gateway is called a zombie.
@@ -77,6 +79,7 @@ class ProbeConfig:
     interval_s: float
     timeout_s: float
     login_grace_s: float = 20.0
+    region: str = "none"
     backoff_cap_s: float = 300.0
     zombie_after_s: float = 300.0
     client_id_retry_s: float = 300.0
@@ -184,7 +187,9 @@ class ProbeEngine:
             clock_skew_s=self._clock_skew_s,
             close_wait_sockets=self._close_wait_count,
             zombie=self._is_zombie(),
-            in_reset_window=active_reset_window(self._clock.now()) is not None,
+            in_reset_window=(
+                active_reset_window(self._clock.now(), self._config.region) is not None
+            ),
         )
 
     def _on_api_error(self, code: int, message: str) -> None:

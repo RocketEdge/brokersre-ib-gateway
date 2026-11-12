@@ -313,7 +313,14 @@ class RuleEngine:
         return _INACTIVE
 
     def _api_unhealthy(self, probe: ProbeSnapshot, now: datetime, mono: float) -> Evaluation:
-        """Active when the API has been unhealthy for long enough outside reset windows."""
+        """Active when the API has been unhealthy for long enough.
+
+        Inside a reset window of the operator's IBKR region a lost link to IBKR is
+        expected and stays undecided. The window excuses only what IBKR's reset can
+        cause: lost connectivity, broken farms, a time request without an answer. It
+        never excuses a Gateway that does not complete the API handshake or sits on
+        half-closed sockets: those are local faults, at any time of day.
+        """
         if probe.status is ProbeStatus.READY:
             self._unhealthy_since = None
             return _INACTIVE
@@ -323,9 +330,11 @@ class RuleEngine:
             already = (now - probe.status_since).total_seconds() if probe.status_since else 0.0
             self._unhealthy_since = mono - max(0.0, already)
         elapsed = mono - self._unhealthy_since
-        if elapsed <= self._config.api_unhealthy_after_s or probe.in_reset_window:
-            # Too early to say, or a disconnect that IBKR's schedule explains.
-            return _UNKNOWN
+        if elapsed <= self._config.api_unhealthy_after_s:
+            return _UNKNOWN  # too early to say
+        local_fault = probe.last_error == "connect_failed" or probe.zombie
+        if probe.in_reset_window and not local_fault:
+            return _UNKNOWN  # a disconnect that IBKR's schedule explains
         return Evaluation(
             _ACTIVE, f"API status {probe.status.value} for {elapsed:.0f} s: {probe.reason}"
         )

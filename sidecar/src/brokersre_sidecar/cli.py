@@ -184,6 +184,10 @@ def _check_config(env: Mapping[str, str], out: TextIO, err: TextIO) -> int:
         )
     else:
         out.write("probe: disabled (PROBE_ENABLED=no)\n")
+    if settings.ibkr_region == "none":
+        out.write("reset windows: none (IBKR_REGION=none; API alerts are never held back)\n")
+    else:
+        out.write(f"reset windows: {settings.ibkr_region} (IBKR_REGION)\n")
     out.write(f"endpoints: {settings.bind}:{settings.port}\n")
     channels = settings.configured_channels()
     if channels:

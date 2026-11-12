@@ -141,6 +141,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `SIDECAR_PORT` | `9810` | port | Port of the endpoints. Publish it on the `ib-gateway` service. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Verbosity of the JSON log on stdout. |
 | `PROBE_ENABLED` | `yes` | `yes`, `no` | `no` turns the API probe off; the status is then always `not_measured`. |
+| `IBKR_REGION` | `none` | `america`, `europe`, `asia`, `none` | The IBKR region that serves the account. Inside that region's [reset windows](#ibkr-reset-windows) a lost IBKR link does not raise `api_unhealthy`. `none`: no window, every outage alerts. |
 | `HEALTH_CLIENT_ID` | `999` | 1 to 2147483647 | API client id reserved for the probe. No other API client may use it. |
 | `PROBE_INTERVAL_S` | `60` | 5 to 3600 | Seconds between time round trips while healthy. |
 | `PROBE_TIMEOUT_S` | `10` | 1 to 60 | Bound of the handshake and of each round trip. |

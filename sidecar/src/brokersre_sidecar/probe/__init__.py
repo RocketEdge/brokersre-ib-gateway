@@ -17,9 +17,15 @@ from brokersre_sidecar.probe.protocol import (
 )
 from brokersre_sidecar.probe.sockets import count_close_wait, count_foreign_listeners
 from brokersre_sidecar.probe.tracker import ApiConditionTracker, farm_name
-from brokersre_sidecar.probe.windows import RESET_WINDOWS, ResetWindow, active_reset_window
+from brokersre_sidecar.probe.windows import (
+    REGIONS,
+    RESET_WINDOWS,
+    ResetWindow,
+    active_reset_window,
+)
 
 __all__ = [
+    "REGIONS",
     "RESET_WINDOWS",
     "ApiConditionTracker",
     "ErrorListener",

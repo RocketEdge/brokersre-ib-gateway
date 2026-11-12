@@ -27,6 +27,7 @@ class Harness:
         host: str = "127.0.0.1",
         port: int = 4002,
         grace: float = 0.0,
+        region: str = "none",
     ) -> None:
         self.clock = FakeClock(start) if start is not None else FakeClock()
         self.ib = FakeIb(self.clock)
@@ -41,6 +42,7 @@ class Harness:
                 interval_s=INTERVAL,
                 timeout_s=TIMEOUT,
                 login_grace_s=grace,
+                region=region,
             ),
             self.ib,
             self.clock,
@@ -285,9 +287,12 @@ async def test_close_wait_that_cannot_be_read_is_reported_as_not_measured() -> N
 
 async def test_the_reset_window_flag_follows_the_ibkr_schedule() -> None:
     # 2026-11-12 05:30 UTC is 00:30 in New York: inside the North America window.
-    inside = Harness(start=datetime(2026, 11, 12, 5, 30, tzinfo=UTC))
-    assert inside.engine.snapshot().in_reset_window is True
-    assert Harness().engine.snapshot().in_reset_window is False
+    night = datetime(2026, 11, 12, 5, 30, tzinfo=UTC)
+    assert Harness(start=night, region="america").engine.snapshot().in_reset_window is True
+    assert Harness(start=night, region="asia").engine.snapshot().in_reset_window is False
+    # Without a region nothing is ever excused.
+    assert Harness(start=night).engine.snapshot().in_reset_window is False
+    assert Harness(region="america").engine.snapshot().in_reset_window is False
 
 
 async def test_status_since_moves_only_when_the_status_changes() -> None:

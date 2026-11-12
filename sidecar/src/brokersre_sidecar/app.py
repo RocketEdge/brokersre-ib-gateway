@@ -192,6 +192,7 @@ class Application:
                 client_id=settings.health_client_id,
                 interval_s=settings.probe_interval_s,
                 timeout_s=settings.probe_timeout_s,
+                region=settings.ibkr_region,
             ),
             ib_client if ib_client is not None else _default_ib_client(settings.probe_enabled),
             self._clock,

@@ -439,3 +439,30 @@ def test_a_missing_phase_file_and_an_unknown_token_are_named_as_such() -> None:
     assert details(gateway=unknown)[AlertClass.VOLUME_MISSING] == (
         f"the phase file holds a token this sidecar does not know for 600 s; {BLIND}"
     )
+
+
+def unhealthy(**fields: object) -> dict[str, object]:
+    """A probe that has been unhealthy for ten minutes inside a reset window."""
+    return {
+        "status": ProbeStatus.DOWN,
+        "status_since": T0 - timedelta(minutes=10),
+        "last_probe_ok": False,
+        "in_reset_window": True,
+    } | fields
+
+
+def test_a_reset_window_excuses_a_lost_ibkr_link() -> None:
+    degraded = unhealthy(status=ProbeStatus.DEGRADED, last_probe_ok=True, last_error=None)
+    assert evaluate(probe=degraded)[AlertClass.API_UNHEALTHY] is UNKNOWN
+    assert evaluate(probe=unhealthy(last_error="timeout"))[AlertClass.API_UNHEALTHY] is UNKNOWN
+    outside = degraded | {"in_reset_window": False}
+    assert evaluate(probe=outside)[AlertClass.API_UNHEALTHY] is ACTIVE
+
+
+def test_a_reset_window_never_excuses_a_gateway_that_refuses_the_handshake() -> None:
+    # IBKR's reset cuts the link between the Gateway and IBKR. It does not stop the
+    # Gateway from accepting API clients: a handshake that fails is a local fault.
+    refused = unhealthy(last_error="connect_failed")
+    assert evaluate(probe=refused)[AlertClass.API_UNHEALTHY] is ACTIVE
+    zombie = unhealthy(last_error="timeout", zombie=True)
+    assert evaluate(probe=zombie)[AlertClass.API_UNHEALTHY] is ACTIVE

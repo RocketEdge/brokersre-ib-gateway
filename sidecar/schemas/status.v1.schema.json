@@ -526,7 +526,7 @@
       "type": "string"
     },
     "in_reset_window": {
-      "description": "Inside a documented IBKR reset window",
+      "description": "Inside a reset window of the configured IBKR region; always false with IBKR_REGION=none",
       "title": "In Reset Window",
       "type": "boolean"
     },
