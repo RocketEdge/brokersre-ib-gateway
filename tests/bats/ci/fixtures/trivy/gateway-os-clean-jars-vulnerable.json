@@ -1,0 +1,190 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:33:06.40895208Z",
+  "ArtifactName": "/scan/ibgw-p1.tar",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "ubuntu",
+      "Name": "26.04"
+    }
+  },
+  "Results": [
+    {
+      "Target": "/scan/ibgw-p1.tar (ubuntu 26.04)",
+      "Class": "os-pkgs",
+      "Type": "ubuntu"
+    },
+    {
+      "Target": "Java",
+      "Class": "lang-pkgs",
+      "Type": "jar",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2025-52999",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.15.0",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: jackson-core Potential StackoverflowError"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-68494",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 2.21.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: tools.jackson.core/jackson-core: jackson-core: Denial of Service via incomplete fix in async JSON parser"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-89425",
+          "PkgName": "com.fasterxml.jackson.core:jackson-core",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-core-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-core@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.21.7, 2.22.3, 2.18.11",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-core: Jackson-core: Denial of Service via unbounded StringBuilder growth during malformed token processing"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-36518",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.13.2.1, 2.12.6.1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: denial of service via a large depth of nested objects"
+        },
+        {
+          "VulnerabilityID": "CVE-2021-46877",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.6, 2.13.1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: Possible DoS if using JDK serialization to serialize JsonNode"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-42003",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.7.1, 2.13.4.2",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: deep wrapper array nesting wrt UNWRAP_SINGLE_VALUE_ARRAYS"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-42004",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.12.7.1, 2.13.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: use of deeply nested arrays"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54512",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 3.1.4, 2.21.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: jackson-databind: Arbitrary code execution via PolymorphicTypeValidator bypass"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-54513",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.8, 2.21.4, 3.1.4",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: Jackson-databind: Security bypass allows arbitrary code execution"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-91776",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.18.11, 2.21.7, 2.22.3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "jackson-databind: com.fasterxml.jackson/jackson-core: jackson-databind: Denial of Service via unbounded cache growth in TypeDeserializerBase"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-91777",
+          "PkgName": "com.fasterxml.jackson.core:jackson-databind",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/jackson-databind-2.12.3.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.12.3"
+          },
+          "InstalledVersion": "2.12.3",
+          "FixedVersion": "2.21.7, 2.18.11, 2.22.3",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "com.fasterxml.jackson.core/jackson-databind: tools.jackson.core:jackson-databind: Jackson-databind: Denial of Service via quadratic forward-reference completion"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-47554",
+          "PkgName": "commons-io:commons-io",
+          "PkgPath": "home/ibgateway/Jts/ibgateway/10.50.1g/jars/commons-io-2.11.0.jar",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/commons-io/commons-io@2.11.0"
+          },
+          "InstalledVersion": "2.11.0",
+          "FixedVersion": "2.14.0",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "apache-commons-io: Possible denial of service attack on untrusted input to XmlStreamReader"
+        }
+      ]
+    },
+    {
+      "Target": "usr/bin/pebble",
+      "Class": "lang-pkgs",
+      "Type": "gobinary"
+    }
+  ]
+}

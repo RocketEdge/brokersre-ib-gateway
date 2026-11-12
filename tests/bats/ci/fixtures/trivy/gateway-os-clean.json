@@ -1,0 +1,22 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.2"
+  },
+  "CreatedAt": "2026-11-12T02:33:01.136488799Z",
+  "ArtifactName": "/scan/ibgw-p1.tar",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "ubuntu",
+      "Name": "26.04"
+    }
+  },
+  "Results": [
+    {
+      "Target": "/scan/ibgw-p1.tar (ubuntu 26.04)",
+      "Class": "os-pkgs",
+      "Type": "ubuntu"
+    }
+  ]
+}
