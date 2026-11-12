@@ -22,7 +22,8 @@
 | `TWS_MASTER_CLIENT_ID` | empty | integer | IBC `OverrideTwsMasterClientID`. |
 | `IBC_COMMAND_SERVER_PORT` | `7462` | port, `0` | IBC command server bound to `127.0.0.1`; `0` disables. |
 | `IBC_SUPPRESS_INFO_MESSAGES` | `no` | `yes`, `no` | IBC `SuppressInfoMessages`; `no` keeps the lines the classifier needs. |
-| `VNC_SERVER_PASSWORD`, `VNC_SERVER_PASSWORD_FILE` | unset | string / path | Enables x11vnc on `127.0.0.1:5900` (break-glass). Unset keeps VNC off. |
+| `VNC_SERVER_PASSWORD`, `VNC_SERVER_PASSWORD_FILE` | unset | string / path | Enables x11vnc on `127.0.0.1:5900` (break-glass). Unset keeps VNC off. Prefer `_FILE`. How to reach it and when to use it: [console.md](console.md). |
+| `VNC_VIEW_ONLY` | `yes` | `yes`, `no` | The break-glass console is view-only (x11vnc `-viewonly`): a person can look but not click or type. `no` allows input, for the moment a person must dismiss a dialog or type a code by hand. Read only when a VNC password is set; any other value then stops the start (`config_invalid`) before a login is attempted. Every client that connects or leaves is an event (`vnc_client_connected`, `vnc_client_disconnected`). |
 | `CUSTOM_CONFIG` | `no` | `yes`, `no` | `yes`: use an operator-mounted `/run/brokersre/config.ini`; nothing is rendered. |
 | `IBC_LAUNCH` | `yes` | `yes`, `no` | `no`: start Xvfb, relay and log mirror but not IBC (offline tests). |
 | `SOCAT_RESTART_DELAY` | `5` | seconds | Pause before the relay is restarted after it exits. |
