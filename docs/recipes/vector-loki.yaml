@@ -1,0 +1,94 @@
+# Vector recipe: the gateway's events and resource samples to Grafana Loki.
+#
+# Reads events/events.jsonl and metrics/metrics.jsonl from the gateway's log volume, mounted
+# read-only (docs/log-contract.md). Never the raw IBC or Gateway logs under ibc/ and jts/:
+# those can contain the IBKR username and stay on the host.
+#
+# Image: the Vector image pinned by digest in docker-compose.vector.yml.
+# Validated: `vector validate` and an offline run against a stand-in receiver
+# (tests/recipes/run.sh). Not validated: delivery to a real Loki. See README.md.
+#
+# Before use, edit in a copy of this file:
+#   - `endpoint:` of the sink, the base URL of your Loki;
+#   - the label `instance:` when you run several gateways (one value per gateway).
+# Credentials are read from files, never written here:
+#   /run/secrets/loki_username, /run/secrets/loki_password   (basic authentication)
+# For a Loki without authentication delete the `auth:` block and the `secret:` block.
+# For a multi-tenant Loki add `tenant_id: <tenant>` to the sink.
+# No environment variable is read: this Vector version expands `${...}` only when it is
+# started with a flag whose name begins with "dangerously", and the recipes do not need it.
+
+# Checkpoints (how far each file was read) live here; without a volume every new container
+# re-reads the files from the beginning. /var/tmp and not Vector's usual /var/lib/vector: the
+# shipper runs as a non-root user, a new volume takes owner and mode from the image directory
+# it is mounted over, and in this image only /var/tmp is writable for such a user.
+data_dir: /var/tmp
+
+# Secrets come from files, one file per secret (Docker secrets).
+secret:
+  files:
+    type: directory
+    path: /run/secrets
+    remove_trailing_whitespace: true
+
+sources:
+  gateway_files:
+    type: file
+    # The live file and its rotated generations (.1, .2, .3): a line that was rotated away
+    # while Vector was down is still read. Files are told apart by a checksum of their first
+    # line, so a renamed generation is not read twice.
+    include:
+      - /var/log/ibgateway/events/events.jsonl*
+      - /var/log/ibgateway/metrics/metrics.jsonl*
+    read_from: beginning
+    oldest_first: true
+
+transforms:
+  gateway_lines:
+    type: remap
+    inputs: [gateway_files]
+    # A line that is not a JSON object (a line cut short by a crash) is dropped, never shipped
+    # half; Vector counts it in component_discarded_events_total.
+    drop_on_error: true
+    drop_on_abort: true
+    source: |
+      parsed, err = parse_json(.message)
+      if err != null || !is_object(parsed) {
+        abort
+      }
+      parsed = object!(parsed)
+      # The event's own time, not the time Vector read the line.
+      parsed_ts, ts_err = parse_timestamp(parsed.ts, "%+")
+      if ts_err == null {
+        .timestamp = parsed_ts
+      }
+      .stream = "events"
+      if contains(string!(.file), "/metrics/") {
+        .stream = "metrics"
+      }
+      .src = to_string(parsed.src) ?? "unknown"
+      # Resource samples carry no level; they are labelled info.
+      .level = to_string(parsed.level) ?? "info"
+
+sinks:
+  loki:
+    type: loki
+    inputs: [gateway_lines]
+    endpoint: "https://loki.example.internal:3100"
+    # The log line is the gateway's JSON line, unchanged; query it with `| json`.
+    encoding:
+      codec: raw_message
+    # A few values with few distinct members. Never boot_id, seq or an event's data.
+    labels:
+      job: ibgateway
+      instance: default
+      stream: "{{ stream }}"
+      src: "{{ src }}"
+      level: "{{ level }}"
+    auth:
+      strategy: basic
+      user: "SECRET[files.loki_username]"
+      password: "SECRET[files.loki_password]"
+    # The file position is saved only after Loki took the lines: at-least-once.
+    acknowledgements:
+      enabled: true

@@ -1,0 +1,67 @@
+# Stand-in receivers for tests/recipes/run.sh: one Vector that accepts what the three recipes
+# send and writes it to files the test can read. None of it is the real service:
+#   - OTLP over HTTP on 4318: Vector's own OTLP receiver (opentelemetry source), which decodes
+#     the protobuf records; the Authorization header is kept so the test can see the token
+#     from the secret file;
+#   - Loki on 3100: an HTTP server that accepts POST /loki/api/v1/push and answers 200. Vector
+#     removes the request's snappy compression itself; what remains is Loki's protobuf push
+#     body, in which the label set and the log lines are readable text. It is written as it
+#     came, with the Authorization header;
+#   - Datadog on 8080: an HTTP server that accepts POST /api/v2/logs and parses the JSON array
+#     of logs, one output line per log, with the DD-API-KEY header. (Vector's own datadog_agent
+#     source is not used: it accepts the agent's fixed fields only, while the logs intake and
+#     the recipe carry further attributes.)
+# Nothing here leaves the test network, and every credential is an obvious fake.
+data_dir: /var/tmp
+
+sources:
+  otlp_in:
+    type: opentelemetry
+    grpc:
+      address: 0.0.0.0:4317
+    http:
+      address: 0.0.0.0:4318
+      headers:
+        - Authorization
+  loki_in:
+    type: http_server
+    address: 0.0.0.0:3100
+    path: /loki/api/v1/push
+    strict_path: true
+    method: POST
+    headers:
+      - Authorization
+    decoding:
+      codec: bytes
+    framing:
+      method: bytes
+  datadog_in:
+    type: http_server
+    address: 0.0.0.0:8080
+    path: /api/v2/logs
+    strict_path: true
+    method: POST
+    headers:
+      - DD-API-KEY
+    decoding:
+      codec: json
+
+sinks:
+  otlp_out:
+    type: file
+    inputs: [otlp_in.logs]
+    path: /var/tmp/otlp.jsonl
+    encoding:
+      codec: json
+  loki_out:
+    type: file
+    inputs: [loki_in]
+    path: /var/tmp/loki.jsonl
+    encoding:
+      codec: json
+  datadog_out:
+    type: file
+    inputs: [datadog_in]
+    path: /var/tmp/datadog.jsonl
+    encoding:
+      codec: json

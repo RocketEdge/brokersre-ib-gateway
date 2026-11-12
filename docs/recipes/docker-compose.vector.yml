@@ -1,0 +1,50 @@
+# Log shipper for a gateway: Vector with one of the recipes in this folder, as a compose
+# project of its own next to the gateway's. From the repository folder, after you copied a
+# recipe and edited its endpoint (README.md in this folder):
+#
+#   VECTOR_CONFIG=./my-vector-loki.yaml docker compose -f docs/recipes/docker-compose.vector.yml up -d
+#
+# It reads the gateway's log volume read-only and its own secret files, publishes no port and
+# needs no access to the gateway container. Relative paths are relative to this folder.
+# This file is started as shipped by tests/recipes/run.sh.
+services:
+  log-shipper:
+    # The one place in this repository where Vector's version is written; the recipes were
+    # validated with exactly this image.
+    image: timberio/vector:0.61.0-alpine@sha256:3bb7ed5152910ed51729e256937b1d8a4bf67ff624e9d565e8e5877bffd015c7
+    restart: unless-stopped
+    command: ["--config", "/etc/vector/vector.yaml"]
+    # The image's default user is root; nothing here needs it.
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: ${VECTOR_MEM_LIMIT:-256m}
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ${VECTOR_CONFIG:-./vector-loki.yaml}:/etc/vector/vector.yaml:ro
+      # One file per secret, named as the recipe says (loki_password, otlp_token, ...). A
+      # folder of its own: the shipper must never see the gateway's IBKR credentials, so do
+      # not point this at compose/secrets itself.
+      - ${VECTOR_SECRETS_DIR:-../../compose/secrets/vector}:/run/secrets:ro
+      # The gateway's log volume, read-only.
+      - ibgw-logs:/var/log/ibgateway:ro
+      # Vector's data directory (the recipes' data_dir): the checkpoints. Without this volume
+      # every new container reads the files from the start. A new volume takes owner and mode
+      # from the directory it is mounted over; /var/tmp is the one a non-root user can write.
+      - vector-data:/var/tmp
+
+volumes:
+  ibgw-logs:
+    external: true
+    # The reference compose started from compose/ names its volume compose_ibgw-logs;
+    # `docker volume ls` shows yours.
+    name: ${IBGW_LOGS_VOLUME:-compose_ibgw-logs}
+  vector-data:
