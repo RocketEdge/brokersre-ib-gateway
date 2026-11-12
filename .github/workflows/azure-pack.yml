@@ -45,13 +45,17 @@ jobs:
           az bicep version
       - name: Vector validate and VRL unit tests (the pinned image), entrypoint refusals
         run: azure/tests/run.sh vector entrypoint
-      - name: Shipper on fixtures (real container, no network) and schema drift against the compiled Bicep
+      - name: Shipper on lines of a real gateway run (real container, no network) and schema drift against the compiled Bicep
         run: azure/tests/run.sh pipeline drift
-      - name: Bicep build and lint, parameter files, compiled-template checks
+      - name: Bicep build and lint, parameter files, compiled-template checks (roles, network rules, userData)
         run: azure/tests/run.sh bicep
-      - name: KQL static analysis of alert rules, query pack and workbook
+      # Static analysis only: the queries and the scenario timelines are type-checked against
+      # the deployed schema. Executing them (group kql-run) needs Microsoft's Kusto emulator,
+      # whose licence terms must be accepted first (KUSTO_EMULATOR_EULA=accept); that is a
+      # decision for the repository owner, so it is not set here and the group is not run.
+      - name: KQL static analysis of alert rules, query pack, workbook and scenario timelines
         run: azure/tests/run.sh kql
       - name: Compose config of the override
         run: azure/tests/run.sh compose
-      - name: fetch-secrets.sh with a fake curl; shellcheck, shfmt, YAML/JSON, actionlint
+      - name: The VM's host scripts with fake curl, docker and git; shellcheck, shfmt, YAML/JSON, actionlint
         run: azure/tests/run.sh secrets lint
