@@ -24,6 +24,8 @@ bash azure/tests/run.sh [group...]                                              
 docker build -t brokersre-ib-gateway-sidecar:dev sidecar
 IMAGE=brokersre-ib-gateway-sidecar:dev sidecar/tests/container/run.sh                    # sidecar smoke suite (SMOKE_TIMEOUT_SCALE=5 for an emulated arm64 image)
 sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev                # gateway + sidecar on an internal network; never contacts IBKR
+pwsh -NoProfile -Command "Invoke-Pester windows/tests" ; powershell -NoProfile -Command "Invoke-Pester windows/tests"   # Windows kit, Pester 6.2.0, under BOTH PowerShell 7 and Windows PowerShell 5.1
+pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # PSScriptAnalyzer 1.25.0, 0 findings
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
 scripts/qualify-paper.sh --image <ref> --secrets-dir <dir>                               # ONE real paper login (operator-run, never in CI; the container suite runs it offline)
 pre-commit run --all-files
@@ -41,7 +43,10 @@ All of these must be green before claiming a change done; run them fresh.
    `compose/docker-compose.azure.yml`, repeated as the default of `vectorImage` in
    `azure/bicep/vm.bicep`; `azure/tests/run.sh` fails when the two differ. The sidecar image
    names its two base images by digest in the `FROM` lines of `sidecar/Dockerfile` (not in an
-   `ARG`: Dependabot cannot see those) and its Python dependencies in `sidecar/uv.lock`.
+   `ARG`: Dependabot cannot see those) and its Python dependencies in `sidecar/uv.lock`. The
+   Windows kit pins a `busybox` image by digest for two host-side probes in the one constant
+   `$script:GwProbeImage` (`windows/src/Checks.ps1`); `windows/tests/Kit.Tests.ps1` fails on a
+   second copy.
 2. **No credentials anywhere**: not in this repository, not in image layers, not in stdout, not
    in `ps`. Secrets enter via `_FILE`, land only in tmpfs `config.ini` (0600), and are unset
    before children start. `tests/container/run.sh` checks PID 1's environment and the log volume.
@@ -51,7 +56,10 @@ All of these must be green before claiming a change done; run them fresh.
    output goes to `/var/log/ibgateway/{ibc,jts}`; the phase file is
    `/var/log/ibgateway/state/phase`; resource samples go to `metrics/metrics.jsonl`. Changing a
    key, a phase, an event name or a path is a contract version bump coordinated with every
-   consumer (the sidecar, the Azure pack, the BrokerSRE agent).
+   consumer (the sidecar, the Azure pack, the Windows kit, the BrokerSRE agent). The Windows
+   kit reads the phase tokens and the events `login_failed`, `login_failed_dialog` and
+   `login_rejected_latched`; `windows-kit.yml` runs when `ibc-patterns.tsv` or
+   `docs/log-contract.md` change, and a kit test fails on a phase it does not know.
 4. **No sudo, no SSH/telnet, uid 1000, read-only root filesystem supported.** Adding a package
    needs a reason in the ADR log.
 5. **One brokerage session per container** (`TRADING_MODE` is `live` or `paper`, never `both`).
@@ -116,7 +124,8 @@ azure/                                                Log Analytics pack: bicep/
 compose/docker-compose.azure.yml                      the shipper next to the gateway (profiles azure, azure-cert); Vector pinned by digest
 sidecar/                                              optional second image (Python 3.14, uv): API probe, /livez /readyz /status /metrics, notifier; src/, tests/ (unit, container/, e2e/), schemas/status.v1.schema.json, Dockerfile, README.md (ADR 0010, docs/sidecar.md)
 compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
-.github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
+windows/                                              host kit for Windows 10/11: setup, doctor, harden, start, uninstall (.ps1) over BrokerSre.Gateway.psm1 + src/{Native,Core,Secrets,Stack,Checks,Harden,Commands}.ps1; templates/compose.yaml.tmpl; tests/ (Pester); README.md (ADR 0011)
+.github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md, upgrade-policy.md, migrating-from-gnzsnz.md, adr/
 ```
 
@@ -239,3 +248,20 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   digest (`scripts/platform-digests.sh`) or `--platform`, and check the result
   (`scripts/check-report-arch.sh`). The CI-script suite must also pass under gawk (the GitHub
   runner), not only under the image's mawk.
+- Windows kit: sources are ASCII and avoid `&&`, `??` and the ternary (Windows PowerShell 5.1).
+  Every external command goes through one wrapper in `windows/src/Native.ps1` so Pester can mock
+  it. After adding a function, add it to `FunctionsToExport` in `BrokerSre.Gateway.psd1` (a test
+  compares the list). The folder is `src`, not `lib`: a common global gitignore excludes `lib`.
+- Windows kit: `docker compose up -d` does not recreate a container when only a secret file's
+  content changed (measured 2026-11-12); setup passes `--force-recreate` after writing credentials.
+- Windows kit: never use `Set-Acl` on a folder with inheritance off (it needs
+  SeSecurityPrivilege); use `DirectoryInfo.SetAccessControl` (5.1) or
+  `FileSystemAclExtensions.SetAccessControl` (7), as `Protect-GwSecretFolder` does.
+- Windows kit: `wsl -d <distro> --exec docker ...`, never `wsl -- docker ...`; with `--` the
+  line goes through the Linux shell and `|` in a format string becomes a pipe.
+- Windows kit: a command that times out is ended with its whole process tree
+  (`Invoke-GwProcessTreeKill`); `Process.Kill()` alone leaves `docker-compose.exe` running.
+- Windows kit: `harden.ps1 -Undo` acts only on journal entries the harden functions can write
+  (`Get-GwJournalEntryProblem`). A new kind of host change needs its allow-list entry and a test.
+  A new folder under `C:\` is writable by every local user: the kit closes its gateway folder
+  before writing anything into it.

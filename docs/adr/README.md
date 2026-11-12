@@ -12,13 +12,12 @@
 | [0008](0008-tagging-and-rebuild-policy.md) | Tagging: channel + version tags, no Docker latest, monthly -rDATE rebuilds | Accepted (2026-11-01) |
 | [0009](0009-stable-updates-merge-themselves.md) | Stable IB Gateway updates merge themselves; latest and re-uploads stay human | Accepted (2026-11-11) |
 | [0010](0010-sidecar-for-probe-status-and-alerts.md) | A separate sidecar image for the API probe, the status API and alerts | Proposed (2026-11-12) |
+| [0011](0011-windows-host-kit.md) | Windows host kit: Linux containers only, two start modes, file secrets, reversible host changes | Proposed (2026-11-12) |
 | [0012](0012-azure-log-analytics-pack.md) | Azure Log Analytics pack: Vector on the host, a Direct data collection rule, redaction before shipping | Proposed (2026-11-12) |
 | [0013](0013-log-contract-v2-needs-human-gated-relay.md) | Log contract v2: events on the volume, a `needs-human` phase and a relay that follows the login | Accepted (2026-11-12) |
 | [0014](0014-paper-login-qualification.md) | A paper-login qualification that is not a test: one attended login, behind a reviewer | Accepted (2026-11-12) |
 | [0015](0015-login-controller-succession.md) | Login controller succession: stay on the IBC fork behind a narrow contract | Proposed (2026-11-12) |
 | [0016](0016-rejected-login-latch.md) | A rejected login is not repeated: the latch on the log volume | Accepted (2026-11-12) |
-
-Number 0011 belongs to a record that arrives with its own change (the Windows host kit).
 
 Template: Status, Context (with sources), Decision, Consequences (positive and negative),
 Revisit trigger. Never renumber or delete; supersede with a new record.

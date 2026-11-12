@@ -79,3 +79,9 @@
 - [ ] First runs of the changed workflows (start with `rebuild.yml`, mode `scan`); record the run ids (L24)
 - [ ] A tested registry cleanup after a failed gate (L23); sign the platform manifests too
 - [ ] Decide about `/usr/bin/pebble` (L22); re-attest the VEX without a rebuild
+
+## Roadmap P3: Windows host kit (2026-11-12, branch `feat/windows-kit`)
+
+- [x] `windows/`: `setup.ps1`, `doctor.ps1`, `harden.ps1` (reversible), `start.ps1`, `uninstall.ps1`; both PowerShell editions; ADR 0011; two independent reviews fixed before the pull request
+- [ ] Validate on a second computer: Docker Engine in WSL end to end, the boot task without sign-in, a real login, the clock fix after a real resume (`windows/README.md`, "To validate on your computer")
+- [ ] First run of `windows-kit.yml` on a GitHub runner

@@ -5,6 +5,45 @@ Next step.
 
 ## Change History
 
+### 2026-11-12 — Windows host kit (`windows/`), with two review rounds fixed before the pull request
+
+- **What changed:** new `windows/` directory: `setup.ps1`, `doctor.ps1`, `harden.ps1`,
+  `start.ps1`, `uninstall.ps1` over the module `BrokerSre.Gateway` (Windows PowerShell 5.1 and
+  PowerShell 7), a compose template, Pester tests, `windows-kit.yml`, ADR 0011.
+- **Result:** the Pester suite passes under both editions and PSScriptAnalyzer is clean
+  (counts in the pull request). Read-only runs on one Windows 11 computer with Docker Desktop:
+  `doctor` reports, `setup -NoStart` produces a compose file that `docker compose config`
+  accepts, and a before/after fingerprint of power, Windows Update policy, `.wslconfig`,
+  tasks, firewall and auto-logon is unchanged. No gateway was started with the kit.
+- **What did NOT work / root cause:**
+  - *A rejected login was noticed only while `setup.ps1` was watching*, so after a password
+    change the restart policy or the start task sent the same credentials at every start.
+    `start.ps1` and `setup.ps1` now look back to the container's start time, record the
+    rejection and stop the stack; the image's own latch (ADR 0016) closes the window between
+    two runs of the kit, which two scripts cannot close.
+  - *`uninstall.ps1 -RemoveData` deleted its own state when Docker was down* and orphaned the
+    container and volumes; files are now deleted last and only when every earlier step worked.
+  - *`harden.ps1 -Undo` exited 0 with changes still in place.*
+  - *The default gateway folder under `C:\` was writable by every local user*, and the
+    elevated undo replayed whatever the journal said; the folder is closed before anything is
+    written into it and undo accepts only entries the kit can write.
+  - *A timed-out `docker compose up` left `docker-compose.exe` running*: `Process.Kill()` ends
+    one process, not its children.
+  - *`docker compose up -d` does not recreate a container when only a secret file's content
+    changed* (measured), so `-ResetSecrets` reported "Logged in" without trying the new
+    values; it now passes `--force-recreate`.
+  - *`wsl --` runs its arguments through the Linux shell* (a `|` in a format string became a
+    pipe); *`Set-Acl` needs SeSecurityPrivilege on an already protected folder*; the
+    NetSecurity cmdlets needed minutes under 5.1 for what the firewall COM API answers in
+    0.3 s.
+  - *Five tests passed whatever the code did* (a mocked subject, an empty loop, `>= 0`, a
+    regex nobody would trip); they were replaced and checked by breaking the code.
+  - Not established: Docker Engine inside WSL end to end, the boot task without sign-in, any
+    task registration, a real login and a real rejected login, the clock fix after a real
+    resume, the workflow on a GitHub runner.
+- **Next step:** validate on a second computer what could not be proven here; first run of
+  `windows-kit.yml`.
+
 ### 2026-11-12 — Supply chain: both platforms gated on the pushed digest, fix-driven rebuilds, VEX for the vendor jars
 
 - **What changed:** `publish.yml` builds both platforms once without a cache, pushes the index

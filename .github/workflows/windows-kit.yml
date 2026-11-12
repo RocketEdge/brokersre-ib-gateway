@@ -1,0 +1,88 @@
+# Tests and lints the Windows host kit (windows/) on a Windows runner, under both PowerShell
+# editions the kit supports: Windows PowerShell 5.1 (what a trader's computer has) and
+# PowerShell 7. No IBKR credentials exist here and nothing logs in: docker, wsl, schtasks,
+# powercfg, the registry and the firewall are mocked, apart from a few read-only calls.
+name: Windows kit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "windows/**"
+      # The image contract the kit reads: phase tokens and event names.
+      - "rootfs/etc/brokersre/ibc-patterns.tsv"
+      - "docs/log-contract.md"
+      - ".github/workflows/windows-kit.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+      # The image contract the kit reads: phase tokens and event names.
+      - "rootfs/etc/brokersre/ibc-patterns.tsv"
+      - "docs/log-contract.md"
+      - ".github/workflows/windows-kit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-kit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PESTER_VERSION: "6.2.0"
+  PSSCRIPTANALYZER_VERSION: "1.25.0"
+
+jobs:
+  pester:
+    name: Pester (${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # powershell = Windows PowerShell 5.1, pwsh = PowerShell 7.
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        # The matrix context is available in a job's defaults, not in a step's own 'shell' key.
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install Pester
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          if ($PSVersionTable.PSEdition -eq 'Desktop') { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null }
+          Install-Module -Name Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Run the tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module -Name Pester -RequiredVersion $env:PESTER_VERSION
+          '{0} {1}, Pester {2}' -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, (Get-Module Pester).Version
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'windows/tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
+  analyze:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+      - name: Analyze
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
+          $findings = @(Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1 -ErrorVariable ruleErrors -ErrorAction SilentlyContinue)
+          $findings | ForEach-Object { '{0}:{1} [{2}/{3}] {4}' -f $_.ScriptName, $_.Line, $_.Severity, $_.RuleName, $_.Message }
+          $ruleErrors | ForEach-Object { 'RULE ERROR: {0} {1}' -f $_.TargetObject, $_.Exception.Message }
+          'findings: {0}, rule errors: {1}' -f $findings.Count, $ruleErrors.Count
+          if ($findings.Count -gt 0 -or $ruleErrors.Count -gt 0) { exit 1 }
