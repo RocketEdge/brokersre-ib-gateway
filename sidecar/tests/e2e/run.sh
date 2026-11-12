@@ -12,6 +12,12 @@
 # Usage: sidecar/tests/e2e/run.sh <gateway image> <sidecar image>
 # Exit code: the number of failed checks.
 set -uo pipefail
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a secret is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
 # Git Bash on Windows rewrites POSIX-looking arguments into Windows paths; keep docker's
 # container-side paths literal and convert only host paths explicitly (no-op on Linux).
 export MSYS_NO_PATHCONV=1
@@ -112,7 +118,7 @@ wait_for() { # seconds command...
 # shellcheck disable=SC2329  # the next three are invoked through wait_for
 livez_ok() { [[ "$(get /livez)" == 200* ]]; }
 # shellcheck disable=SC2329
-receiver_got() { docker logs "${RC}" 2>&1 | grep -q "$1"; }
+receiver_got() { docker logs "${RC}" 2>&1 | quiet_grep "$1"; }
 # shellcheck disable=SC2329
 gateway_stopped() { [ "$(docker inspect -f '{{.State.Status}}' "${GW}")" = "exited" ]; }
 count_received() { docker logs "${RC}" 2>&1 | grep -c "$1"; }
@@ -142,7 +148,7 @@ else
   fail "metrics" "$(grep -E '^ibgw_(memory|phase)' <<<"${metrics}" | head -5)"
 fi
 if grep -q '^ibgw_api_rtt_seconds ' <<<"${metrics}"; then fail "metrics absence" "a round-trip time is reported although nothing was measured"; else pass "an unmeasured value (API round trip) is absent from /metrics, not zero"; fi
-if docker logs "${SC}" 2>&1 | grep -q '"event":"api_status_changed".*"status":"down"'; then
+if docker logs "${SC}" 2>&1 | quiet_grep '"event":"api_status_changed".*"status":"down"'; then
   fail "probe" "the probe called the API down although the gateway never logged in"
 else
   pass "the closed relay port is not called down while the gateway is not logged in"
@@ -159,8 +165,8 @@ sleep 25
 n="$(count_received '"class":"login_stalled"')"
 if [ "${n}" = "1" ]; then pass "exactly one login_stalled notification (the gateway's event pair is the only source)"; else fail "double alert" "${n} login_stalled notifications"; fi
 if status_check 'd["deadman"]["withheld"] == "alert active: login_stalled"'; then pass "the dead-man ping is withheld while the alert is active"; else fail "dead-man withheld" "$(get /status | head -c 400)"; fi
-if docker logs "${RC}" 2>&1 | grep -q -e dummyuser -e dummypassword -e CANARY_URL_SECRET -e CANARY_PING_SECRET; then fail "payload hygiene" "a credential or a secret URL is in a payload"; else pass "no credential and no secret URL in any payload"; fi
-if docker logs "${SC}" 2>&1 | grep -q -e dummyuser -e dummypassword -e CANARY_URL_SECRET -e CANARY_PING_SECRET; then fail "sidecar log hygiene" "a credential or a secret URL is in the sidecar's log"; else pass "no credential and no secret URL in the sidecar's own log"; fi
+if docker logs "${RC}" 2>&1 | quiet_grep -e dummyuser -e dummypassword -e CANARY_URL_SECRET -e CANARY_PING_SECRET; then fail "payload hygiene" "a credential or a secret URL is in a payload"; else pass "no credential and no secret URL in any payload"; fi
+if docker logs "${SC}" 2>&1 | quiet_grep -e dummyuser -e dummypassword -e CANARY_URL_SECRET -e CANARY_PING_SECRET; then fail "sidecar log hygiene" "a credential or a secret URL is in the sidecar's log"; else pass "no credential and no secret URL in the sidecar's own log"; fi
 if docker exec "${GW}" grep -q 'dummy' /var/log/ibgateway/events/events.jsonl; then fail "gateway events" "credential in events"; else pass "the gateway's events hold no credential"; fi
 
 echo "== the gateway container is stopped =="

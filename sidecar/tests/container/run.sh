@@ -12,6 +12,12 @@
 #   SMOKE_TIMEOUT_SCALE=4 multiplies every wait (an emulated arm64 image is slow).
 # Exit code: 0 when every test passed. Each test prints PASS/FAIL with its reason.
 set -uo pipefail
+
+# quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
+# Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
+# it dies of SIGPIPE (exit 141) and the pipeline is false although the text was found. In a
+# check of the form "if a secret is in the log, fail; else pass" that is a false pass.
+quiet_grep() { grep "$@" >/dev/null; }
 # Git Bash on Windows rewrites POSIX-looking arguments into Windows paths; keep docker's
 # container-side paths literal and convert only host paths explicitly (no-op on Linux).
 export MSYS_NO_PATHCONV=1
@@ -134,7 +140,7 @@ status_is() { [ "$(status_field status 2>/dev/null)" = "$1" ]; }
 # shellcheck disable=SC2329
 phase_is() { [ "$(status_field phase 2>/dev/null)" = "$1" ]; }
 # shellcheck disable=SC2329
-receiver_got() { docker logs "${RECEIVER}" 2>&1 | grep -q "$1"; }
+receiver_got() { docker logs "${RECEIVER}" 2>&1 | quiet_grep "$1"; }
 # shellcheck disable=SC2329
 field_is() { [ "$(status_field "$1" 2>/dev/null)" = "$2" ]; }
 
@@ -225,7 +231,7 @@ if [ "$(in_sidecar id -u)" = "1000" ]; then pass "process runs as uid 1000"; els
 if [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "${SIDECAR}")" = "true" ] && ! in_sidecar sh -c 'touch /probe-file' 2>/dev/null; then pass "root file system is read-only"; else fail "read-only" "a file could be created"; fi
 if in_sidecar sh -c 'touch /var/log/ibgateway/state/x' 2>/dev/null; then fail "volume" "log volume is writable"; else pass "gateway log volume is read-only"; fi
 if in_sidecar sh -c 'grep -q "^CapEff:[[:space:]]*0000000000000000$" /proc/1/status'; then pass "no effective capabilities"; else fail "capabilities" "$(in_sidecar grep Cap /proc/1/status)"; fi
-if in_sidecar sh -c 'tr "\0" "\n" < /proc/1/environ' | grep -q -e "${CANARY}" -e "${PING}"; then fail "env hygiene" "secret in the environment"; else pass "no credential in PID 1 environment"; fi
+if in_sidecar sh -c 'tr "\0" "\n" < /proc/1/environ' | quiet_grep -e "${CANARY}" -e "${PING}"; then fail "env hygiene" "secret in the environment"; else pass "no credential in PID 1 environment"; fi
 
 echo "== notification on 2fa-pending =="
 set_phase login
@@ -291,7 +297,7 @@ started=$(date +%s)
 docker stop -t "$((10 * SCALE))" "${SIDECAR}" >/dev/null 2>&1
 elapsed=$(($(date +%s) - started))
 code="$(docker inspect -f '{{.State.ExitCode}}' "${SIDECAR}")"
-if [ "${code}" = "0" ] && [ "${elapsed}" -lt "$((10 * SCALE))" ] && docker logs "${SIDECAR}" 2>&1 | grep -q '"event":"sidecar_stopped"'; then pass "SIGTERM stops it gracefully in ${elapsed}s with exit code 0"; else fail "shutdown" "exit=${code} after ${elapsed}s"; fi
+if [ "${code}" = "0" ] && [ "${elapsed}" -lt "$((10 * SCALE))" ] && docker logs "${SIDECAR}" 2>&1 | quiet_grep '"event":"sidecar_stopped"'; then pass "SIGTERM stops it gracefully in ${elapsed}s with exit code 0"; else fail "shutdown" "exit=${code} after ${elapsed}s"; fi
 
 echo "== without a writable state directory =="
 set_phase starting
@@ -369,7 +375,7 @@ done
 if [ "${rejoined}" = "yes" ]; then pass "after a gateway container restart the sidecar exits, is restarted and answers again"; else
   fail "rejoin" "restarts=$(docker inspect -f '{{.RestartCount}}' "${SIDECAR}") logs: $(docker logs "${SIDECAR}" 2>&1 | tail -3)"
 fi
-if docker logs "${SIDECAR}" 2>&1 | grep -q '"event":"network_namespace_orphaned"'; then pass "the reason is logged (network_namespace_orphaned)"; else fail "orphan log" "event missing"; fi
+if docker logs "${SIDECAR}" 2>&1 | quiet_grep '"event":"network_namespace_orphaned"'; then pass "the reason is logged (network_namespace_orphaned)"; else fail "orphan log" "event missing"; fi
 docker rm -f "${SIDECAR}" "${GATEWAY}" >/dev/null 2>&1 || true
 
 echo
