@@ -13,6 +13,7 @@ Two scans over the sidecar's files (and its documents elsewhere in the repositor
 from __future__ import annotations
 
 import ast
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -57,9 +58,11 @@ RELATED_FILES = [
 
 def sidecar_files() -> Iterator[Path]:
     """Yield every file of the sidecar, skipping tool caches and the virtual environment."""
-    for path in sorted(SIDECAR_ROOT.rglob("*")):
-        if path.is_file() and not SKIPPED_DIRECTORIES.intersection(path.parts):
-            yield path
+    for directory, subdirectories, names in os.walk(SIDECAR_ROOT):
+        # Prune in place so the virtual environment is never descended into.
+        subdirectories[:] = sorted(set(subdirectories) - SKIPPED_DIRECTORIES)
+        for name in sorted(names):
+            yield Path(directory) / name
     for relative in RELATED_FILES:
         path = REPOSITORY_ROOT / relative
         if path.is_file():

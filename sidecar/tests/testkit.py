@@ -7,9 +7,12 @@ Nothing in the suite sleeps or reads the wall clock: components take a ``Clock``
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from brokersre_sidecar.model import GatewayEvent, GatewaySnapshot, MetricsSample
@@ -165,3 +168,19 @@ async def until(condition: Callable[[], bool], timeout_s: float = 5.0) -> None:
         # Polling is the point here: the condition is arbitrary test state, not an event.
         while not condition():  # noqa: ASYNC110
             await asyncio.sleep(0.005)
+
+
+def replace_file(source: Path, target: Path) -> None:
+    """Rename ``source`` over ``target``, retrying the Windows-only "access denied".
+
+    On Windows a rename is refused while any process (a reader thread of the code under
+    test, the antivirus, the indexer) has either file open. On Linux a rename never fails
+    for that reason, so the retry only ever runs on a Windows development host.
+    """
+    for _ in range(400):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            time.sleep(0.005)
+    raise AssertionError(f"could not rename {source.name} to {target.name}")

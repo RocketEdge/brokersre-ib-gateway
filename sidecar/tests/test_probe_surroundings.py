@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from brokersre_sidecar.probe import active_reset_window, count_close_wait
+from brokersre_sidecar.probe import (
+    NamespaceWatch,
+    active_reset_window,
+    count_close_wait,
+    count_foreign_listeners,
+)
+from testkit import FakeClock
 
 HEADER4 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 HEADER6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
@@ -95,3 +101,75 @@ def test_reset_windows_follow_the_local_time_of_each_region(
     instant: datetime, expected: str | None
 ) -> None:
     assert active_reset_window(instant) == expected
+
+
+# --- network namespace watch ----------------------------------------------------------------
+
+
+def test_listeners_other_than_the_sidecars_own_port_are_counted(tmp_path: Path) -> None:
+    # 9810 is 0x2652 (the sidecar itself); 4004 is 0x0FA4 and 7462 is 0x1D26 (the gateway).
+    tcp = HEADER4 + "".join(
+        [
+            row4("00000000:2652", "00000000:0000", "0A"),
+            row4("00000000:0FA4", "00000000:0000", "0A"),
+            row4("0100007F:1D26", "00000000:0000", "0A"),
+            row4("0100007F:0FA4", "0100007F:C001", "01"),  # an established connection
+        ]
+    )
+    assert count_foreign_listeners(9810, proc(tmp_path, tcp, HEADER6)) == 2
+
+
+def test_only_the_own_listener_is_zero_and_no_proc_is_not_measured(tmp_path: Path) -> None:
+    own = HEADER4 + row4("00000000:2652", "00000000:0000", "0A")
+    assert count_foreign_listeners(9810, proc(tmp_path, own, None)) == 0
+    assert count_foreign_listeners(9810, tmp_path / "no-proc") is None
+
+
+class WatchHarness:
+    def __init__(self) -> None:
+        self.clock = FakeClock()
+        self.listeners: int | None = 0
+        self.watch = NamespaceWatch(self.clock, listeners=lambda: self.listeners, grace_s=60.0)
+
+    def observe(self, seconds: float, *, alive: bool = True) -> bool:
+        """Observe once per second for ``seconds``; return the last verdict."""
+        orphaned = False
+        for _ in range(int(seconds)):
+            orphaned = self.watch.observe(gateway_alive=alive)
+            self.clock.advance(1.0)
+        return orphaned
+
+
+def test_a_namespace_that_never_had_a_foreign_listener_is_never_called_orphaned() -> None:
+    # A sidecar that does not share the gateway's network namespace at all.
+    assert WatchHarness().observe(600) is False
+
+
+def test_listeners_that_vanish_while_the_gateway_is_alive_mean_the_namespace_is_orphaned() -> None:
+    h = WatchHarness()
+    h.listeners = 2
+    assert h.observe(30) is False
+    h.listeners = 0  # the gateway container restarted into a new namespace
+    assert h.observe(59) is False
+    assert h.observe(3) is True
+
+
+def test_a_stopped_gateway_or_a_short_gap_is_not_an_orphan() -> None:
+    h = WatchHarness()
+    h.listeners = 1
+    h.observe(5)
+    h.listeners = 0
+    assert h.observe(600, alive=False) is False  # the gateway is down: nothing to rejoin
+    assert h.observe(30) is False
+    h.listeners = 1  # listeners came back before the grace period ended
+    assert h.observe(5) is False
+    h.listeners = 0
+    assert h.observe(59) is False
+
+
+def test_an_unreadable_proc_never_triggers() -> None:
+    h = WatchHarness()
+    h.listeners = 1
+    h.observe(5)
+    h.listeners = None
+    assert h.observe(600) is False

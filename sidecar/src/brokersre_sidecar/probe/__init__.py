@@ -6,6 +6,7 @@ by the application wiring when the probe is enabled.
 """
 
 from brokersre_sidecar.probe.engine import ProbeConfig, ProbeEngine
+from brokersre_sidecar.probe.namespace import NamespaceWatch
 from brokersre_sidecar.probe.protocol import (
     ErrorListener,
     IbClient,
@@ -14,7 +15,7 @@ from brokersre_sidecar.probe.protocol import (
     IbError,
     IbTimeoutError,
 )
-from brokersre_sidecar.probe.sockets import count_close_wait
+from brokersre_sidecar.probe.sockets import count_close_wait, count_foreign_listeners
 from brokersre_sidecar.probe.tracker import ApiConditionTracker, farm_name
 from brokersre_sidecar.probe.windows import RESET_WINDOWS, ResetWindow, active_reset_window
 
@@ -27,10 +28,12 @@ __all__ = [
     "IbDisconnectedError",
     "IbError",
     "IbTimeoutError",
+    "NamespaceWatch",
     "ProbeConfig",
     "ProbeEngine",
     "ResetWindow",
     "active_reset_window",
     "count_close_wait",
+    "count_foreign_listeners",
     "farm_name",
 ]

@@ -11,6 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from brokersre_sidecar.tail import LineFollower, read_phase
+from testkit import replace_file
 
 
 def append(path: Path, data: bytes) -> None:
@@ -20,7 +21,7 @@ def append(path: Path, data: bytes) -> None:
 
 def rotate(path: Path) -> None:
     """Rotate like the gateway does: rename to ``.1``, then start a new file."""
-    os.replace(path, path.with_name(path.name + ".1"))
+    replace_file(path, path.with_name(path.name + ".1"))
     path.write_bytes(b"")
 
 
@@ -73,7 +74,7 @@ def test_a_rotation_seen_while_the_new_file_does_not_exist_yet_loses_nothing(
     follower = LineFollower(path)
     assert follower.poll() == ["one"]
     append(path, b"two\n")
-    os.replace(path, path.with_name("events.jsonl.1"))
+    replace_file(path, path.with_name("events.jsonl.1"))
     assert follower.poll() == []
     path.write_bytes(b"three\n")
     assert follower.poll() == ["two", "three"]

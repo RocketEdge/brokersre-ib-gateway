@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import re
-import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,7 @@ from brokersre_sidecar.app import Application
 from brokersre_sidecar.config import load_secrets, load_settings
 from brokersre_sidecar.redaction import SecretRegistry
 from fakes.fake_ib import FakeIb
-from testkit import T0, FakeClock, free_port, http_get, iso, until
+from testkit import T0, FakeClock, free_port, http_get, iso, replace_file, until
 
 SCHEMA_FILE = Path(__file__).resolve().parents[1] / "schemas" / "status.v1.schema.json"
 WEBHOOK_URL = "https://hooks.example.com/CANARY_WEBHOOK_PATH"
@@ -38,15 +37,7 @@ class Volume:
         """Write the phase atomically (temporary file + rename), as the gateway does."""
         temporary = self.root / "state" / "phase.tmp"
         temporary.write_bytes(f"{token}\n".encode())
-        for _ in range(200):
-            try:
-                temporary.replace(self.root / "state" / "phase")
-                return
-            except PermissionError:
-                # Windows only: the rename is refused while the sidecar's reader has the
-                # target open. A Linux rename over an open file always succeeds.
-                time.sleep(0.005)
-        raise AssertionError("could not replace the phase file")
+        replace_file(temporary, self.root / "state" / "phase")
 
     def event(self, name: str) -> None:
         self._seq += 1
@@ -74,7 +65,14 @@ class Volume:
 class Harness:
     """A running application with its surroundings."""
 
-    def __init__(self, tmp_path: Path, env: dict[str, str], *, webhook: bool) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        *,
+        webhook: bool,
+        proc_root: Path | None = None,
+    ) -> None:
         self.volume = Volume(tmp_path / "volume")
         self.clock = FakeClock()
         self.ib = FakeIb(self.clock)
@@ -103,7 +101,7 @@ class Harness:
             clock=self.clock,
             ib_client=self.ib,
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self._receive)),
-            proc_root=tmp_path / "no-proc",
+            proc_root=proc_root if proc_root is not None else tmp_path / "no-proc",
             tick_s=0.005,
         )
         self.stop = asyncio.Event()
@@ -324,3 +322,77 @@ async def test_a_notification_queued_just_before_stopping_is_still_delivered(
     await until(lambda: len(harness.app.notifier_snapshot().active_alerts) == 1)
     await harness.shutdown()
     assert harness.kinds() == [("twofa_pending", "firing")]
+
+
+TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+
+
+def write_socket_table(proc_root: Path, ports: list[int]) -> None:
+    """Write a /proc/net/tcp with one listening socket per port."""
+    (proc_root / "net").mkdir(parents=True, exist_ok=True)
+    rows = "".join(
+        f"   0: 00000000:{port:04X} 00000000:0000 0A 00000000:00000000 00:00000000 00000000"
+        "  1000        0 1 1 0000000000000000 100 0 0 10 0\n"
+        for port in ports
+    )
+    temporary = proc_root / "net" / "tcp.tmp"
+    temporary.write_text(TCP_HEADER + rows, encoding="ascii")
+    replace_file(temporary, proc_root / "net" / "tcp")
+
+
+async def test_a_sidecar_left_in_a_dead_network_namespace_exits_so_it_is_restarted(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    harness = Harness(tmp_path, {}, webhook=False, proc_root=proc_root)
+    write_socket_table(proc_root, [harness.port, 4004, 7462])  # the gateway's listeners
+    await harness.start()
+    harness.volume.phase("logged-in")
+    await until(lambda: harness.app.shares_network_namespace)
+    assert harness.app.exit_code == 0
+
+    # The gateway container restarts: its sockets are gone from this namespace for good,
+    # while its log volume keeps showing a live gateway.
+    write_socket_table(proc_root, [harness.port])
+    for _ in range(70):
+        harness.clock.advance(1.0)
+        await asyncio.sleep(0.01)
+    assert harness.task is not None
+    await asyncio.wait_for(harness.task, 5)  # the application stopped by itself
+    assert harness.app.exit_code == 75
+    assert harness.app.http_listening is False
+
+
+async def test_a_stopped_gateway_does_not_make_the_sidecar_exit(tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    harness = Harness(tmp_path, {}, webhook=False, proc_root=proc_root)
+    write_socket_table(proc_root, [harness.port, 4004])
+    await harness.start()
+    harness.volume.phase("logged-in")
+    await until(lambda: harness.app.shares_network_namespace)
+    harness.volume.phase("stopped")
+    await until(lambda: harness.app.gateway_snapshot().phase == "stopped")
+    write_socket_table(proc_root, [harness.port])
+    for _ in range(70):
+        harness.clock.advance(1.0)
+        await asyncio.sleep(0.01)
+    assert harness.task is not None
+    assert not harness.task.done()
+    await harness.shutdown()
+    assert harness.app.exit_code == 0
+
+
+async def test_exiting_when_orphaned_can_be_switched_off(tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    harness = Harness(tmp_path, {"EXIT_WHEN_ORPHANED": "no"}, webhook=False, proc_root=proc_root)
+    write_socket_table(proc_root, [harness.port, 4004])
+    await harness.start()
+    harness.volume.phase("logged-in")
+    await until(lambda: harness.app.gateway_snapshot().phase == "logged-in")
+    write_socket_table(proc_root, [harness.port])
+    for _ in range(70):
+        harness.clock.advance(1.0)
+        await asyncio.sleep(0.01)
+    assert harness.task is not None
+    assert not harness.task.done()
+    await harness.shutdown()

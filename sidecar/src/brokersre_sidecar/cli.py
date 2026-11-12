@@ -338,12 +338,15 @@ async def _serve(
             stop.set()
 
         watcher = asyncio.ensure_future(watch())
+    application = Application(settings, secrets, registry)
     try:
-        await Application(settings, secrets, registry).run(stop)
+        await application.run(stop)
     finally:
         if watcher is not None:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
+    if application.exit_code != EXIT_OK:
+        return application.exit_code
     return EXIT_OK if stop.is_set() else EXIT_NOT_READY
 
 

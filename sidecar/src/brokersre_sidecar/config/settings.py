@@ -107,6 +107,7 @@ class Settings(BaseModel):
 
     bind: str
     port: int
+    exit_when_orphaned: bool
 
     login_stall_s: float
     escalate_after_s: float
@@ -438,6 +439,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         probe_timeout_s=reader.seconds("PROBE_TIMEOUT_S", 10.0, 1.0, 60.0),
         bind=reader.text("SIDECAR_BIND", DEFAULT_BIND, _check_bind) or DEFAULT_BIND,
         port=reader.integer("SIDECAR_PORT", 9810, 1, 65535),
+        exit_when_orphaned=reader.flag("EXIT_WHEN_ORPHANED", True),
         login_stall_s=reader.seconds("LOGIN_STALL_S", 300.0, 30.0, 86400.0),
         escalate_after_s=escalate_after_s,
         escalate_again_after_s=escalate_again_after_s,

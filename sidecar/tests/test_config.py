@@ -37,6 +37,7 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     assert settings.escalate_again_after_s == 1800.0
     assert settings.heartbeat_time is None
     assert settings.runbook_base is None
+    assert settings.exit_when_orphaned is True
     assert settings.configured_channels() == ()
 
 
@@ -89,6 +90,7 @@ def test_explicit_values_are_parsed() -> None:
         ({"IBGW_INSTANCE": "has space"}, "IBGW_INSTANCE"),
         ({"IBGW_INSTANCE": "DU1234567"}, "IBGW_INSTANCE"),
         ({"PROBE_ENABLED": "maybe"}, "PROBE_ENABLED"),
+        ({"EXIT_WHEN_ORPHANED": "maybe"}, "EXIT_WHEN_ORPHANED"),
         ({"HEALTH_CLIENT_ID": "0"}, "HEALTH_CLIENT_ID"),
         ({"PROBE_INTERVAL_S": "1"}, "PROBE_INTERVAL_S"),
         ({"PROBE_INTERVAL_S": "nan"}, "PROBE_INTERVAL_S"),

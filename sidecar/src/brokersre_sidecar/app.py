@@ -59,13 +59,15 @@ from brokersre_sidecar.probe import (
     IbClient,
     IbConnectError,
     IbDisconnectedError,
+    NamespaceWatch,
     ProbeConfig,
     ProbeEngine,
     count_close_wait,
+    count_foreign_listeners,
 )
 from brokersre_sidecar.redaction import SecretRegistry
 from brokersre_sidecar.supervisor import Supervisor, TaskFactory
-from brokersre_sidecar.vocab import ProbeStatus
+from brokersre_sidecar.vocab import Phase, ProbeStatus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,24 @@ _FEED_READ_TIMEOUT_S = 10.0
 # Time allowed at shutdown to deliver notifications that are already queued.
 _FLUSH_TIMEOUT_S = 3.0
 _TEXT = "text/plain; charset=utf-8"
+
+EXIT_ORPHANED = 75
+"""Exit code (EX_TEMPFAIL) when the sidecar leaves a dead network namespace."""
+
+_NAMESPACE_SAMPLE_S = 5.0
+# A gateway in one of these phases is running (its feeds must also be fresh, if any).
+_ALIVE_PHASES = frozenset(
+    {
+        Phase.STARTING,
+        Phase.LOGIN,
+        Phase.TWOFA_PENDING,
+        Phase.LOGGED_IN,
+        Phase.RESTARTING,
+        Phase.EXISTING_SESSION,
+        Phase.NEEDS_HUMAN,
+    }
+)
+_FEED_FRESH_S = 120.0
 
 _NOTIFIER_DISABLED = NotifierSnapshot(
     enabled=False,
@@ -173,6 +193,21 @@ class Application:
             phase=lambda: self._state.phase,
             close_wait=lambda: count_close_wait(settings.api_port, proc_root),
         )
+
+        self._watch = (
+            NamespaceWatch(
+                self._clock,
+                listeners=lambda: count_foreign_listeners(settings.port, proc_root),
+            )
+            if settings.exit_when_orphaned
+            else None
+        )
+        self._watch_sampled_at: float | None = None
+        self._orphaned = asyncio.Event()
+        self.shares_network_namespace = False
+        """True once another listener (the gateway's) was seen in this namespace."""
+        self.exit_code = 0
+        """Exit code after ``run`` returned (75 after leaving an orphaned namespace)."""
 
         self._supervisor = Supervisor(self._clock, sleep)
         self._supervisor.add("follow", self._follow)
@@ -309,14 +344,17 @@ class Application:
             probe_enabled=self._settings.probe_enabled,
             channels=list(self._settings.configured_channels()),
         )
-        supervisor = asyncio.ensure_future(self._supervisor.run())
-        stopping = asyncio.ensure_future(stop.wait())
+        waiters = {
+            asyncio.ensure_future(self._supervisor.run()),
+            asyncio.ensure_future(stop.wait()),
+            asyncio.ensure_future(self._orphaned.wait()),
+        }
         try:
-            await asyncio.wait({supervisor, stopping}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            supervisor.cancel()
-            stopping.cancel()
-            await asyncio.gather(supervisor, stopping, return_exceptions=True)
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
             await self._shutdown()
         log_event(_LOGGER, logging.INFO, "sidecar_stopped")
 
@@ -334,9 +372,51 @@ class Application:
                 log_event(_LOGGER, logging.INFO, "phase_changed", phase=phase or "not_measured")
             await self._sleep(self._tick_s)
 
+    def _gateway_alive(self) -> bool:
+        """Report whether the gateway is running according to its log volume."""
+        snapshot = self._state.snapshot()
+        if snapshot.phase not in _ALIVE_PHASES:
+            return False
+        if not snapshot.feeds_seen or snapshot.last_activity_at is None:
+            return True  # a gateway without the v2 feeds: the phase is all there is
+        quiet = (snapshot.taken_at - snapshot.last_activity_at).total_seconds()
+        return quiet <= _FEED_FRESH_S
+
+    def _check_namespace(self) -> None:
+        """Stop the sidecar when its network namespace no longer contains the gateway.
+
+        See ``probe.namespace``: after the gateway CONTAINER restarts, this sidecar sits
+        in the old namespace for good. It exits with ``EXIT_ORPHANED`` so that the
+        container's restart policy starts it again inside the gateway's new namespace.
+        The gateway itself is never touched.
+        """
+        if self._watch is None:
+            return
+        now = self._clock.monotonic()
+        if (
+            self._watch_sampled_at is not None
+            and now - self._watch_sampled_at < _NAMESPACE_SAMPLE_S
+        ):
+            return
+        self._watch_sampled_at = now
+        orphaned = self._watch.observe(gateway_alive=self._gateway_alive())
+        self.shares_network_namespace = self._watch.seen_shared
+        if orphaned and not self._orphaned.is_set():
+            self.exit_code = EXIT_ORPHANED
+            log_event(
+                _LOGGER,
+                logging.ERROR,
+                "network_namespace_orphaned",
+                "the gateway container restarted and this sidecar is left in its old "
+                "network namespace; exiting so the restart policy starts it in the new one",
+                exit_code=EXIT_ORPHANED,
+            )
+            self._orphaned.set()
+
     async def _probe(self) -> None:
         """Step the API probe and log status changes."""
         while True:
+            self._check_namespace()
             await self._engine.tick()
             snapshot = self._engine.snapshot()
             if snapshot.status is not self._last_status:
