@@ -32,7 +32,6 @@ def test_defaults_describe_a_paper_gateway_with_the_probe_on_and_no_notifier() -
     assert settings.probe_interval_s == 60.0
     assert settings.probe_timeout_s == 10.0
     assert (settings.bind, settings.port) == ("0.0.0.0", 9810)
-    assert settings.login_stall_s == 300.0
     assert settings.escalate_after_s == 600.0
     assert settings.escalate_again_after_s == 1800.0
     assert settings.heartbeat_time is None
@@ -58,7 +57,6 @@ def test_explicit_values_are_parsed() -> None:
             "PROBE_INTERVAL_S": "30",
             "SIDECAR_BIND": "127.0.0.1",
             "SIDECAR_PORT": "9811",
-            "LOGIN_STALL_S": "120",
             "ESCALATE_AFTER_S": "300",
             "ESCALATE_AGAIN_AFTER_S": "900",
             "HEARTBEAT_TIME": "08:30",

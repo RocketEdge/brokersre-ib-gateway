@@ -109,7 +109,6 @@ class Settings(BaseModel):
     port: int
     exit_when_orphaned: bool
 
-    login_stall_s: float
     escalate_after_s: float
     escalate_again_after_s: float
     heartbeat_time: time | None
@@ -441,7 +440,6 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         bind=reader.text("SIDECAR_BIND", DEFAULT_BIND, _check_bind) or DEFAULT_BIND,
         port=reader.integer("SIDECAR_PORT", 9810, 1, 65535),
         exit_when_orphaned=reader.flag("EXIT_WHEN_ORPHANED", True),
-        login_stall_s=reader.seconds("LOGIN_STALL_S", 300.0, 30.0, 86400.0),
         escalate_after_s=escalate_after_s,
         escalate_again_after_s=escalate_again_after_s,
         heartbeat_time=heartbeat_time,

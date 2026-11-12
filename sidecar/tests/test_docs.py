@@ -46,7 +46,7 @@ def variables_read_by_the_loader() -> set[str]:
 def test_the_loader_reads_a_plausible_set_of_variables() -> None:
     names = variables_read_by_the_loader()
     assert {"TRADING_MODE", "HEALTH_CLIENT_ID", "NOTIFY_TEAMS_URL_FILE", "SIDECAR_PORT"} <= names
-    assert len(names) >= 35
+    assert len(names) >= 30
 
 
 @pytest.mark.parametrize("name", sorted(variables_read_by_the_loader()))

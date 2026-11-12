@@ -150,7 +150,6 @@ def _settings(settings: Settings) -> str:
                 "probe_timeout_s": settings.probe_timeout_s,
                 "bind": settings.bind,
                 "port": settings.port,
-                "login_stall_s": settings.login_stall_s,
                 "escalate_after_s": settings.escalate_after_s,
                 "escalate_again_after_s": settings.escalate_again_after_s,
                 "heartbeat_time": heartbeat.strftime("%H:%M") if heartbeat else None,

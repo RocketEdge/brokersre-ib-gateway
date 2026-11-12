@@ -58,7 +58,6 @@ def status(**overrides: Any) -> dict[str, Any]:
         ),
         "notifier": NOTIFIER_ON,
         "tasks": TASKS,
-        "volume_present": True,
         "now": T0,
     }
     fields.update(overrides)
@@ -139,6 +138,7 @@ def test_a_ready_gateway_is_reported_with_every_contract_field() -> None:
 def test_unmeasured_values_are_null_never_zero_or_ok() -> None:
     document = status(
         gateway=gateway_snapshot(
+            volume_present=False,
             phase=None,
             phase_since=None,
             boot_id=None,
@@ -160,7 +160,6 @@ def test_unmeasured_values_are_null_never_zero_or_ok() -> None:
         ),
         notifier=NOTIFIER_OFF,
         tasks=(),
-        volume_present=False,
     )
     validate(document)
     for key in ("phase", "phase_since", "boot_id", "boots_30m", "last_login", "clock_skew_s"):

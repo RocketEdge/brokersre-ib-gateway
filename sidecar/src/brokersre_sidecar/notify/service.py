@@ -40,7 +40,6 @@ class Notifier:
         clock: Clock,
         gateway: Callable[[], GatewaySnapshot],
         probe: Callable[[], ProbeSnapshot],
-        volume_present: Callable[[], bool],
         ready: Callable[[], bool],
     ) -> None:
         """Wire the notifier.
@@ -54,7 +53,6 @@ class Notifier:
             clock: Time source.
             gateway: Returns the current gateway snapshot.
             probe: Returns the current probe snapshot.
-            volume_present: Reports whether the gateway log volume is mounted.
             ready: False until the gateway feed was read once; nothing is evaluated before
                 that, so a restart cannot "resolve" alerts from an empty model.
         """
@@ -66,7 +64,6 @@ class Notifier:
         self._clock = clock
         self._gateway = gateway
         self._probe = probe
-        self._volume_present = volume_present
         self._ready = ready
         self._persistence: Literal["file", "memory"] = "memory"
         self._persistence_reason: str | None = "no state file is configured"
@@ -98,9 +95,7 @@ class Notifier:
         now = self._clock.now()
         gateway = self._gateway()
         probe = self._probe()
-        evaluations = self._rules.evaluate(
-            gateway, probe, now=now, volume_present=self._volume_present()
-        )
+        evaluations = self._rules.evaluate(gateway, probe, now=now, mono=self._clock.monotonic())
         for due in self._ladder.step(evaluations, now):
             message = self._factory.build(
                 due.kind,

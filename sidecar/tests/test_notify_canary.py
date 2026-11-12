@@ -90,7 +90,15 @@ def write_gateway_volume(root: Path, phase: bytes, now: datetime, *, boots: int 
     for index in range(boots):
         boot = f"{index:016x}"
         for sequence, name in enumerate(
-            ("container_start", "login_failed", "unknown_window", "disk_low", "oom_kill")
+            (
+                "container_start",
+                "login_failed",
+                "unknown_window",
+                "login_stalled",
+                "disk_low",
+                "memory_high",
+                "oom_kill",
+            )
         ):
             lines.append(
                 {
@@ -164,13 +172,13 @@ async def evaluate_scenario(
         phase=lambda: state.snapshot().phase,
         close_wait=lambda: 3,
     )
-    rules = RuleEngine(RuleConfig(login_stall_s=300.0))
+    rules = RuleEngine(RuleConfig())
     result: dict[AlertClass, Any] = {}
     # Seven minutes of one-second ticks: long enough for every "sustained" condition.
     for _ in range(420 + int(quiet_for)):
         await engine.tick()
         result = rules.evaluate(
-            state.snapshot(), engine.snapshot(), now=clock.now(), volume_present=True
+            state.snapshot(), engine.snapshot(), now=clock.now(), mono=clock.monotonic()
         )
         clock.advance(1.0)
     return result, state.snapshot().phase, engine.snapshot().status.value

@@ -20,6 +20,8 @@ from brokersre_sidecar.model.health import ProbeSnapshot
 from brokersre_sidecar.vocab import ProbeStatus
 
 T0 = datetime(2026, 11, 12, 15, 0, 0, tzinfo=UTC)
+BOOT = "00000000000000aa"
+"""Boot id used by the builders below."""
 """Default start instant: a Thursday, 10:00 in New York, outside every IBKR reset window."""
 
 
@@ -84,18 +86,22 @@ def gateway_snapshot(now: datetime = T0, **overrides: Any) -> GatewaySnapshot:
     """Build a ``GatewaySnapshot`` of a healthy, logged-in gateway; override any field."""
     fields: dict[str, Any] = {
         "taken_at": now,
+        "volume_present": True,
         "phase": "logged-in",
         "phase_since": now - timedelta(hours=1),
-        "boot_id": "00000000000000aa",
+        "unreadable_for_s": None,
+        "boot_id": BOOT,
         "boots_30m": 0,
+        "last_restart_at": None,
+        "last_restart_unexpected": None,
         "last_login": now - timedelta(hours=1),
         "last_events": {},
         "last_metrics": None,
         "last_event_at": now - timedelta(seconds=20),
         "last_activity_at": now - timedelta(seconds=20),
         "feeds_seen": True,
-        "memory_ratio": 0.5,
-        "memory_high_since": None,
+        "quiet_for_s": 20.0,
+        "pairs": {},
         "last_oom_at": None,
         "rejected_lines": 0,
     }
@@ -125,11 +131,9 @@ def probe_snapshot(now: datetime = T0, **overrides: Any) -> ProbeSnapshot:
     return ProbeSnapshot(**fields)
 
 
-def gateway_event(name: str, at: datetime) -> GatewayEvent:
+def gateway_event(name: str, at: datetime, boot: str | None = BOOT) -> GatewayEvent:
     """Build a ``GatewayEvent`` as the parser would produce it."""
-    return GatewayEvent(
-        ts=at, event=name, src="ibc", level="info", boot_id="00000000000000aa", seq=1
-    )
+    return GatewayEvent(ts=at, event=name, src="ibc", level="info", boot_id=boot, seq=1)
 
 
 def metrics_sample(at: datetime, **values: float) -> MetricsSample:

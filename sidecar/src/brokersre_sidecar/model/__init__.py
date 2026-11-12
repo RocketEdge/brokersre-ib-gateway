@@ -10,9 +10,10 @@ from brokersre_sidecar.model.events import (
 from brokersre_sidecar.model.feed import GatewayFeed
 from brokersre_sidecar.model.state import (
     BOOT_WINDOW,
-    MEMORY_HIGH_RATIO,
+    CONDITION_PAIRS,
     GatewaySnapshot,
     GatewayState,
+    PairState,
 )
 from brokersre_sidecar.model.status import (
     STATUS_SCHEMA,
@@ -23,7 +24,7 @@ from brokersre_sidecar.model.status import (
 
 __all__ = [
     "BOOT_WINDOW",
-    "MEMORY_HIGH_RATIO",
+    "CONDITION_PAIRS",
     "METRIC_KEYS",
     "STATUS_SCHEMA",
     "GatewayEvent",
@@ -31,6 +32,7 @@ __all__ = [
     "GatewaySnapshot",
     "GatewayState",
     "MetricsSample",
+    "PairState",
     "StatusDocument",
     "build_status",
     "parse_event",

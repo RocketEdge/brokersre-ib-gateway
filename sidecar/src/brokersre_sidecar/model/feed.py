@@ -102,6 +102,7 @@ class GatewayFeed:
     def apply(self, batch: FeedBatch) -> None:
         """Apply one batch to the model (event-loop thread)."""
         self.volume_present = batch.volume_present
+        self._state.observe_volume(batch.volume_present)
         self._state.observe_phase(batch.phase)
         for event in batch.events:
             self._state.observe_event(event)

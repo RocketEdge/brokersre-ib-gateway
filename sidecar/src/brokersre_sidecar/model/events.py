@@ -36,6 +36,8 @@ METRIC_KEYS: tuple[str, ...] = (
     "api_close_wait_sockets",
     "disk_free_bytes_logs",
     "disk_free_bytes_settings",
+    "disk_total_bytes_logs",
+    "disk_total_bytes_settings",
 )
 """Numeric keys of a metrics sample; a key that could not be measured is absent."""
 

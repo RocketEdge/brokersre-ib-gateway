@@ -214,51 +214,128 @@ def feed_metrics(state: GatewayState, line: str) -> None:
     state.observe_metrics(sample)
 
 
-def test_memory_pressure_starts_when_the_working_set_passes_85_percent_and_clears_below() -> None:
+def test_a_condition_pair_is_open_between_the_gateways_two_events() -> None:
     state = GatewayState(FakeClock())
-    feed_metrics(state, metrics_line(T0, mem_working_set_bytes=800, mem_limit_bytes=1000))
-    assert state.snapshot().memory_high_since is None
-    assert state.snapshot().memory_ratio == pytest.approx(0.8)
-    feed_metrics(
-        state,
-        metrics_line(T0 + timedelta(seconds=30), mem_working_set_bytes=900, mem_limit_bytes=1000),
-    )
-    feed_metrics(
-        state,
-        metrics_line(T0 + timedelta(seconds=60), mem_working_set_bytes=950, mem_limit_bytes=1000),
-    )
-    assert state.snapshot().memory_high_since == T0 + timedelta(seconds=30)
-    feed_metrics(
-        state,
-        metrics_line(T0 + timedelta(seconds=90), mem_working_set_bytes=100, mem_limit_bytes=1000),
-    )
-    assert state.snapshot().memory_high_since is None
+    assert dict(state.snapshot().pairs) == {}  # never reported: unknown, not "closed"
+    feed_event(state, event_line("disk_low", T0))
+    feed_event(state, event_line("memory_high", T0 + timedelta(seconds=1)))
+    pairs = state.snapshot().pairs
+    assert pairs["disk_low"].open is True
+    assert pairs["disk_low"].since == T0
+    assert pairs["memory_high"].open is True
+    assert "login_stalled" not in pairs
+    feed_event(state, event_line("disk_ok", T0 + timedelta(hours=3)))
+    pairs = state.snapshot().pairs
+    assert pairs["disk_low"].open is False
+    assert pairs["disk_low"].since == T0 + timedelta(hours=3)
+    assert pairs["memory_high"].open is True
 
 
-def test_memory_pressure_is_unmeasured_without_a_limit() -> None:
+def test_a_new_boot_ends_the_pairs_the_previous_boot_left_open() -> None:
     state = GatewayState(FakeClock())
-    feed_metrics(state, metrics_line(T0, mem_working_set_bytes=900, mem_limit_bytes=1000))
-    feed_metrics(state, metrics_line(T0 + timedelta(seconds=30), mem_working_set_bytes=900))
+    feed_event(state, event_line("login_stalled", T0, boot=BOOT_A))
+    feed_event(state, event_line("disk_low", T0, boot=BOOT_A))
+    feed_event(state, event_line("container_start", T0 + timedelta(minutes=5), boot=BOOT_B))
+    pairs = state.snapshot().pairs
+    assert pairs["login_stalled"].open is False
+    assert pairs["disk_low"].open is False
+    # The new boot reports the condition again when it still holds.
+    feed_event(state, event_line("disk_low", T0 + timedelta(minutes=6), boot=BOOT_B))
+    assert state.snapshot().pairs["disk_low"].open is True
+
+
+def test_the_model_applies_no_threshold_of_its_own_to_memory_or_disk() -> None:
+    state = GatewayState(FakeClock())
+    feed_metrics(
+        state,
+        metrics_line(T0, mem_working_set_bytes=999, mem_limit_bytes=1000, disk_free_bytes_logs=1),
+    )
     snapshot = state.snapshot()
-    assert snapshot.memory_ratio is None
-    assert snapshot.memory_high_since is None
-    feed_metrics(
-        state,
-        metrics_line(T0 + timedelta(seconds=60), mem_working_set_bytes=900, mem_limit_bytes=0),
-    )
-    assert state.snapshot().memory_ratio is None
+    assert dict(snapshot.pairs) == {}
+    assert snapshot.last_oom_at is None
 
 
-def test_an_oom_kill_is_an_increase_of_the_counter_or_the_event_never_the_first_reading() -> None:
+def test_an_oom_kill_is_the_gateways_event_not_a_counter_the_sidecar_watches() -> None:
     state = GatewayState(FakeClock())
     feed_metrics(state, metrics_line(T0, oom_kills=2))
+    feed_metrics(state, metrics_line(T0 + timedelta(seconds=30), oom_kills=3))
     assert state.snapshot().last_oom_at is None
-    feed_metrics(state, metrics_line(T0 + timedelta(seconds=30), oom_kills=2))
-    assert state.snapshot().last_oom_at is None
-    feed_metrics(state, metrics_line(T0 + timedelta(seconds=60), oom_kills=3))
-    assert state.snapshot().last_oom_at == T0 + timedelta(seconds=60)
-    feed_event(state, event_line("oom_kill", T0 + timedelta(seconds=120)))
-    assert state.snapshot().last_oom_at == T0 + timedelta(seconds=120)
+    feed_event(state, event_line("oom_kill", T0 + timedelta(seconds=31)))
+    assert state.snapshot().last_oom_at == T0 + timedelta(seconds=31)
+
+
+def test_a_restart_after_a_requested_shutdown_is_deliberate() -> None:
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("container_start", T0, boot=BOOT_A))
+    assert state.snapshot().last_restart_at is None  # the first boot seen is not a restart
+    feed_event(state, event_line("shutdown_requested", T0 + timedelta(minutes=1), boot=BOOT_A))
+    feed_event(state, event_line("shutdown_complete", T0 + timedelta(minutes=2), boot=BOOT_A))
+    feed_event(state, event_line("container_start", T0 + timedelta(minutes=3), boot=BOOT_B))
+    snapshot = state.snapshot()
+    assert snapshot.boot_id == BOOT_B
+    assert snapshot.last_restart_at == T0 + timedelta(minutes=3)
+    assert snapshot.last_restart_unexpected is False
+
+
+def test_a_restart_without_a_requested_shutdown_is_unexpected() -> None:
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("container_start", T0, boot=BOOT_A))
+    feed_event(state, event_line("shutdown_requested", T0, boot=BOOT_A))
+    feed_event(state, event_line("container_start", T0 + timedelta(minutes=1), boot=BOOT_B))
+    # Boot B is killed: no shutdown event of its own, then boot C appears.
+    feed_event(state, event_line("container_start", T0 + timedelta(minutes=9), boot=BOOT_C))
+    snapshot = state.snapshot()
+    assert snapshot.last_restart_at == T0 + timedelta(minutes=9)
+    assert snapshot.last_restart_unexpected is True
+
+
+def test_replayed_lines_of_an_older_boot_do_not_move_the_current_boot_back() -> None:
+    # At start the events file is replayed first, then the metrics file from its tail.
+    state = GatewayState(FakeClock())
+    feed_event(state, event_line("container_start", T0, boot=BOOT_A))
+    feed_event(state, event_line("shutdown_requested", T0, boot=BOOT_A))
+    feed_event(state, event_line("container_start", T0 + timedelta(minutes=1), boot=BOOT_B))
+    feed_metrics(state, metrics_line(T0 + timedelta(seconds=5), boot=BOOT_A))
+    feed_metrics(state, metrics_line(T0 + timedelta(minutes=2), boot=BOOT_B))
+    snapshot = state.snapshot()
+    assert snapshot.boot_id == BOOT_B
+    assert snapshot.last_restart_unexpected is False
+    assert snapshot.boots_30m == 2
+
+
+def test_quiet_time_runs_on_the_monotonic_clock_from_what_the_sidecar_observed() -> None:
+    clock = FakeClock()
+    state = GatewayState(clock)
+    assert state.snapshot().quiet_for_s is None
+    # A line with an old timestamp, observed now: the gateway is not "silent for 8 hours".
+    feed_event(state, event_line("login_dialog", T0 - timedelta(hours=8)))
+    assert state.snapshot().quiet_for_s == 0.0
+    clock.advance(40)
+    assert state.snapshot().quiet_for_s == 40.0
+    # The wall clock jumps (a resumed virtual machine); the monotonic clock does not.
+    clock.set(T0 + timedelta(hours=6))
+    assert state.snapshot().quiet_for_s == 40.0
+    feed_metrics(state, metrics_line(T0))
+    assert state.snapshot().quiet_for_s == 0.0
+
+
+def test_the_time_without_a_readable_phase_file_is_measured() -> None:
+    clock = FakeClock()
+    state = GatewayState(clock)
+    clock.advance(30)
+    assert state.snapshot().unreadable_for_s == 30.0  # nothing read since the start
+    state.observe_volume(True)
+    state.observe_phase(reading("login", T0))
+    assert state.snapshot().unreadable_for_s is None
+    assert state.snapshot().volume_present is True
+    clock.advance(10)
+    state.observe_volume(False)
+    state.observe_phase(None)
+    clock.advance(25)
+    snapshot = state.snapshot()
+    assert snapshot.unreadable_for_s == 25.0
+    assert snapshot.volume_present is False
+    assert snapshot.phase is None
 
 
 def test_last_activity_is_the_newest_line_of_either_feed() -> None:

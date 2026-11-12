@@ -144,7 +144,6 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `PROBE_INTERVAL_S` | `60` | 5 to 3600 | Seconds between time round trips while healthy. |
 | `PROBE_TIMEOUT_S` | `10` | 1 to 60 | Bound of the handshake and of each round trip. |
 | `EXIT_WHEN_ORPHANED` | `yes` | `yes`, `no` | Exit (code 75) when the gateway container restarted and left the sidecar in its old network namespace, so the restart policy rejoins it. See [Limitations](#limitations). |
-| `LOGIN_STALL_S` | `300` | 30 to 86400 | Phase `login` longer than this raises `login_stalled`. |
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
@@ -208,15 +207,15 @@ in `ibgw_notify_failures_total`.
 |---|---|---|---|
 | `twofa_pending` | critical | The phase is `2fa-pending`. | Approve the IBKR Mobile prompt now. Nothing approves it for you. |
 | `needs_human` | critical | The phase is `needs-human`. | Open the gateway screen (VNC) or its log and resolve what it waits on. |
-| `login_failed` | error | The gateway reported a failed login in the last 15 minutes and has not logged in since. | Check the username and password secrets and whether the account is locked. |
+| `login_failed` | error | The gateway reported a failed login in the last 15 minutes and has not logged in since. Silent while the phase is `needs-human` (that alert carries the cause). | Check the username and password secrets and whether the account is locked. |
 | `existing_session` | error | The phase is `existing-session`. | Log out the other session or give this gateway its own username. |
-| `login_stalled` | error | The phase has been `login` for longer than `LOGIN_STALL_S`. | Look at the gateway screen and log. |
+| `login_stalled` | error | The gateway reports `login_stalled` (its own `LOGIN_STALL_S`) and has not reported `login_resumed`. | Look at the gateway screen and log. |
 | `unknown_window` | warning | The gateway reported a dialog it does not recognise while not logged in. | Handle the dialog and report its title. |
 | `gateway_exited` | critical | The phase is `exited`. | Read the container log, then start the container when it is safe (new login and 2FA). |
 | `api_unhealthy` | error | The status has been `down`, `degraded` or `client_id_in_use` for 5 minutes, outside IBKR's reset windows. | Read `/status` for the reason. Do not restart blindly. |
 | `restart_storm` | error | 3 or more gateway starts within 30 minutes. | Stop the restart loop and read the first error. |
-| `resource_alert` | error | Memory working set above 85 % of the limit for 10 minutes, or an out-of-memory kill. | Raise the memory limit or lower the Java heap. |
-| `disk_low` | warning | The gateway reported low disk space, or less than 256 MiB is free on a gateway volume. | Free space on the log or settings volume. |
+| `resource_alert` | error | The gateway reports `memory_high` (until `memory_ok`), or an `oom_kill` in the last 15 minutes. | Raise the memory limit or lower the Java heap. |
+| `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
 | `clock_skew` | warning | The host clock provably differs from IBKR time by more than 1 second. | Fix time synchronisation on the host. |
 | `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped. | Check that the gateway container runs and the volume is mounted. |
 | `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while no alert is active. | Nothing. A missing heartbeat means the sidecar is down or an alert is active. |
@@ -228,6 +227,12 @@ quiet: North America 00:15-01:45 ET, Europe 06:25-07:45 CET, Asia 04:45-06:05 an
 
 A condition that cannot be decided (a value was not measured, a duration has not elapsed
 yet) neither raises nor resolves an alert.
+
+For a stalled login, low disk space and memory pressure the gateway is the single source of
+truth: it reports each as a pair of events (`login_stalled`/`login_resumed`,
+`disk_low`/`disk_ok`, `memory_high`/`memory_ok`) from its own thresholds (`LOGIN_STALL_S`,
+`DISK_MIN_FREE_PCT`, `MEM_HIGH_PCT` of the gateway image), and the sidecar only relays the
+pair. It has no threshold of its own for them, so the two cannot disagree.
 
 ## Escalation and de-duplication
 

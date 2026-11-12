@@ -195,7 +195,6 @@ def build_status(
     probe: ProbeSnapshot,
     notifier: NotifierSnapshot,
     tasks: Sequence[TaskSnapshot],
-    volume_present: bool,
     now: datetime,
 ) -> StatusDocument:
     """Assemble the status document from the subsystem snapshots.
@@ -207,7 +206,6 @@ def build_status(
         probe: What the API probe says.
         notifier: Notifier state (``enabled=False`` when no channel is configured).
         tasks: Supervision records.
-        volume_present: Whether the gateway log volume is mounted.
         now: Generation time (UTC).
 
     Returns:
@@ -245,7 +243,7 @@ def build_status(
             "boots_30m": gateway.boots_30m,
             "last_login": _ts(gateway.last_login),
             "gateway_feed": {
-                "volume_present": volume_present,
+                "volume_present": gateway.volume_present,
                 "feeds_seen": gateway.feeds_seen,
                 "last_event_at": _ts(gateway.last_event_at),
                 "last_metrics_at": _ts(last_metrics.ts) if last_metrics is not None else None,

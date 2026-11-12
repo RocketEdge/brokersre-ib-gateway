@@ -57,7 +57,7 @@ class World:
             RecordingSleep(self.clock),
         )
         self.notifier = Notifier(
-            rules=RuleEngine(RuleConfig(login_stall_s=300.0)),
+            rules=RuleEngine(RuleConfig()),
             ladder=LadderEngine(
                 LadderConfig(
                     primary_channels=("teams",),
@@ -72,7 +72,6 @@ class World:
             clock=self.clock,
             gateway=self._gateway,
             probe=self._probe,
-            volume_present=lambda: True,
             ready=lambda: self.ready,
         )
 

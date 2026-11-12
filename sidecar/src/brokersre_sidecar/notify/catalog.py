@@ -67,8 +67,8 @@ _SPECS = (
         AlertClass.LOGIN_STALLED,
         Severity.ERROR,
         "The gateway login has not completed",
-        "Look at the gateway screen and log: the login has been in progress for longer "
-        "than expected.",
+        "Look at the gateway screen and log: the gateway reports that its login has been "
+        "in progress for longer than its LOGIN_STALL_S.",
     ),
     AlertSpec(
         AlertClass.UNKNOWN_WINDOW,

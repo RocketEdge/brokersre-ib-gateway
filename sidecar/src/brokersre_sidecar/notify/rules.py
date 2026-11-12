@@ -7,6 +7,14 @@ condition has not lasted long enough yet, or a reset window makes it meaningless
 "absence is never healthy" applied to alerting, and it is also what stops a restart of the
 sidecar from sending a false "resolved".
 
+Who decides what:
+
+* Conditions the gateway reports as an event pair (a stalled login, low disk space, memory
+  pressure) are the gateway's call alone. The rule is "the pair is open"; the sidecar keeps
+  no threshold and no timer for them, so the two can never disagree and nothing "resolves"
+  because a timer ran out.
+* Durations the sidecar does measure (API unhealthy, silence) run on the monotonic clock.
+
 The ``detail`` of a verdict is built from numbers and fixed words only.
 """
 
@@ -21,8 +29,7 @@ from brokersre_sidecar.model.state import GatewaySnapshot
 from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, Phase, ProbeStatus
 
 _UNHEALTHY = frozenset({ProbeStatus.DOWN, ProbeStatus.DEGRADED, ProbeStatus.CLIENT_ID_IN_USE})
-_SILENCE_EXPECTED = frozenset({Phase.STOPPING, Phase.STOPPED, Phase.EXITED})
-_LOGIN_FAILURE_EVENTS = ("login_failed", "login_failed_dialog")
+_NOT_RUNNING = frozenset({Phase.STOPPING, Phase.STOPPED, Phase.EXITED})
 
 
 class Condition(Enum):
@@ -48,27 +55,22 @@ class Evaluation:
 
 @dataclass(frozen=True, slots=True)
 class RuleConfig:
-    """Thresholds of the rules. Only ``login_stall_s`` is operator-configurable.
+    """Thresholds of the rules the sidecar itself measures.
 
     Attributes:
-        login_stall_s: Phase ``login`` longer than this is a stalled login (LOGIN_STALL_S).
         api_unhealthy_after_s: The API must be unhealthy this long before it alerts.
         storm_boots: Gateway starts within 30 minutes that make a restart storm.
-        memory_high_for_s: Memory pressure must last this long before it alerts.
-        event_hold_s: An event-triggered condition stays active this long after the event.
+        event_hold_s: A point event (failed login, unknown dialog, OOM kill) keeps its
+            condition active this long.
         clock_skew_max_s: Tolerated clock difference in seconds.
-        silent_after_s: Seconds without any feed line that count as silence.
-        disk_low_bytes: Free space below this on a gateway volume is low.
+        silent_after_s: Seconds without an observed feed line that count as silence.
     """
 
-    login_stall_s: float
     api_unhealthy_after_s: float = 300.0
     storm_boots: int = 3
-    memory_high_for_s: float = 600.0
     event_hold_s: float = 900.0
     clock_skew_max_s: float = 1.0
     silent_after_s: float = 300.0
-    disk_low_bytes: float = 256 * 1024 * 1024
 
 
 _ACTIVE = Condition.ACTIVE
@@ -96,14 +98,15 @@ def skew_exceeds(skew_s: float, limit_s: float) -> bool:
 class RuleEngine:
     """Evaluates every condition class.
 
-    Holds one piece of memory: since when the API has been continuously unhealthy (moving
-    between ``down`` and ``degraded`` must not restart that clock). Single-threaded.
+    Holds one piece of memory: since when (monotonic) the API has been continuously
+    unhealthy; moving between ``down`` and ``degraded`` must not restart that clock.
+    Single-threaded.
     """
 
     def __init__(self, config: RuleConfig) -> None:
         """Create the engine with its thresholds."""
         self._config = config
-        self._unhealthy_since: datetime | None = None
+        self._unhealthy_since: float | None = None
 
     def evaluate(
         self,
@@ -111,35 +114,37 @@ class RuleEngine:
         probe: ProbeSnapshot,
         *,
         now: datetime,
-        volume_present: bool,
+        mono: float,
     ) -> dict[AlertClass, Evaluation]:
         """Return a verdict for every condition class.
 
         Args:
             gateway: What the feeds and the phase file say.
             probe: What the API probe says.
-            now: Current time (UTC).
-            volume_present: Whether the gateway's log volume is mounted.
+            now: Current time (UTC), for the age of point events.
+            mono: Current monotonic reading, for durations.
 
         Returns:
             One ``Evaluation`` per class except ``HEARTBEAT`` (which is not a condition).
         """
         phase = gateway.phase
-        phase_known = phase is not None and phase != UNKNOWN_PHASE
+        known = phase is not None and phase != UNKNOWN_PHASE
         return {
-            AlertClass.TWOFA_PENDING: self._phase_is(phase, phase_known, Phase.TWOFA_PENDING),
-            AlertClass.NEEDS_HUMAN: self._phase_is(phase, phase_known, Phase.NEEDS_HUMAN),
+            AlertClass.TWOFA_PENDING: self._phase_is(phase, known, Phase.TWOFA_PENDING),
+            AlertClass.NEEDS_HUMAN: self._needs_human(gateway, known),
             AlertClass.LOGIN_FAILED: self._login_failed(gateway, now),
-            AlertClass.EXISTING_SESSION: self._phase_is(phase, phase_known, Phase.EXISTING_SESSION),
-            AlertClass.LOGIN_STALLED: self._login_stalled(gateway, phase_known, now),
+            AlertClass.EXISTING_SESSION: self._phase_is(phase, known, Phase.EXISTING_SESSION),
+            AlertClass.LOGIN_STALLED: self._login_stalled(gateway, known),
             AlertClass.UNKNOWN_WINDOW: self._unknown_window(gateway, now),
-            AlertClass.GATEWAY_EXITED: self._phase_is(phase, phase_known, Phase.EXITED),
-            AlertClass.API_UNHEALTHY: self._api_unhealthy(probe, now),
+            AlertClass.GATEWAY_EXITED: self._phase_is(phase, known, Phase.EXITED),
+            AlertClass.API_UNHEALTHY: self._api_unhealthy(probe, now, mono),
             AlertClass.RESTART_STORM: self._restart_storm(gateway),
             AlertClass.RESOURCE_ALERT: self._resource_alert(gateway, now),
-            AlertClass.DISK_LOW: self._disk_low(gateway, now),
+            AlertClass.DISK_LOW: self._pair(
+                gateway, "disk_low", "the gateway reports low disk space"
+            ),
             AlertClass.CLOCK_SKEW: self._clock_skew(probe),
-            AlertClass.GATEWAY_SILENT: self._silent(gateway, now, volume_present),
+            AlertClass.GATEWAY_SILENT: self._silent(gateway),
         }
 
     @staticmethod
@@ -151,41 +156,65 @@ class RuleEngine:
             return Evaluation(_ACTIVE, f"gateway phase is {wanted.value}")
         return _INACTIVE
 
+    @staticmethod
+    def _pair(gateway: GatewaySnapshot, name: str, detail: str) -> Evaluation:
+        """Follow a gateway-reported pair: open is active, closed inactive, unseen unknown."""
+        pair = gateway.pairs.get(name)
+        if pair is None:
+            return _UNKNOWN
+        return Evaluation(_ACTIVE, detail) if pair.open else _INACTIVE
+
     def _fresh(self, gateway: GatewaySnapshot, name: str, now: datetime) -> bool:
         """True when event ``name`` happened within the hold time."""
         event = gateway.last_events.get(name)
         return event is not None and now - event.ts <= timedelta(seconds=self._config.event_hold_s)
 
+    @staticmethod
+    def _needs_human(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the phase is ``needs-human``; the detail names the cause when known."""
+        if not known:
+            return _UNKNOWN
+        if gateway.phase != Phase.NEEDS_HUMAN:
+            return _INACTIVE
+        rejected = gateway.last_events.get("login_failed_dialog")
+        unapproved = gateway.last_events.get("needs_human")
+        detail = "gateway phase is needs-human"
+        if rejected is not None and (unapproved is None or rejected.ts >= unapproved.ts):
+            detail += ": IBKR rejected the login"
+        elif unapproved is not None:
+            detail += ": the second factor was not approved"
+        return Evaluation(_ACTIVE, detail)
+
     def _login_failed(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
-        """Active after a recent login failure that no later login has superseded."""
+        """Active after a recent failed login that no later login has superseded.
+
+        Silent while the phase is ``needs-human``: a rejected login puts the gateway there,
+        and that one alert carries the cause.
+        """
         if not gateway.feeds_seen:
             return _UNKNOWN
-        failures = [
-            gateway.last_events[name].ts
-            for name in _LOGIN_FAILURE_EVENTS
-            if self._fresh(gateway, name, now)
-        ]
-        if not failures or gateway.phase == Phase.LOGGED_IN:
+        if gateway.phase in (Phase.LOGGED_IN, Phase.NEEDS_HUMAN):
             return _INACTIVE
-        if gateway.last_login is not None and gateway.last_login >= max(failures):
+        if not self._fresh(gateway, "login_failed", now):
+            return _INACTIVE
+        failed_at = gateway.last_events["login_failed"].ts
+        if gateway.last_login is not None and gateway.last_login >= failed_at:
             return _INACTIVE
         return Evaluation(_ACTIVE, "the gateway reported a failed login")
 
-    def _login_stalled(self, gateway: GatewaySnapshot, known: bool, now: datetime) -> Evaluation:
-        """Active when phase ``login`` has lasted too long, or the gateway says so itself."""
+    @staticmethod
+    def _login_stalled(gateway: GatewaySnapshot, known: bool) -> Evaluation:
+        """Active while the gateway's ``login_stalled`` pair is open and it is still logging in."""
         if not known:
             return _UNKNOWN
-        if gateway.phase != Phase.LOGIN:
-            return _INACTIVE
-        limit = self._config.login_stall_s
-        if self._fresh(gateway, "login_stalled", now):
-            return Evaluation(_ACTIVE, "the gateway reported a stalled login")
-        if gateway.phase_since is None:
-            return _UNKNOWN
-        elapsed = (now - gateway.phase_since).total_seconds()
-        if elapsed > limit:
-            return Evaluation(_ACTIVE, f"in phase login for {elapsed:.0f} s (limit {limit:.0f} s)")
-        return _UNKNOWN
+        pair = gateway.pairs.get("login_stalled")
+        if pair is None:
+            # The gateway never reported a stall; a login that is merely in progress is
+            # not for the sidecar to judge.
+            return _UNKNOWN if gateway.phase == Phase.LOGIN else _INACTIVE
+        if pair.open and gateway.phase == Phase.LOGIN:
+            return Evaluation(_ACTIVE, "the gateway reports a stalled login")
+        return _INACTIVE
 
     def _unknown_window(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
         """Active after a recent unclassified dialog while the gateway is not logged in."""
@@ -195,7 +224,7 @@ class RuleEngine:
             return Evaluation(_ACTIVE, "the gateway reported an unrecognised dialog")
         return _INACTIVE
 
-    def _api_unhealthy(self, probe: ProbeSnapshot, now: datetime) -> Evaluation:
+    def _api_unhealthy(self, probe: ProbeSnapshot, now: datetime, mono: float) -> Evaluation:
         """Active when the API has been unhealthy for long enough outside reset windows."""
         if probe.status is ProbeStatus.READY:
             self._unhealthy_since = None
@@ -203,9 +232,9 @@ class RuleEngine:
         if probe.status not in _UNHEALTHY:
             return _UNKNOWN
         if self._unhealthy_since is None:
-            since = probe.status_since if probe.status_since is not None else now
-            self._unhealthy_since = min(since, now)
-        elapsed = (now - self._unhealthy_since).total_seconds()
+            already = (now - probe.status_since).total_seconds() if probe.status_since else 0.0
+            self._unhealthy_since = mono - max(0.0, already)
+        elapsed = mono - self._unhealthy_since
         if elapsed <= self._config.api_unhealthy_after_s or probe.in_reset_window:
             # Too early to say, or a disconnect that IBKR's schedule explains.
             return _UNKNOWN
@@ -222,41 +251,15 @@ class RuleEngine:
         return _INACTIVE
 
     def _resource_alert(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
-        """Active on a recent OOM kill or on sustained memory pressure."""
+        """Active on a recent OOM kill or while the gateway's ``memory_high`` pair is open."""
         hold = timedelta(seconds=self._config.event_hold_s)
         if gateway.last_oom_at is not None and now - gateway.last_oom_at <= hold:
-            return Evaluation(_ACTIVE, "an out-of-memory kill was observed")
-        if gateway.memory_ratio is None:
-            return _UNKNOWN
-        if gateway.memory_high_since is None:
-            return _INACTIVE
-        elapsed = (now - gateway.memory_high_since).total_seconds()
-        if elapsed >= self._config.memory_high_for_s:
-            percent = gateway.memory_ratio * 100
-            return Evaluation(
-                _ACTIVE, f"memory working set at {percent:.0f}% of the limit for {elapsed:.0f} s"
-            )
-        return _UNKNOWN
-
-    def _disk_low(self, gateway: GatewaySnapshot, now: datetime) -> Evaluation:
-        """Active on the gateway's ``disk_low`` event or a measured free space below the limit."""
-        if self._fresh(gateway, "disk_low", now):
-            return Evaluation(_ACTIVE, "the gateway reported low disk space")
-        values = gateway.last_metrics.values if gateway.last_metrics is not None else {}
-        measured = [
-            (volume, values[key])
-            for volume, key in (
-                ("log", "disk_free_bytes_logs"),
-                ("settings", "disk_free_bytes_settings"),
-            )
-            if key in values
-        ]
-        if not measured:
-            return _UNKNOWN
-        low = [(volume, free) for volume, free in measured if free < self._config.disk_low_bytes]
-        if low:
-            volume, free = min(low, key=lambda item: item[1])
-            return Evaluation(_ACTIVE, f"{free / 1024**2:.0f} MiB free on the {volume} volume")
+            return Evaluation(_ACTIVE, "the gateway reports an out-of-memory kill")
+        pair = gateway.pairs.get("memory_high")
+        if pair is None:
+            return _INACTIVE if gateway.last_oom_at is not None else _UNKNOWN
+        if pair.open and gateway.phase not in _NOT_RUNNING:
+            return Evaluation(_ACTIVE, "the gateway reports memory pressure")
         return _INACTIVE
 
     def _clock_skew(self, probe: ProbeSnapshot) -> Evaluation:
@@ -267,16 +270,17 @@ class RuleEngine:
             return Evaluation(_ACTIVE, f"IBKR time minus host time is {probe.clock_skew_s:.1f} s")
         return _INACTIVE
 
-    def _silent(self, gateway: GatewaySnapshot, now: datetime, volume_present: bool) -> Evaluation:
-        """Active when a mounted, running gateway wrote nothing for ``silent_after_s``."""
+    def _silent(self, gateway: GatewaySnapshot) -> Evaluation:
+        """Active when a running gateway wrote nothing the sidecar observed for too long."""
         if (
-            not volume_present
+            not gateway.volume_present
             or not gateway.feeds_seen
-            or gateway.last_activity_at is None
-            or gateway.phase in _SILENCE_EXPECTED
+            or gateway.quiet_for_s is None
+            or gateway.phase in _NOT_RUNNING
         ):
             return _UNKNOWN
-        quiet = (now - gateway.last_activity_at).total_seconds()
-        if quiet > self._config.silent_after_s:
-            return Evaluation(_ACTIVE, f"no event and no metrics sample for {quiet:.0f} s")
+        if gateway.quiet_for_s > self._config.silent_after_s:
+            return Evaluation(
+                _ACTIVE, f"no event and no metrics sample for {gateway.quiet_for_s:.0f} s"
+            )
         return _INACTIVE

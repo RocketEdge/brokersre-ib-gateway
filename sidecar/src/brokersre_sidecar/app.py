@@ -254,7 +254,7 @@ class Application:
         channels = build_channels(settings, secrets, self._transport)
         self._dispatcher = Dispatcher(channels, self._clock, self._sleep)
         self._notifier = Notifier(
-            rules=RuleEngine(RuleConfig(login_stall_s=settings.login_stall_s)),
+            rules=RuleEngine(RuleConfig()),
             ladder=LadderEngine(
                 LadderConfig(
                     primary_channels=settings.primary_channels(),
@@ -274,7 +274,6 @@ class Application:
             clock=self._clock,
             gateway=self._state.snapshot,
             probe=self._engine.snapshot,
-            volume_present=lambda: self.feed.volume_present,
             ready=lambda: self._feed_ready,
         )
         self._supervisor.add("notify", self._notify)
@@ -322,7 +321,6 @@ class Application:
             probe=self._engine.snapshot(),
             notifier=self.notifier_snapshot(),
             tasks=self._supervisor.snapshot(),
-            volume_present=self.feed.volume_present,
             now=self._clock.now(),
         )
 
