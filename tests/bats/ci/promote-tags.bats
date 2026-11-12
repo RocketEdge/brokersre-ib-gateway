@@ -92,6 +92,18 @@ teardown() {
   [ ! -s "${CALLS}" ]
 }
 
+@test "an image name that is not a plain lower-case registry/repository is refused, even when every tag matches it" {
+  # The tag check alone would accept these: each tag does start with the given name.
+  run "$SCRIPT" "GHCR.io/Example/Gateway" "$DIGEST" "GHCR.io/Example/Gateway:stable"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"registry/repository"* ]]
+  run "$SCRIPT" "gateway" "$DIGEST" "gateway:stable"
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" "ghcr.io/example/gate way" "$DIGEST" "ghcr.io/example/gate way:stable"
+  [ "$status" -eq 2 ]
+  [ ! -s "${CALLS}" ]
+}
+
 @test "a digest that is not sha256:<64 hex>, a tagged image name and a missing tag list are refused" {
   run "$SCRIPT" "$IMAGE" "sha256:abc" "$IMAGE:stable"
   [ "$status" -eq 2 ]
