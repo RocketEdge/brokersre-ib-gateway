@@ -36,7 +36,9 @@ install_docker() {
   install -m 0755 -d /etc/apt/keyrings
   curl --silent --show-error --fail --location --retry 5 --retry-delay 3 --max-time 60 \
     https://download.docker.com/linux/ubuntu/gpg --output /etc/apt/keyrings/docker.asc
-  if ! gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q "^fpr:.*:${docker_key_fingerprint}:$"; then
+  # Not `grep -q`: under pipefail a quiet grep that exits at its first match can kill the
+  # writer with SIGPIPE, and the right key would then be reported as the wrong one.
+  if ! gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep "^fpr:.*:${docker_key_fingerprint}:$" >/dev/null; then
     echo "install: the Docker repository key does not have the expected fingerprint" >&2
     rm -f /etc/apt/keyrings/docker.asc
     return 1

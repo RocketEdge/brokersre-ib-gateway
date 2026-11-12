@@ -636,10 +636,16 @@ group_pipeline() {
   if [[ -z "${AZPACK_KEEP:-}" ]]; then docker rm -f "${c}" >/dev/null 2>&1; fi
 }
 
+# A pipeline that ends in `grep -q` is wrong under `set -o pipefail`: the quiet grep exits at
+# its first match, the writer in front of it dies of SIGPIPE (exit 141) and the pipeline counts
+# as failed although the text was found. It showed on the first run in GitHub Actions, for a
+# text near the start of a long `docker logs`; on the development host the writer survived.
+# Every check here therefore lets grep read all of its input.
+
 # container_says <container> <text>: true when the container has printed the text.
-container_says() { docker logs "$1" 2>&1 | grep -qF -- "$2"; }
+container_says() { docker logs "$1" 2>&1 | grep -F -- "$2" >/dev/null; }
 # raw_sink_is_failing <container>: true when the raw sink has reported a delivery it must retry.
-raw_sink_is_failing() { docker logs "$1" 2>&1 | grep -F '"component_id":"azure_raw"' | grep -qiE 'retry|error'; }
+raw_sink_is_failing() { docker logs "$1" 2>&1 | grep -F '"component_id":"azure_raw"' | grep -iE 'retry|error' >/dev/null; }
 
 compiled_main="${work_dir}/main.json"
 
@@ -824,7 +830,7 @@ group_kql() {
   code=$?
   expect "the checker fails on the deliberately broken queries" '${code} -eq 1'
   while IFS='|' read -r file text; do
-    if printf '%s\n' "${out}" | grep -A 3 -F "FAIL  ${file}" | grep -qF "${text}"; then
+    if printf '%s\n' "${out}" | grep -A 3 -F "FAIL  ${file}" | grep -F "${text}" >/dev/null; then
       pass "the checker notices: ${file}"
     else
       fail "the checker notices: ${file}" "expected '${text}'"
@@ -878,7 +884,7 @@ group_kql_run() {
     fail "start the Kusto emulator" "docker failed"
     return
   fi
-  emulator_ready() { printf '%s' '{"csl": ".show cluster"}' | kusto_post "${engine}" "${network}" mgmt | grep -q '"Tables"'; }
+  emulator_ready() { printf '%s' '{"csl": ".show cluster"}' | kusto_post "${engine}" "${network}" mgmt | grep '"Tables"' >/dev/null; }
   if ! wait_for 180 emulator_ready; then
     fail "start the Kusto emulator" "it did not answer within 180 s"
     docker rm -f "${engine}" >/dev/null 2>&1
