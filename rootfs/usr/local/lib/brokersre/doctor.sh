@@ -9,13 +9,20 @@
 #                 "checks":[{"name":"...","status":"pass|warn|fail|skip","detail":"...","fix":"..."}]}
 #   --online     also test that IBKR's login servers accept a TCP connection (5 s per server);
 #   --startup    for the entrypoint: no table; one log-contract event per WARN and per FAIL and
-#                a final doctor_ok when nothing failed (see doctor_emit_startup).
-# Exit status: 0 when no check failed, 1 when at least one did, 2 for a usage error. With
+#                a final doctor_ok when nothing failed (see doctor_emit_startup); the verdict
+#                is also written to a result file (see below).
+# Exit status: 0 when no check failed, 1 when at least one did, 2 for a usage error, 70 when
+#   doctor's own code aborted (never 1: a defect of the preflight is not a failed check). With
 #   --startup and DOCTOR_STRICT=no a failure is logged and the status is 0.
+# Result file (--startup only): ${DOCTOR_RESULT_FILE:-${RUN_DIR:-/run/brokersre}/doctor.result}
+#   holds one line, `fail`, `warn` or `pass`; `fail` exactly when the run exits 1. A stale file
+#   is removed when the run starts and the new one is written atomically, so the file is
+#   positive evidence of this run's verdict: the entrypoint stops a start only when the status
+#   is 1 AND the file says `fail`.
 # Environment read besides the image's documented variables: STRICT_ENV=yes (ignored variables
-#   fail instead of warn), DOCTOR_STRICT=no, DISK_MIN_FREE_PCT (default 10), CGROUP_ROOT
-#   (default /sys/fs/cgroup) and DOCTOR_TCP (a command taking host and port that replaces the
-#   TCP probe; both exist for the tests).
+#   fail instead of warn), DOCTOR_STRICT=no, DISK_MIN_FREE_PCT (default 10), DOCTOR_RESULT_FILE,
+#   CGROUP_ROOT (default /sys/fs/cgroup) and DOCTOR_TCP (a command taking host and port that
+#   replaces the TCP probe); the last two exist for the tests.
 #
 # Design rules:
 #   - Every check is one function check_<name> that prints one or more result lines
@@ -33,7 +40,8 @@
 #   - Nothing here prints a secret, its length, or the value of a variable that could hold one
 #     by mistake (a *_FILE variable, an unknown variable): such variables are named, never
 #     quoted. Secret files are examined with bash builtins only, so no secret reaches `ps`.
-#   - Checks never change anything: no directory is created, no file is written.
+#   - Checks never change anything: no directory is created, no file is written. The one file
+#     doctor writes is the result file of --startup.
 #   - Pure bash plus coreutils; no time-zone database is needed or used.
 #
 # The file is both the executable and a library: sourcing it defines the functions and runs
@@ -79,9 +87,12 @@ doctor_warning_event="doctor_warning"
 # The detail of the WARN that stands for a crashed check, the same in every output mode.
 doctor_crash_detail="check crashed (a defect in doctor, please report it); the start continues"
 
-# Free space below this many KiB (256 MiB) on the filesystem of the log or the settings volume
-# is the one disk condition that fails: the Gateway cannot write its logs or settings.
-doctor_disk_floor_kb=262144
+# Free space below this many KiB (16 MiB) on the filesystem of the log or the settings volume
+# is the one disk condition that fails: the Gateway cannot write its settings and its first
+# log lines. The floor is low on purpose: a 64 MiB tmpfs for the settings directory is a
+# supported setup and must not fail while it has room; above the floor a volume is judged by
+# DISK_MIN_FREE_PCT, which only warns.
+doctor_disk_floor_kb=16384
 
 # Results of the current run, filled by doctor_run_check: four parallel arrays, one entry per
 # result line.
@@ -822,7 +833,7 @@ check_relay_exposure() {
 }
 
 # doctor_size KIB: print a size given in KiB as MiB (below 1 GiB) or GiB with one decimal,
-# truncated, never rounded up: `97.6 MiB`, `256.0 MiB`, `47.6 GiB`.
+# truncated, never rounded up: `15.9 MiB`, `16.0 MiB`, `47.6 GiB`.
 doctor_size() {
   local -i kib="$1" unit=1024
   local suffix="MiB"
@@ -835,9 +846,10 @@ doctor_size() {
 
 # check_disk_space: free space of the filesystems that hold LOG_DIR and TWS_SETTINGS_PATH.
 #
-#   FAIL  less than 256 MiB free (doctor_disk_floor_kb): an absolute floor, because only then
-#         is it certain that the Gateway cannot write its logs or settings. A percentage
-#         cannot say that: 2% of a 4 TB disk is 80 GB.
+#   FAIL  less than 16 MiB free (doctor_disk_floor_kb): an absolute floor, because only then
+#         is it certain that the Gateway cannot write its settings and its first log lines.
+#         A percentage cannot say that (2% of a 4 TB disk is 80 GB), and a higher floor would
+#         fail a small volume that works, such as a 64 MiB tmpfs for the settings directory.
 #   WARN  free below DISK_MIN_FREE_PCT percent (default 10; a bad value means 10).
 #   PASS  otherwise. The detail always gives free and total space and the percentage.
 # One result per filesystem: when both paths are on the same one it is reported once,
@@ -897,7 +909,7 @@ check_disk_space() {
     percent=$((group_available[i] * 100 / total))
     detail="${label}: $(doctor_size "${group_available[i]}") free of $(doctor_size "${total}") (${percent}% free) on ${group_key[i]}"
     if ((group_available[i] < doctor_disk_floor_kb)); then
-      doctor_result FAIL "${name}" "${detail}; less than $((doctor_disk_floor_kb / 1024)) MiB free: the Gateway cannot write its logs or settings" "${fix}"
+      doctor_result FAIL "${name}" "${detail}; less than $((doctor_disk_floor_kb / 1024)) MiB free: the Gateway cannot write its settings and its first log lines" "${fix}"
     elif ((group_available[i] * 100 < total * minimum)); then
       doctor_result WARN "${name}" "${detail}, below DISK_MIN_FREE_PCT=${minimum}" "${fix}"
     else
@@ -1032,8 +1044,36 @@ doctor_print_json() {
   printf '%s]}\n' "${out}"
 }
 
-# doctor_emit_startup: report the results as log-contract events (src `doctor`) and decide
-# whether the container may start. Returns 0 to start, 1 to stop.
+# doctor_result_file: print the path of the result file of --startup,
+# ${DOCTOR_RESULT_FILE:-${RUN_DIR:-/run/brokersre}/doctor.result}.
+doctor_result_file() {
+  printf '%s' "${DOCTOR_RESULT_FILE:-${RUN_DIR:-/run/brokersre}/doctor.result}"
+}
+
+# doctor_write_verdict VERDICT: write the one line VERDICT (`fail`, `warn` or `pass`) to the
+# result file. Returns 0 when the file now holds it, 1 when it could not be written; prints
+# nothing.
+#
+# Atomic: the line goes to a temporary file in the same directory, which is then renamed over
+# the result file, so a reader never sees an empty or half-written verdict. `mv -T` refuses to
+# move the temporary file INTO a directory that sits at the result path. The directory is not
+# created: a missing one is a failure the caller reports. On failure the temporary file is
+# removed again, so nothing is left behind.
+doctor_write_verdict() {
+  local verdict="$1" file temporary
+  file="$(doctor_result_file)"
+  temporary="${file}.tmp.$$"
+  if { printf '%s\n' "${verdict}" >"${temporary}"; } 2>/dev/null \
+    && mv -fT -- "${temporary}" "${file}" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "${temporary}" 2>/dev/null || true
+  return 1
+}
+
+# doctor_emit_startup: report the results as log-contract events (src `doctor`), write the
+# verdict to the result file and decide whether the container may start. Returns 0 to start,
+# 1 to stop.
 #
 #   WARN  -> level warn;  event config_deprecated for ignored_variables, else doctor_warning
 #   FAIL  -> level error; event config_deprecated for ignored_variables, else doctor_failed
@@ -1043,8 +1083,12 @@ doctor_print_json() {
 # The message is `<check>: <detail> (fix: <fix>)`. PASS and SKIP are not logged one by one.
 # DOCTOR_STRICT=no: a FAIL is logged with level warn and does not stop the start (the escape
 # hatch for a check that is wrong about an unusual deployment); doctor_ok is still withheld.
+# Verdict in the result file: `fail` exactly when this function returns 1; `warn` when a check
+# warned, or failed under DOCTOR_STRICT=no; `pass` otherwise. A result file that cannot be
+# written is one doctor_warning event and changes neither the events nor the return status:
+# without the file the entrypoint does not stop the start, which is the safe side.
 doctor_emit_startup() {
-  local strict="${DOCTOR_STRICT:-yes}" status name event level message
+  local strict="${DOCTOR_STRICT:-yes}" status name event level message verdict
   local -i i failures=0
   for i in "${!doctor_r_status[@]}"; do
     status="${doctor_r_status[i]}"
@@ -1069,6 +1113,16 @@ doctor_emit_startup() {
     if [ -n "${doctor_r_fix[i]}" ]; then message+=" (fix: ${doctor_r_fix[i]})"; fi
     log_event doctor "${level}" "${event}" "${message}"
   done
+  verdict="pass"
+  if ((failures > 0)); then
+    verdict="fail"
+    if [ "${strict}" = "no" ]; then verdict="warn"; fi
+  elif [ "$(doctor_count WARN)" -gt 0 ]; then
+    verdict="warn"
+  fi
+  if ! doctor_write_verdict "${verdict}"; then
+    log_event doctor warn "${doctor_warning_event}" "result_file: cannot write the result file $(doctor_result_file); the exit status is unchanged"
+  fi
   if ((failures == 0)); then
     log_event doctor info doctor_ok "preflight passed: $(doctor_count PASS) passed, $(doctor_count WARN) warned, $(doctor_count SKIP) skipped"
     return 0
@@ -1084,8 +1138,8 @@ doctor_usage() {
     "  (no option)  table of the preflight checks and a one-line summary" \
     "  --json       one JSON document (schema brokersre.doctor.v1)" \
     "  --online     also test that IBKR's login servers accept a TCP connection" \
-    "  --startup    for the entrypoint: log events instead of a table" \
-    "exit status: 0 no check failed, 1 at least one check failed, 2 usage error"
+    "  --startup    for the entrypoint: log events instead of a table, verdict in the result file" \
+    "exit status: 0 no check failed, 1 at least one check failed, 2 usage error, 70 doctor itself aborted"
 }
 
 # doctor_main [--json] [--online] [--startup]: run every check and report in the chosen mode.
@@ -1093,6 +1147,9 @@ doctor_usage() {
 # Returns 0 when no check failed, 1 when at least one did (with --startup: unless
 # DOCTOR_STRICT=no), 2 for an unknown option or for --json together with --startup. Resets and
 # fills the doctor_r_* arrays; safe to call from a shell with errexit, nounset and pipefail.
+# With --startup the result file of an earlier run is removed before the first check runs, so
+# that whatever happens next, an old `fail` can never be read as this run's verdict; the other
+# modes neither write nor touch that file.
 doctor_main() {
   local mode="table" argument name
   local -a checks=("${doctor_checks[@]}")
@@ -1120,6 +1177,7 @@ doctor_main() {
   if [ "${json}" = "yes" ]; then mode="json"; fi
   if [ "${startup}" = "yes" ]; then mode="startup"; fi
   if [ "${online}" = "yes" ]; then checks+=(ibkr_reachable); fi
+  if [ "${mode}" = "startup" ]; then rm -f -- "$(doctor_result_file)" 2>/dev/null || true; fi
   doctor_r_status=()
   doctor_r_name=()
   doctor_r_detail=()
@@ -1139,7 +1197,24 @@ doctor_main() {
   return 0
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+# doctor_cli ARGS...: the program. Runs doctor_main under nounset and exits the shell with its
+# status (0, 1 or 2). Never returns.
+#
+# When doctor's own code aborts before doctor_main has returned (an unset variable under
+# nounset is the realistic case, and bash then leaves with status 1), the EXIT trap turns the
+# status into 70: status 1 is reserved for "a check failed", and a defect of the preflight
+# must not look like one. The trap is not inherited by the subshells the checks run in, so a
+# crashed check is still handled by doctor_run_check and not here.
+doctor_cli() {
+  local -i status=0
+  doctor_finished="no"
+  trap 'if [ "${doctor_finished:-no}" != "yes" ]; then exit 70; fi' EXIT
   set -u
-  doctor_main "$@"
+  doctor_main "$@" || status=$?
+  doctor_finished="yes"
+  exit "${status}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  doctor_cli "$@"
 fi

@@ -23,7 +23,8 @@ setup() {
   export TRADING_MODE=paper READ_ONLY_API=yes CUSTOM_CONFIG=no TIME_ZONE=America/New_York
   export AUTO_RESTART_TIME='11:45 PM' BOOT_ID=0123456789abcdef
   unset TWS_USERID TWS_PASSWORD AUTO_LOGOFF_TIME JAVA_HEAP_MB JAVA_USER_HOME DISK_MIN_FREE_PCT \
-    STRICT_ENV DOCTOR_STRICT DOCTOR_TCP TZ VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD_FILE
+    STRICT_ENV DOCTOR_STRICT DOCTOR_TCP DOCTOR_RESULT_FILE TZ VNC_SERVER_PASSWORD VNC_SERVER_PASSWORD_FILE
+  RESULT="${RUN_DIR}/doctor.result"
   REAL_PATH="${PATH}"
   stub_df
   df_answer log 50000000 50000000 /mnt/data
@@ -1088,38 +1089,62 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [[ "$(detail)" == *"66.7 GiB free"*"(1% free)"* ]]
 }
 
-@test "disk_space: FAIL below the absolute floor of 256 MiB free" {
-  df_answer log 99900000 100000 /mnt/data
-  df_answer settings 99900000 100000 /mnt/data
+@test "disk_space: FAIL below the absolute floor of 16 MiB free" {
+  df_answer log 99990000 10000 /mnt/data
+  df_answer settings 99990000 10000 /mnt/data
   run check disk_space
   one_result FAIL disk_space
-  [[ "$(detail)" == *"97.6 MiB free of 95.3 GiB (0% free)"* ]]
-  [[ "$(detail)" == *"less than 256 MiB"*"cannot write its logs"* ]]
+  [[ "$(detail)" == *"9.7 MiB free of 95.3 GiB (0% free)"* ]]
+  [[ "$(detail)" == *"less than 16 MiB free"*"cannot write"* ]]
   [ -n "$(fix)" ]
 }
 
-@test "disk_space: the floor is absolute: a small volume fails one kilobyte below 256 MiB even when half free" {
-  df_answer log 262145 262143 /mnt/data
-  df_answer settings 262145 262143 /mnt/data
+@test "disk_space: a hundred megabytes free on a full large disk is a WARN, not a FAIL" {
+  df_answer log 99900000 100000 /mnt/data
+  df_answer settings 99900000 100000 /mnt/data
   run check disk_space
-  one_result FAIL disk_space
-  [[ "$(detail)" == *"255.9 MiB free of 512.0 MiB (49% free)"* ]]
+  one_result WARN disk_space
+  [[ "$(detail)" == *"97.6 MiB free of 95.3 GiB (0% free)"* ]]
 }
 
-@test "disk_space: exactly 256 MiB free is not a FAIL" {
-  df_answer log 262144 262144 /mnt/data
-  df_answer settings 262144 262144 /mnt/data
+@test "disk_space: the floor is absolute: a small volume fails one kilobyte below 16 MiB even when half free" {
+  df_answer log 16385 16383 /mnt/data
+  df_answer settings 16385 16383 /mnt/data
+  run check disk_space
+  one_result FAIL disk_space
+  [[ "$(detail)" == *"15.9 MiB free of 32.0 MiB (49% free)"* ]]
+}
+
+@test "disk_space: exactly 16 MiB free is not a FAIL" {
+  df_answer log 16384 16384 /mnt/data
+  df_answer settings 16384 16384 /mnt/data
   run check disk_space
   one_result PASS disk_space
-  [[ "$(detail)" == *"256.0 MiB free of 512.0 MiB (50% free)"* ]]
-  df_answer log 99737856 262144 /mnt/data
-  df_answer settings 99737856 262144 /mnt/data
+  [[ "$(detail)" == *"16.0 MiB free of 32.0 MiB (50% free)"* ]]
+  df_answer log 99983616 16384 /mnt/data
+  df_answer settings 99983616 16384 /mnt/data
   run check disk_space
   one_result WARN disk_space
 }
 
+# A small tmpfs for the settings directory is a supported setup: it is judged by the
+# percentage like any other volume and never fails while 16 MiB are free.
+@test "disk_space: a 64 MiB tmpfs that is half free passes, or warns by percentage, and never fails" {
+  df_answer settings 32768 32768 /home/ibgateway/Jts/settings tmpfs
+  run check disk_space
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "${lines[0]}" == "PASS|disk_space|LOG_DIR:"* ]]
+  [[ "${lines[1]}" == "PASS|disk_space|TWS_SETTINGS_PATH: 32.0 MiB free of 64.0 MiB (50% free) on /home/ibgateway/Jts/settings|"* ]]
+  DISK_MIN_FREE_PCT=60 run check disk_space
+  [[ "${lines[1]}" == "WARN|disk_space|TWS_SETTINGS_PATH: 32.0 MiB free of 64.0 MiB (50% free)"*"DISK_MIN_FREE_PCT=60"* ]]
+  df_answer settings 45875 19661 /home/ibgateway/Jts/settings tmpfs
+  DISK_MIN_FREE_PCT=60 run check disk_space
+  [[ "${lines[1]}" == "WARN|disk_space|TWS_SETTINGS_PATH: 19.2 MiB free of 64.0 MiB (30% free)"* ]]
+}
+
 @test "disk_space: only the filesystem that is below the floor fails" {
-  df_answer log 99900000 100000 /mnt/log /dev/logdisk
+  df_answer log 99990000 10000 /mnt/log /dev/logdisk
   run check disk_space
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
@@ -1366,10 +1391,10 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   echo "$output" | jq -es '[.[0:3][] | .msg | split(":")[0]] == ["time_zone", "heap_vs_memory", "disk_space"]' >/dev/null
 }
 
-@test "--startup: a heap as large as the memory limit and a disk below 256 MiB free stop a strict start" {
+@test "--startup: a heap as large as the memory limit and a disk below 16 MiB free stop a strict start" {
   mem_limit_mb 768
-  df_answer log 99900000 100000 /mnt/data
-  df_answer settings 99900000 100000 /mnt/data
+  df_answer log 99990000 10000 /mnt/data
+  df_answer settings 99990000 10000 /mnt/data
   run "${DOCTOR}" --startup
   [ "$status" -eq 1 ]
   echo "$output" | jq -es '[.[] | select(.event == "doctor_failed" and .level == "error") | .msg | split(":")[0]] == ["heap_vs_memory", "disk_space"]' >/dev/null
@@ -1407,6 +1432,168 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
   [ "$status" -eq 1 ]
   echo "$output" | jq -es 'all(has("ts") and has("src") and has("level") and has("event") and has("msg"))' >/dev/null
   echo "$output" | jq -es '.[0] | .event == "doctor_failed" and (.msg | startswith("credentials: ") and contains("UTF-16"))' >/dev/null
+}
+
+# ---------------------------------------------------------------------------------------------
+# The verdict file of --startup
+#
+# The exit status alone cannot tell "a check failed" from "the preflight ended abnormally", so
+# a --startup run leaves its verdict in ${RUN_DIR}/doctor.result: one line, fail, warn or pass.
+# The entrypoint stops a start only when the status is 1 AND the file says fail.
+# ---------------------------------------------------------------------------------------------
+
+# verdict_is WORD: the result file holds exactly the one line WORD.
+verdict_is() {
+  [ -f "${RESULT}" ]
+  [ "$(wc -l <"${RESULT}")" -eq 1 ]
+  [ "$(cat "${RESULT}")" == "$1" ]
+}
+
+@test "--startup writes pass to the result file when nothing failed or warned, and leaves no temporary file" {
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  verdict_is pass
+  [ "$(ls -A "${RUN_DIR}")" == "doctor.result" ]
+}
+
+@test "--startup writes warn to the result file when a check warned" {
+  unset AUTO_RESTART_TIME
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  verdict_is warn
+}
+
+@test "--startup writes fail to the result file when the run exits 1" {
+  export TRADING_MODE=both
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  verdict_is fail
+  [ "$(ls -A "${RUN_DIR}")" == "doctor.result" ]
+}
+
+@test "--startup with DOCTOR_STRICT=no and a failing check writes warn, because the start is not stopped" {
+  export TRADING_MODE=both DOCTOR_STRICT=no
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  verdict_is warn
+}
+
+@test "--startup with STRICT_ENV=yes writes fail for an ignored variable, and warn when DOCTOR_STRICT=no overrules it" {
+  export JAVA_HEAP_SIZE=1024 STRICT_ENV=yes
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  verdict_is fail
+  DOCTOR_STRICT=no run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  verdict_is warn
+}
+
+@test "--startup writes warn, never fail, when the only finding is a crashed check" {
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_main --startup"
+  [ "$status" -eq 0 ]
+  verdict_is warn
+}
+
+@test "a stale fail from a previous run is gone when the new run passes" {
+  printf 'fail\n' >"${RESULT}"
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  verdict_is pass
+}
+
+@test "the stale result file is removed at the start of a --startup run, before any check runs" {
+  printf 'fail\n' >"${RESULT}"
+  run bash -uc "source '${DOCTOR}'; check_time_zone() { if [ -e '${RESULT}' ]; then doctor_result FAIL time_zone 'the stale file is still there'; else doctor_result PASS time_zone 'no stale file'; fi; }; doctor_main --startup"
+  [ "$status" -eq 0 ]
+  verdict_is pass
+}
+
+@test "a result file that cannot be written is one doctor_warning event and does not change the exit status" {
+  # A directory in the file's place: it can be neither removed nor replaced.
+  mkdir "${RESULT}"
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -es --arg path "${RESULT}" '[.[] | select(.event == "doctor_warning" and .level == "warn" and (.msg | contains("result file") and contains($path)))] | length == 1' >/dev/null
+  echo "$output" | jq -es '.[-1].event == "doctor_ok"' >/dev/null
+  [ -d "${RESULT}" ]
+  [ -z "$(ls -A "${RESULT}")" ]
+  [ "$(ls -A "${RUN_DIR}")" == "doctor.result" ]
+  export TRADING_MODE=both
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_warning" and (.msg | contains("result file")))] | length == 1' >/dev/null
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_failed")] | length == 1' >/dev/null
+}
+
+@test "DOCTOR_RESULT_FILE moves the result file, and a missing directory there is the same warning" {
+  export DOCTOR_RESULT_FILE="${T}/elsewhere.result" TRADING_MODE=both
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  [ "$(cat "${T}/elsewhere.result")" == "fail" ]
+  [ ! -e "${RESULT}" ]
+  export DOCTOR_RESULT_FILE="${T}/no-such-directory/doctor.result"
+  run "${DOCTOR}" --startup
+  [ "$status" -eq 1 ]
+  echo "$output" | jq -es '[.[] | select(.event == "doctor_warning" and (.msg | contains("result file") and contains("no-such-directory")))] | length == 1' >/dev/null
+  [ ! -e "${T}/no-such-directory" ]
+}
+
+@test "the result file is never written, and a present one never touched, without --startup" {
+  run "${DOCTOR}"
+  [ ! -e "${RESULT}" ]
+  run "${DOCTOR}" --json
+  [ ! -e "${RESULT}" ]
+  DOCTOR_TCP=true run "${DOCTOR}" --online
+  [ ! -e "${RESULT}" ]
+  export TRADING_MODE=both
+  run "${DOCTOR}" --json
+  [ "$status" -eq 1 ]
+  [ ! -e "${RESULT}" ]
+  printf 'pass\n' >"${RESULT}"
+  run "${DOCTOR}"
+  [ "$status" -eq 1 ]
+  verdict_is pass
+}
+
+# ---------------------------------------------------------------------------------------------
+# An abort of doctor's own code is not a failed check
+#
+# Status 1 means "a check failed". When doctor's own main code aborts (an unset variable under
+# nounset is the realistic case) the program exits 70 instead, so that nobody reads a defect
+# of the preflight as a reason to stop the gateway.
+# ---------------------------------------------------------------------------------------------
+
+@test "the program exits with the status of the run: 0, 1 for a failed check, 2 for a usage error" {
+  run bash -c "source '${DOCTOR}'; doctor_cli --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.result == "pass"' >/dev/null
+  TRADING_MODE=both run bash -c "source '${DOCTOR}'; doctor_cli --json"
+  [ "$status" -eq 1 ]
+  run bash -c "source '${DOCTOR}'; doctor_cli --bogus"
+  [ "$status" -eq 2 ]
+}
+
+@test "an abort of doctor's own code exits 70, not 1" {
+  run bash -c "source '${DOCTOR}'; doctor_print_table() { printf '%s' \"\${NO_SUCH_VARIABLE}\"; }; doctor_cli"
+  [ "$status" -eq 70 ]
+  export TRADING_MODE=both
+  run bash -c "source '${DOCTOR}'; doctor_print_json() { printf '%s' \"\${NO_SUCH_VARIABLE}\"; }; doctor_cli --json"
+  [ "$status" -eq 70 ]
+}
+
+@test "--startup: an abort before the verdict exits 70 and leaves no result file, not even a stale one" {
+  printf 'fail\n' >"${RESULT}"
+  export TRADING_MODE=both
+  run bash -c "source '${DOCTOR}'; doctor_emit_startup() { printf '%s' \"\${NO_SUCH_VARIABLE}\"; }; doctor_cli --startup"
+  [ "$status" -eq 70 ]
+  [ ! -e "${RESULT}" ]
+}
+
+@test "a crashed check is still not an abort: the program exits 0 and reports the WARN" {
+  run bash -c "source '${DOCTOR}'; check_time_zone() { exit 7; }; doctor_cli --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e --arg detail "${CRASH_DETAIL}" '.checks[] | select(.name == "time_zone") | .status == "warn" and .detail == $detail' >/dev/null
+  echo "$output" | jq -e '[.checks[] | select(.status == "pass")] | length == 9' >/dev/null
 }
 
 @test "--help prints the usage and exits 0; an unknown option exits 2" {
@@ -1532,7 +1719,8 @@ fix() { printf '%s' "${lines[${1:-0}]}" | cut -d'|' -f4; }
 # ---------------------------------------------------------------------------------------------
 
 # no_canary_in_any_mode: run every output mode in the current environment and require that the
-# canary is in none of them, nor in anything written to the log volume. Each run must really
+# canary is in none of them, nor in anything written to the log volume or the run directory
+# (the result file). Each run must really
 # have been a doctor run (exit status 0 or 1 and some output), so that a script that did not
 # start cannot pass as "nothing leaked".
 no_canary_in_any_mode() {
@@ -1559,8 +1747,8 @@ no_canary_in_any_mode() {
       return 1
     fi
   done
-  if grep -rqF "${CANARY}" "${LOG_DIR}"; then
-    echo "the canary leaked into the log volume"
+  if grep -rqF "${CANARY}" "${LOG_DIR}" "${RUN_DIR}"; then
+    echo "the canary leaked into the log volume or the run directory"
     return 1
   fi
 }
