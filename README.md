@@ -52,7 +52,7 @@ Registry: `ghcr.io/rocketedge/brokersre-ib-gateway`. The pinned versions live in
 | IBKR channel | IB Gateway | IBC | Tags |
 |---|---|---|---|
 | stable | 10.50.1g | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1g` |
-| latest | 10.51.1e | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.51`, `10.51.1e` |
+| latest | 10.52.1d | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.52`, `10.52.1d` |
 <!-- versions:end -->
 
 The table is generated from `versions.json` by `scripts/readme-versions.sh` (CI fails when it is

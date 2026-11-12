@@ -22,11 +22,11 @@
       }
     },
     "latest": {
-      "version": "10.51.1e",
-      "build_datetime": "20261026 16:53:53",
+      "version": "10.52.1d",
+      "build_datetime": "20261112 16:03:29",
       "sha256": {
-        "x64": "e57858252ae21da7395e5c08884639cc45dfc15eed24a7ccd6cf4383d2826ec0",
-        "arm": "6aa611348ec6709b59a4a966494aa54969c7848249579dccdca0d3a333e908f6"
+        "x64": "11443650c0305751b8e239c894e4730db8a452c03a41255298f29f89a4fcc603",
+        "arm": "b7b6ed70b21b6240a12574fbb559d698c7325eb42be682412329fc148b5217e0"
       }
     }
   }
