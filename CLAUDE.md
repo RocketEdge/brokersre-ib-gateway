@@ -117,7 +117,7 @@ rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM 
 rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), screenshot (opt-in picture of the screen, a copy of Xvfb's framebuffer file), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
 scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
-scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-report-arch.sh, promote-tags.sh   decisions of publish.yml as tested scripts (channel list, no tag in both channels, platform manifests, platform of a scan report, tags -> the scanned digest)
+scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-report-arch.sh, promote-tags.sh, release-upsert.sh   decisions of publish.yml as tested scripts (channel list, no tag in both channels, platform manifests, platform of a scan report, tags -> the scanned digest, the release written with retries and read back)
 scripts/rebuild-decision.sh, rebuild-channels.sh, rebuild-issue.sh   decisions of rebuild.yml (fixable CRITICAL/HIGH -> rebuild request; one issue per channel, one comment per day, stop after REBUILD_MAX_ATTEMPTS days)
 scripts/check-vex.sh, security/vex/               OpenVEX statements for IBKR's bundled jars and their drift check; docs/evidence.md maps due-diligence questions to artefacts
 tests/bats/ci/workflows.bats, workflow-steps.awk    workflow policy as tests (gate flags, pins, no expression in a script, cron strings); tests/bats/ci/fixtures/ real Trivy reports
@@ -277,6 +277,17 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - trivy-action ignores `severity` when `format: sarif` unless `limit-severities-for-sarif: "true"`
   is set; with `exit-code: 1` a gate then fails on any severity. Bump the Trivy version in the
   three workflows, `tests/bats/ci/workflows.bats` and `docs/evidence.md` together.
+- `publish.yml` writes the release only through `scripts/release-upsert.sh` (a test fails on a
+  `gh release upload|create|edit|delete-asset` in the workflow): the step runs after the tags
+  have moved, and a bare `gh` command died there of one HTTP 502. `gh release view` exits 1
+  both for "release not found" and for a server error; only the message tells them apart. If
+  a publish still fails in "Tag and release", the tags and the release disagree: compare
+  `docker buildx imagetools inspect --raw <image>:<tag> | sha256sum` with the release's
+  `digests-<channel>.json` (it can be missing: replacing an asset deletes the old one
+  first), then `gh run rerun <id> --failed` (L30). `gh release create` with assets makes a
+  draft first; a failed creation can leave it, and an update does not publish a draft
+  unless it says `--draft=false`. A variable set inside `$(...)` is lost: keep a failure
+  reason in a file when the failing call runs in a command substitution.
 - A new or vanished CVE in IBKR's jars shows as a VEX drift warning in CI and publish: update
   `security/vex/ibgateway-vendor-jars.openvex.json` (bump `version`, never `fixed`, never
   `not_affected` without evidence). `tests/bats/ci/fixtures/vex/in-sync.openvex.json` and

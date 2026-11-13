@@ -108,3 +108,9 @@
 - [ ] Needs a real session: the console during a login (L26), one recipe against a real system (L28)
 - [ ] Decide: a run-time switch for console input with its own event; limit the console bridge to the Docker host (ADR 0017, revisit triggers)
 - [ ] Follow-up: a console session open at shutdown has no `vnc_client_disconnected`
+
+## Release step retry (2026-11-13, branch `fix/publish-release-retry`)
+
+- [x] `scripts/release-upsert.sh`: the release is created or updated with five attempts and read back; `publish.yml` uses it (the HTTP 502 of 2026-11-13)
+- [ ] First publish with the new step; then consider the same for the archive upload in `detect-releases.yml`
+- [ ] A check after each publish that every channel tag equals the digest in its release (L30)
