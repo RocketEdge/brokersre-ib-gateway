@@ -11,9 +11,13 @@
 # whole update until the release is right or the attempts are used up, and it checks the result
 # instead of trusting exit codes.
 #
-# `gh` is a stand-in on PATH. Its state is three files (does the release exist, its asset
-# names, its notes); a file `fail.<subcommand>` holding a number makes that subcommand fail
-# that many times with the text GitHub sent.
+# `gh` is a stand-in on PATH. Its state is four files (does the release exist, is it a draft,
+# its asset names, its notes); a file `fail.<name>` holding a number makes that call fail that
+# many times with the text GitHub sent. The stand-in follows what gh 2.81.0 does, as an
+# independent review measured it against a local API: `gh release view` finds a draft,
+# answers "release not found" with exit 1 only when there is none, and `gh release create`
+# with assets makes a draft, uploads and publishes, so a creation that dies halfway and
+# cannot clean up leaves a DRAFT behind.
 
 bats_require_minimum_version 1.5.0 # `run --separate-stderr`
 
@@ -54,6 +58,21 @@ fail_if_told() {
 case "${sub}" in
   view)
     fail_if_told view
+    # One counter per kind of question, so a test can fail exactly the read-back it means.
+    case "$*" in
+      *"--json assets"*) fail_if_told view-assets ;;
+      *"--json body"*) fail_if_told view-body ;;
+      *"--json isDraft"*) fail_if_told view-draft ;;
+      *)
+        fail_if_told view-exists
+        if [ -f "${state}/not-found-elsewhere" ]; then
+          # An error that merely contains "Not Found": the API, not the release, is missing.
+          rm -f "${state}/not-found-elsewhere"
+          echo "HTTP 404: Not Found (https://api.github.com/graphql)" >&2
+          exit 1
+        fi
+        ;;
+    esac
     if [ ! -f "${state}/exists" ]; then
       echo "release not found" >&2
       exit 1
@@ -61,14 +80,16 @@ case "${sub}" in
     case "$*" in
       *"--json assets"*) cat "${state}/assets" ;;
       *"--json body"*) cat "${state}/body" 2>/dev/null ;;
+      *"--json isDraft"*) if [ -f "${state}/draft" ]; then echo true; else echo false; fi ;;
       *) echo "title: ${tag}" ;;
     esac
     ;;
   create)
     if [ -f "${state}/fail.create-halfway" ] && [ "$(cat "${state}/fail.create-halfway")" -gt 0 ]; then
-      # GitHub created the release and then failed on an asset: the release exists, empty.
+      # gh made the draft, an upload failed, and the clean-up failed too: a draft stays.
       echo 0 >"${state}/fail.create-halfway"
       : >"${state}/exists"
+      : >"${state}/draft"
       echo "HTTP 502: Server Error (https://uploads.github.com/repos/o/r/releases/1/assets)" >&2
       exit 1
     fi
@@ -108,6 +129,7 @@ case "${sub}" in
       echo "asset ${name} not found in release ${tag}" >&2
       exit 1
     fi
+    if [ -f "${state}/keep.${name}" ]; then exit 0; fi # GitHub said yes and kept the asset
     grep -vxF -- "${name}" "${state}/assets" >"${state}/assets.new" || true
     mv "${state}/assets.new" "${state}/assets"
     ;;
@@ -120,6 +142,10 @@ case "${sub}" in
           if [ -f "${state}/stale-notes" ]; then shift 2; continue; fi # accepted, not applied
           cp "$2" "${state}/body"
           shift 2
+          ;;
+        --draft=false)
+          if [ ! -f "${state}/stale-draft" ]; then rm -f "${state}/draft"; fi
+          shift
           ;;
         *) shift ;;
       esac
@@ -212,7 +238,7 @@ existing_release() {
   grep -q 'sha256:abc123' "${STATE}/body"
 }
 
-@test "a creation that failed halfway is finished as an update, never as a second creation" {
+@test "a creation that failed halfway left a draft: it is finished as an update and published" {
   echo 1 >"${STATE}/fail.create-halfway"
   upsert
   [ "$status" -eq 0 ]
@@ -220,14 +246,85 @@ existing_release() {
   [ "$(calls upload)" -eq 1 ]
   [ "$(wc -l <"${STATE}/assets")" -eq 3 ]
   grep -q 'sha256:abc123' "${STATE}/body"
+  [ ! -f "${STATE}/draft" ]
+}
+
+@test "a draft left by an earlier run is published by the update" {
+  existing_release
+  : >"${STATE}/draft"
+  upsert
+  [ "$status" -eq 0 ]
+  [ ! -f "${STATE}/draft" ]
+  grep -q -- '--draft=false' "${CALLS}"
+}
+
+@test "a release that is still a draft after the update is a failure, whatever the exit codes said" {
+  existing_release
+  : >"${STATE}/draft"
+  : >"${STATE}/stale-draft"
+  RELEASE_ATTEMPTS=2 upsert
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"draft"* ]]
 }
 
 @test "an error while asking whether the release exists is not read as 'no release'" {
   existing_release
-  echo 1 >"${STATE}/fail.view"
+  echo 1 >"${STATE}/fail.view-exists"
   upsert
   [ "$status" -eq 0 ]
   [ "$(calls create)" -eq 0 ]
+  [[ "$output" == *"asking whether the release exists: HTTP 502"* ]]
+}
+
+@test "an error that merely contains 'Not Found' is not read as 'no release' either" {
+  existing_release
+  : >"${STATE}/not-found-elsewhere"
+  upsert
+  [ "$status" -eq 0 ]
+  [ "$(calls create)" -eq 0 ]
+}
+
+@test "a failed listing in the read-back fails the attempt and the log says why" {
+  existing_release
+  echo 1 >"${STATE}/fail.view-assets"
+  upsert
+  [ "$status" -eq 0 ]
+  [ "$(calls upload)" -eq 2 ]
+  [[ "$output" == *"attempt 1 of 5 failed: listing the assets: HTTP 502"* ]]
+}
+
+@test "a failed read of the notes in the read-back fails the attempt and the log says why" {
+  existing_release
+  echo 1 >"${STATE}/fail.view-body"
+  upsert
+  [ "$status" -eq 0 ]
+  [ "$(calls upload)" -eq 2 ]
+  [[ "$output" == *"attempt 1 of 5 failed: reading the notes back: HTTP 502"* ]]
+}
+
+@test "a failed read of the draft state in the read-back fails the attempt" {
+  existing_release
+  echo 1 >"${STATE}/fail.view-draft"
+  upsert
+  [ "$status" -eq 0 ]
+  [ "$(calls upload)" -eq 2 ]
+}
+
+@test "a failed removal of the old asset is repeated, not ignored" {
+  existing_release
+  echo 1 >"${STATE}/fail.delete-asset"
+  upsert --remove-asset sbom-stable.cdx.json
+  [ "$status" -eq 0 ]
+  [ "$(calls delete-asset)" -eq 2 ]
+  ! grep -qx 'sbom-stable.cdx.json' "${STATE}/assets" || false
+}
+
+@test "an old asset that GitHub says it removed and still lists is a failure" {
+  existing_release
+  : >"${STATE}/keep.sbom-stable.cdx.json"
+  RELEASE_ATTEMPTS=2 upsert --remove-asset sbom-stable.cdx.json
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"still lists the asset sbom-stable.cdx.json"* ]]
 }
 
 @test "when every attempt fails it stops after the configured number, fails, and says what GitHub said" {
@@ -279,6 +376,19 @@ SLEEP
   grep -qx 'sleep 11' "${CALLS}"
 }
 
+@test "with more attempts than pauses the last pause is used again" {
+  existing_release
+  echo 99 >"${STATE}/fail.upload"
+  cat >"${WORK}/bin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+printf 'sleep %s\n' "$*" >>"${GH_STANDIN_CALLS}"
+SLEEP
+  chmod +x "${WORK}/bin/sleep"
+  RELEASE_ATTEMPTS=4 RELEASE_RETRY_DELAYS="7 11" upsert
+  [ "$status" -eq 1 ]
+  [ "$(grep '^sleep ' "${CALLS}" | tr '\n' ' ')" == "sleep 7 sleep 11 sleep 11 " ]
+}
+
 @test "usage errors exit 2 before GitHub is asked anything" {
   run "$SCRIPT" --target x --title t --notes-file "${WORK}/notes.md" "${ASSETS[@]}"
   [ "$status" -eq 2 ]
@@ -289,6 +399,14 @@ SLEEP
   run "$SCRIPT" --tag v1 --target x --title t --notes-file "${WORK}/notes.md" "${WORK}/assets/absent.json"
   [ "$status" -eq 2 ]
   RELEASE_ATTEMPTS=0 run "$SCRIPT" --tag v1 --target x --title t --notes-file "${WORK}/notes.md" "${ASSETS[@]}"
+  [ "$status" -eq 2 ]
+  RELEASE_RETRY_DELAYS="5 soon" run "$SCRIPT" --tag v1 --target x --title t --notes-file "${WORK}/notes.md" "${ASSETS[@]}"
+  [ "$status" -eq 2 ]
+  # An option the script does not know is an error, never an asset path.
+  run "$SCRIPT" --tag v1 --target x --title t --notes-file "${WORK}/notes.md" --clobber "${ASSETS[@]}"
+  [ "$status" -eq 2 ]
+  # An empty expectation would switch the check of the notes off without a word.
+  run "$SCRIPT" --tag v1 --target x --title t --notes-file "${WORK}/notes.md" --expect-in-notes "" "${ASSETS[@]}"
   [ "$status" -eq 2 ]
   [ ! -s "${CALLS}" ]
 }

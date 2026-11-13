@@ -12,7 +12,7 @@ Next step.
   replaces its assets and notes, and reads it back (every asset listed, the old-scheme asset
   gone, the new digest in the notes). A failure anywhere repeats the whole attempt, five
   times with pauses of 5, 15, 45 and 90 seconds.
-- **Result:** 14 tests with a stand-in `gh` (counts of the whole suite in the pull request),
+- **Result:** 23 tests with a stand-in `gh` (counts of the whole suite in the pull request),
   among them the failure of 2026-11-13 replayed: the upload fails once with HTTP 502 and the
   release still ends up right.
 - **What did NOT work / root cause:** (1) *The first publish of the final merged state
@@ -25,9 +25,18 @@ Next step.
   no better. (3) Exit codes are not enough: a creation can fail after the release exists, and
   `gh release view` fails the same way for "no such release" and for a server error. The
   script therefore decides create-or-update anew in every attempt, reads "not found" from the
-  message, and judges the result by reading the release back.
+  message, and judges the result by reading the release back. (4) *The first version of the
+  script could report success on a draft.* `gh release create` with assets makes a draft,
+  uploads and publishes, and deletes the draft on a failure; when that clean-up fails too,
+  the next attempt found the draft, updated it and never published it. An independent
+  review found this by running the script with the real `gh` against a local API; the
+  update now publishes and the read-back requires "not a draft". (5) The same review
+  found GitHub's message missing from the log for three calls (a variable set inside a
+  command substitution is lost) and eight changes to the script that no test noticed;
+  the reason is kept in a file now and nine tests were added.
 - **Next step:** the first publish with this step; the same pattern for the archive upload
   in `detect-releases.yml`, which a daily schedule repeats anyway.
+
 ### 2026-11-13 — The sidecar moves to Python 3.15
 
 - **What changed:** the sidecar image is built on `python:3.15-slim` (Python 3.15.2, the same

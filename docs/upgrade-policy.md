@@ -24,9 +24,10 @@
    and the VEX document. What is scanned and what a tag serves are the same bytes. The release
    is written after the tags have moved, so `scripts/release-upsert.sh` repeats the whole
    create-or-update (five attempts, with pauses) when GitHub answers with an error, and reads
-   the release back before it reports success. If GitHub stays down longer than that, the job
-   fails with the tags on the new digest and the release on the previous one: re-run the
-   failed job ([limitations](limitations.md), L30). One publish
+   the release back before it reports success (assets, notes, not a draft). If GitHub stays
+   down longer than that, the job fails with the tags on the new digest and the release not
+   rewritten (old notes, possibly missing assets): re-run the failed job
+   ([limitations](limitations.md), L30). One publish
    runs per channel at a time; a request for one channel never displaces a pending publish of
    the other.
 4. **Rebuild.** The same pinned Gateway and IBC with refreshed OS packages, tagged

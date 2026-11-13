@@ -33,12 +33,19 @@
 # How: every part of the update can be repeated without harm, so one attempt is
 #   1. ask whether the release exists (an error is an error, never "it does not exist");
 #   2. exists: upload the assets with --clobber, delete the assets to remove that are listed,
-#      rewrite the notes; does not exist: create it with assets, target, title and notes;
+#      rewrite the notes and publish it if it is a draft; does not exist: create it with
+#      assets, target, title and notes;
 #   3. read the release back: every asset must be listed, no asset to remove may be listed,
-#      and the notes must contain the expected text.
+#      the notes must contain the expected text, and the release must not be a draft.
 # A failure anywhere fails the attempt, and the next attempt starts again at 1, which is what
 # turns a creation that died halfway into an update. The result is judged by step 3, not by
 # exit codes: an asset GitHub accepted and does not list is a failure.
+#
+# Why the draft matters: `gh release create` with assets makes a draft, uploads, then
+# publishes, and deletes the draft when something fails. When that clean-up fails too, a draft
+# stays; `gh release view` finds it, so the next attempt updates it, and an update does not
+# publish by itself. Without the two draft steps the script reported success on a release
+# nobody could see (found by an independent review with gh 2.81.0 against a local API).
 #
 # Exit status: 0 the release is as asked; 1 it is not, after all attempts; 2 usage error
 # (nothing was sent to GitHub).
@@ -51,7 +58,7 @@ usage() {
   exit 2
 }
 
-tag="" target="" title="" notes_file="" expect=""
+tag="" target="" title="" notes_file="" expect="" expect_given=0
 remove=()
 assets=()
 while [ "$#" -gt 0 ]; do
@@ -66,7 +73,10 @@ while [ "$#" -gt 0 ]; do
         --target) target="$2" ;;
         --title) title="$2" ;;
         --notes-file) notes_file="$2" ;;
-        --expect-in-notes) expect="$2" ;;
+        --expect-in-notes)
+          expect="$2"
+          expect_given=1
+          ;;
         --remove-asset) remove+=("$2") ;;
       esac
       shift 2
@@ -92,6 +102,11 @@ if [ ! -r "${notes_file}" ]; then
   echo "release-upsert.sh: cannot read the notes file ${notes_file}" >&2
   exit 2
 fi
+if [ "${expect_given}" -eq 1 ] && [ -z "${expect}" ]; then
+  # An empty expectation would switch the check of the notes off without a word.
+  echo "release-upsert.sh: --expect-in-notes needs a text that is not empty" >&2
+  exit 2
+fi
 if [ "${#assets[@]}" -eq 0 ]; then
   echo "release-upsert.sh: at least one asset file is required" >&2
   usage
@@ -114,26 +129,33 @@ for delay in "${delays[@]}"; do
 done
 
 errors="$(mktemp)"
-trap 'rm -f "${errors}"' EXIT
-problem="" # why the current attempt failed; printed by the caller of attempt
+# Why the reason of a failed attempt is kept in a file: several gh calls run inside a command
+# substitution, which is a subshell, and a variable set there is gone when it ends. The first
+# version lost GitHub's message for exactly those calls ("attempt 1 of 5 failed: " and nothing).
+problem_file="$(mktemp)"
+trap 'rm -f "${errors}" "${problem_file}"' EXIT
 
-# github <what it is for> <gh arguments...>: run gh; on failure set `problem` to the purpose
-# and GitHub's own message, and return 1. Standard output passes through.
+# set_problem <text>: record why the current attempt failed.
+set_problem() { printf '%s' "$1" >"${problem_file}"; }
+
+# github <what it is for> <gh arguments...>: run gh; on failure record the purpose and
+# GitHub's own message as the problem and return 1. Standard output passes through.
 github() {
   local purpose="$1"
   shift
   if gh "$@" 2>"${errors}"; then return 0; fi
-  problem="${purpose}: $(tr '\n' ' ' <"${errors}" | cut -c1-300)"
+  set_problem "${purpose}: $(tr '\n' ' ' <"${errors}" | cut -c1-300)"
   return 1
 }
 
-# release_exists: 0 the release exists; 1 GitHub says there is none; 2 the question failed
-# (then `problem` is set). "No answer" must never be read as "no release": the next step
-# would try to create a release that is already there.
+# release_exists: 0 the release exists (a draft counts); 1 GitHub says there is none; 2 the
+# question failed (the problem is recorded). "No answer" must never be read as "no release":
+# the next step would try to create a release that is already there. Only gh's own words for
+# a missing release count; "HTTP 404: Not Found" of some other address does not.
 release_exists() {
   if gh release view "${tag}" >/dev/null 2>"${errors}"; then return 0; fi
   if grep -i 'release not found' "${errors}" >/dev/null; then return 1; fi
-  problem="asking whether the release exists: $(tr '\n' ' ' <"${errors}" | cut -c1-300)"
+  set_problem "asking whether the release exists: $(tr '\n' ' ' <"${errors}" | cut -c1-300)"
   return 2
 }
 
@@ -143,9 +165,9 @@ listed_assets() {
 }
 
 # attempt: one whole create-or-update followed by the read-back. Returns 0 when the release
-# is as asked; otherwise 1 with `problem` set.
+# is as asked; otherwise 1 with the problem recorded.
 attempt() {
-  local state listing name notes
+  local state listing name notes draft
   release_exists
   state=$?
   case "${state}" in
@@ -159,7 +181,9 @@ attempt() {
           fi
         done
       fi
-      github "rewriting the notes" release edit "${tag}" --notes-file "${notes_file}" >/dev/null || return 1
+      # --draft=false publishes a draft that an earlier, half-finished creation left behind;
+      # on a published release it changes nothing.
+      github "rewriting the notes" release edit "${tag}" --notes-file "${notes_file}" --draft=false >/dev/null || return 1
       ;;
     1)
       github "creating the release" release create "${tag}" "${assets[@]}" --target "${target}" \
@@ -172,33 +196,39 @@ attempt() {
   for asset in "${assets[@]}"; do
     name="$(basename "${asset}")"
     if ! grep -x -F -- "${name}" <<<"${listing}" >/dev/null; then
-      problem="the release does not list the asset ${name} after the update"
+      set_problem "the release does not list the asset ${name} after the update"
       return 1
     fi
   done
   for name in "${remove[@]}"; do
     if grep -x -F -- "${name}" <<<"${listing}" >/dev/null; then
-      problem="the release still lists the asset ${name}, which was to be removed"
+      set_problem "the release still lists the asset ${name}, which was to be removed"
       return 1
     fi
   done
   if [ -n "${expect}" ]; then
     notes="$(github "reading the notes back" release view "${tag}" --json body --jq '.body')" || return 1
     if ! grep -F -- "${expect}" <<<"${notes}" >/dev/null; then
-      problem="the notes of the release do not contain the expected text after the update"
+      set_problem "the notes of the release do not contain the expected text after the update"
       return 1
     fi
+  fi
+  draft="$(github "reading the draft state back" release view "${tag}" --json isDraft --jq '.isDraft')" || return 1
+  if [ "${draft}" != "false" ]; then
+    set_problem "the release is still a draft after the update (isDraft: ${draft:-no answer})"
+    return 1
   fi
   return 0
 }
 
 number=1
 while true; do
-  problem=""
+  : >"${problem_file}"
   if attempt; then
-    echo "release-upsert.sh: release ${tag} holds ${#assets[@]} asset(s) and the new notes (attempt ${number} of ${attempts})"
+    echo "release-upsert.sh: release ${tag} is published with ${#assets[@]} asset(s) and the new notes (attempt ${number} of ${attempts})"
     exit 0
   fi
+  problem="$(cat "${problem_file}")"
   echo "release-upsert.sh: attempt ${number} of ${attempts} failed: ${problem}"
   if [ "${number}" -ge "${attempts}" ]; then break; fi
   # The pause after attempt n is the n-th value; the last value is reused.

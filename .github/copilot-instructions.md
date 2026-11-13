@@ -283,7 +283,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   both for "release not found" and for a server error; only the message tells them apart. If
   a publish still fails in "Tag and release", the tags and the release disagree: compare
   `docker buildx imagetools inspect --raw <image>:<tag> | sha256sum` with the release's
-  `digests-<channel>.json`, then `gh run rerun <id> --failed` (L30).
+  `digests-<channel>.json` (it can be missing: replacing an asset deletes the old one
+  first), then `gh run rerun <id> --failed` (L30). `gh release create` with assets makes a
+  draft first; a failed creation can leave it, and an update does not publish a draft
+  unless it says `--draft=false`. A variable set inside `$(...)` is lost: keep a failure
+  reason in a file when the failing call runs in a command substitution.
 - A new or vanished CVE in IBKR's jars shows as a VEX drift warning in CI and publish: update
   `security/vex/ibgateway-vendor-jars.openvex.json` (bump `version`, never `fixed`, never
   `not_affected` without evidence). `tests/bats/ci/fixtures/vex/in-sync.openvex.json` and
