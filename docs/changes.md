@@ -25,7 +25,10 @@ Next step.
   other words, so a patch of the IBC fork was the obvious next step. The screenshot showed
   a different dialog before anything was changed. A title is not a diagnosis; look at the
   window. (3) The events named no cause: `unknown_window`, and the phase stayed `login`.
-  For a person at night that is too little (L31).
+  For a person at night that is too little (L31). (4) The automatic screenshot was deleted
+  unviewed (it is taken 33 ms after the window opens and may show the login window with
+  the username), so what proved the feature was a picture taken on request 12 seconds
+  later; whether the automatic one shows a completely drawn dialog is open (L25).
 - **Next step:** a paper trading account that IBKR has enabled, then the qualification
   again; a decision on classifying this dialog as `needs-human` with its own event.
 

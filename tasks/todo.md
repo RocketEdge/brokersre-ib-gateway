@@ -47,7 +47,7 @@
 - [x] `api-handshake.sh`: read-only proof that the API answers; `HEALTHCHECK_API=handshake` (opt-in)
 - [x] `scripts/qualify-paper.sh`: one real paper login with checks and a result document; offline test in the container suite
 - [x] Workflow `qualify-paper.yml` (manual, by digest, from `main`), ADR 0014; GitHub environment `paper-qualification` created (required reviewer, `main` only, secrets `PAPER_USERID` and `PAPER_PASSWORD`)
-- [ ] First qualified run: needs paper credentials that IBKR accepts (the first attempt on 2026-11-12 was rejected); then update the environment secrets and dispatch the workflow
+- [ ] First qualified run: needs an account with paper trading enabled at IBKR. The attempt of 2026-11-12 was rejected; on 2026-11-13 IBKR accepted the credentials, but the account had no paper trading access (L31) and the run ended "not qualified". The two secrets of the environment are unset until such an account exists; then set them and dispatch the workflow
 - [ ] After three recorded passes: move `stable` only after a `qualified-paper` attestation exists
 
 ## Roadmap P3: rejected-login latch (2026-11-12, branch `feat/p3-login-latch`)
@@ -89,7 +89,8 @@
 ## Roadmap P1: screenshot of a blocking window (2026-11-12, branch `feat/p1-screenshot`)
 
 - [x] `SCREENSHOTS=yes`: Xvfb keeps its framebuffer in a file; `screenshot.sh` saves it to `screens/` after `unknown_window`, after `login_stalled` and on request; bounded by count and interval
-- [ ] Look at a screenshot of a real login window and of a real blocking dialog (L25)
+- [ ] Look at the automatic screenshot of a real blocking dialog (a picture on request showed one on 2026-11-13; the automatic one was deleted unviewed) and at a real login window; decide whether the automatic picture should be taken a moment after the window opens (L25)
+- [ ] Decide: classify the dialog `Paper Account Notice` (no paper trading access) as phase `needs-human` with an event of its own (L31)
 
 ## Roadmap P2: a runbook per alert (2026-11-12, branch `docs/p2-runbooks`)
 
