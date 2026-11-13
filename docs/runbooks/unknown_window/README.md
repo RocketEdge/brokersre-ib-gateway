@@ -9,6 +9,12 @@ lists, and the gateway is not logged in. The window may block the login, or it m
 harmless: the lists come from IBC's source and one real start, so a harmless window that is
 missing from them raises this alert too ([limitations](../../limitations.md), L10).
 
+One title has been seen to block so far, in both real sessions of 2026-11-13 (one account,
+Gateway 10.50.1g): `Paper Account Notice` within two seconds of the login dialog, in paper
+mode, with the phase staying `login`. Its text said that the account had no paper trading
+access. Whether IBKR uses the same title for other notices is not known, so read the text
+before you conclude anything from the title.
+
 ## Check first
 
 - The phase. `logged-in` means the window did not block anything.
@@ -21,13 +27,18 @@ missing from them raises this alert too ([limitations](../../limitations.md), L1
 
 ## What to do
 
-1. If the phase reaches `logged-in`, nothing is blocked. Go to step 3.
-2. If the phase stays `login`, the window blocks the login and
+1. If the phase reaches `logged-in`, nothing is blocked. Go to step 4.
+2. If the title is `Paper Account Notice`: look at its text (a screenshot, or the console).
+   If it says that the account has no paper trading access, nothing on the gateway's side
+   helps: request the paper trading account at IBKR
+   ([troubleshooting table](../../../README.md#4-if-it-does-not-log-in)), then start the
+   gateway again. This title needs no report.
+3. If the phase stays `login`, the window blocks the login and
    [login_stalled](../login_stalled/README.md) follows after `LOGIN_STALL_S`. Look at the
    window, and if needed handle it, through the [break-glass console](../../console.md): off
    unless the gateway was started with it, view-only unless `VNC_VIEW_ONLY=no`, and each of
    those two changes takes a new start of the container, which is a new login.
-3. Report the title of the window (the title only) in an issue of this repository, so that
+4. Report the title of the window (the title only) in an issue of this repository, so that
    it can be classified and stops alerting.
 
 ## What not to do
