@@ -254,13 +254,20 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   API through the relay (`GATEWAY_HOST`, 4004/4003), never the loopback port, and cannot use
   the IBC command server. A new gateway event that puts the gateway into `needs-human` needs
   its cause added to `notify/rules.py`, or the alert says only that the phase is `needs-human`.
-- The sidecar's Python version is written in six places that change together:
-  `requires-python`, the black and ruff targets and mypy's `python_version` in
+- The sidecar's Python version is written in seven places that change together:
+  `requires-python`, the black target, the ruff target and mypy's `python_version` in
   `sidecar/pyproject.toml`, `sidecar/.python-version`, the `FROM python:<minor>-slim@<digest>`
   line of `sidecar/Dockerfile`, and `sidecar/uv.lock` (`uv lock`). Dependabot bumps only the
   `FROM` line when a new minor appears, and that pull request cannot build ("No interpreter
   found for Python ==3.14.*"): take it as the notice, verify that the dependencies resolve and
   the suite passes on the new minor, and make the whole change in one pull request.
+- A change to what the sidecar image is (interpreter, dependencies, behaviour) needs a new
+  sidecar version: `sidecar-publish.yml` never moves an existing version tag, so a change
+  merged under the old version is published as `sha-<commit>` only, and the next security
+  rebuild (`<version>-rYYYYMMDD`) would change the image under the same version. The version
+  is written in `sidecar/pyproject.toml`, `sidecar/src/brokersre_sidecar/__init__.py`,
+  `ARG VERSION` of `sidecar/Dockerfile`, `sidecar/uv.lock`, the image tag in both sidecar
+  compose files and `sidecar/README.md`, and five test assertions (`grep -rn` the old number).
 - Every sidecar `AlertClass` has a runbook `docs/runbooks/<class>/README.md` (first line: `#` and
   the catalogue title; sections What it means, Check first, What to do, What not to do,
   When it clears) and a row in `docs/runbooks/README.md`; `sidecar/tests/test_docs.py` fails

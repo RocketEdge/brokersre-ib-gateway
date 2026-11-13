@@ -112,7 +112,7 @@ def test_the_bundle_is_a_tar_gz_with_a_fixed_set_of_files(tmp_path: Path) -> Non
     }
     assert files["phase.txt"] == "logged-in\n"
     assert json.loads(files["status.json"])["status"] == "ready"
-    assert json.loads(files["versions.json"])["sidecar"] == "0.1.0"
+    assert json.loads(files["versions.json"])["sidecar"] == "0.2.0"
     assert json.loads(files["settings.json"])["instance"] == "desk-1"
 
 

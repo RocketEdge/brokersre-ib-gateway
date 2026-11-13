@@ -8,6 +8,6 @@ nothing. Layers, lowest first (enforced by ``tests/test_architecture.py``):
 ``http``, ``metrics`` and ``support``, then ``app`` (the only wiring place), then ``cli``.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["__version__"]

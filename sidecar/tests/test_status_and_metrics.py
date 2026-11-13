@@ -283,7 +283,7 @@ def metrics(**overrides: Any) -> dict[str, float]:
 def test_the_frozen_metric_names_are_exposed_with_measured_values() -> None:
     samples = metrics()
     assert samples == {
-        'ibgw_sidecar_info{version="0.1.0"}': 1,
+        'ibgw_sidecar_info{version="0.2.0"}': 1,
         'ibgw_phase{phase="logged-in"}': 1,
         "ibgw_api_ready": 1,
         "ibgw_api_rtt_seconds": 0.05,
@@ -328,7 +328,7 @@ def test_a_value_that_was_not_measured_is_omitted_never_zero() -> None:
         notifier=NOTIFIER_OFF,
         tasks=(),
     )
-    assert samples == {'ibgw_sidecar_info{version="0.1.0"}': 1}
+    assert samples == {'ibgw_sidecar_info{version="0.2.0"}': 1}
 
 
 def test_partial_samples_expose_only_what_they_contain() -> None:

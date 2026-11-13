@@ -77,7 +77,7 @@ The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-c
 ```yaml
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0   # pin by digest in production
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0   # pin by digest in production
     restart: unless-stopped
     read_only: true
     user: "1000:1000"
