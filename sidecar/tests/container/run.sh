@@ -164,7 +164,7 @@ labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencon
 if [[ "${labels}" == MIT\|* && "${labels}" == *"trademarks of Interactive Brokers LLC"* ]]; then pass "OCI labels with licence and trademark sentence"; else fail "labels" "${labels}"; fi
 if docker run --rm --entrypoint python "${IMAGE}" -c 'import pip' >/dev/null 2>&1; then fail "no pip" "pip is importable"; else pass "no pip in the runtime image"; fi
 if docker run --rm --entrypoint sh "${IMAGE}" -c 'command -v curl || command -v wget || command -v ssh || command -v sudo' >/dev/null 2>&1; then fail "tools" "curl, wget, ssh or sudo present"; else pass "no curl, wget, ssh or sudo"; fi
-if [ "$(docker run --rm "${IMAGE}" --version 2>/dev/null)" = "brokersre-sidecar 0.1.0" ]; then pass "entrypoint is the sidecar CLI"; else fail "entrypoint" "unexpected --version output"; fi
+if [ "$(docker run --rm "${IMAGE}" --version 2>/dev/null)" = "brokersre-sidecar 0.2.0" ]; then pass "entrypoint is the sidecar CLI"; else fail "entrypoint" "unexpected --version output"; fi
 schema_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/schemas"
 if docker run --rm "${IMAGE}" print-schema status 2>/dev/null | diff -q - "${schema_dir}/status.v1.schema.json" >/dev/null; then pass "print-schema status equals the committed schema"; else fail "schema" "image and repository schema differ"; fi
 if docker run --rm -e NOTIFY_SLACK_URL=https://hooks.slack.com/"${CANARY}" "${IMAGE}" check-config >"${work}/check.out" 2>&1; then

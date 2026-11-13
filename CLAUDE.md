@@ -133,7 +133,7 @@ examples/                                             wait-for-gateway.sh, compo
 tests/compose/run.sh                                  both compose files above, started as shipped (docker CLI)
 azure/                                                Log Analytics pack: bicep/ (tables, DCR, alerts, workbook, query pack; vm.bicep), vector/ (shipper config, redact.vrl, entrypoint), kql/ (alert and report queries, scenarios), vm/ + cloud-init/ (optional gateway VM), tests/run.sh; README.md (ADR 0012)
 compose/docker-compose.azure.yml                      the shipper next to the gateway (profiles azure, azure-cert); Vector pinned by digest
-sidecar/                                              optional second image (Python 3.14, uv): API probe, /livez /readyz /status /metrics, notifier; src/, tests/ (unit, container/, e2e/), schemas/status.v1.schema.json, Dockerfile, README.md (ADR 0010, docs/sidecar.md)
+sidecar/                                              optional second image (Python 3.15, uv): API probe, /livez /readyz /status /metrics, notifier; src/, tests/ (unit, container/, e2e/), schemas/status.v1.schema.json, Dockerfile, README.md (ADR 0010, docs/sidecar.md)
 compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
 windows/                                              host kit for Windows 10/11: setup, doctor, harden, start, uninstall (.ps1) over BrokerSre.Gateway.psm1 + src/{Native,Core,Secrets,Stack,Checks,Harden,Commands}.ps1; templates/compose.yaml.tmpl; tests/ (Pester); README.md (ADR 0011)
 .github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
@@ -254,6 +254,20 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   API through the relay (`GATEWAY_HOST`, 4004/4003), never the loopback port, and cannot use
   the IBC command server. A new gateway event that puts the gateway into `needs-human` needs
   its cause added to `notify/rules.py`, or the alert says only that the phase is `needs-human`.
+- The sidecar's Python version is written in seven places that change together:
+  `requires-python`, the black target, the ruff target and mypy's `python_version` in
+  `sidecar/pyproject.toml`, `sidecar/.python-version`, the `FROM python:<minor>-slim@<digest>`
+  line of `sidecar/Dockerfile`, and `sidecar/uv.lock` (`uv lock`). Dependabot bumps only the
+  `FROM` line when a new minor appears, and that pull request cannot build ("No interpreter
+  found for Python ==3.14.*"): take it as the notice, verify that the dependencies resolve and
+  the suite passes on the new minor, and make the whole change in one pull request.
+- A change to what the sidecar image is (interpreter, dependencies, behaviour) needs a new
+  sidecar version: `sidecar-publish.yml` never moves an existing version tag, so a change
+  merged under the old version is published as `sha-<commit>` only, and the next security
+  rebuild (`<version>-rYYYYMMDD`) would change the image under the same version. The version
+  is written in `sidecar/pyproject.toml`, `sidecar/src/brokersre_sidecar/__init__.py`,
+  `ARG VERSION` of `sidecar/Dockerfile`, `sidecar/uv.lock`, the image tag in both sidecar
+  compose files and `sidecar/README.md`, and five test assertions (`grep -rn` the old number).
 - Every sidecar `AlertClass` has a runbook `docs/runbooks/<class>/README.md` (first line: `#` and
   the catalogue title; sections What it means, Check first, What to do, What not to do,
   When it clears) and a row in `docs/runbooks/README.md`; `sidecar/tests/test_docs.py` fails

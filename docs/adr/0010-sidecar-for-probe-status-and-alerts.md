@@ -65,7 +65,8 @@ ordinary container next to the gateway and mounts the gateway's log volume read-
   says `logged-in`. For 20 seconds after a login a refused connection is "not measured"
   and retried every 3 seconds; after that it is "down". Outside `logged-in` nothing is
   probed, so a closed relay port is never an outage.
-- **Python 3.14.** The only maintained asyncio IB API client is a Python library; one
+- **Python 3.14** (the current release when this was decided; the sidecar moved to 3.15 with
+  version 0.2.0 on 2026-11-13, `docs/changes.md`). The only maintained asyncio IB API client is a Python library; one
   language covers the probe, the endpoints and the channels with the standard library plus
   three pinned dependencies (`ib_async`, `httpx`, `pydantic`), all locked with hashes.
 - **The notifier is not in the gateway.** It holds webhook URLs and tokens and talks to

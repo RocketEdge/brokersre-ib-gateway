@@ -3,12 +3,12 @@
 # the Dockerfile installs with `uv sync --frozen`, so a build never resolves anything new.
 [project]
 name = "brokersre-sidecar"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read-only probe, status API, Prometheus metrics and human-escalation notifier for the brokersre IB Gateway container"
 readme = "README.md"
 license = "MIT"
-# 3.14 only: the image ships exactly one interpreter (python:3.14-slim, pinned by digest).
-requires-python = ">=3.14,<3.15"
+# 3.15 only: the image ships exactly one interpreter (python:3.15-slim, pinned by digest).
+requires-python = ">=3.15,<3.16"
 authors = [{ name = "RocketEdge.com" }]
 dependencies = [
   # The only IB API client; imported in exactly one module (probe/adapter.py).
@@ -70,11 +70,11 @@ exclude_also = [
 
 [tool.black]
 line-length = 100
-target-version = ["py314"]
+target-version = ["py315"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py315"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -109,7 +109,7 @@ convention = "google"
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-python_version = "3.14"
+python_version = "3.15"
 # The package runs only in a Linux container: check POSIX branches on every host.
 platform = "linux"
 files = ["src", "tests"]

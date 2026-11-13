@@ -144,7 +144,7 @@ def test_an_unknown_command_or_schema_is_a_usage_error() -> None:
     assert run_cli("frobnicate")[0] == 2
     code, out, _ = run_cli("--version")
     assert code == 0
-    assert out.strip() == "brokersre-sidecar 0.1.0"
+    assert out.strip() == "brokersre-sidecar 0.2.0"
 
 
 def endpoint_env(server: LocalServer) -> dict[str, str]:

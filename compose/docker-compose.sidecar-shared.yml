@@ -22,7 +22,7 @@ services:
       - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
 
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0
     # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
     # this policy starts it again inside the gateway's new network namespace.
     restart: unless-stopped

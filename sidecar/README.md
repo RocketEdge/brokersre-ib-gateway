@@ -77,7 +77,7 @@ The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-c
 ```yaml
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.1.0   # pin by digest in production
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0   # pin by digest in production
     restart: unless-stopped
     read_only: true
     user: "1000:1000"
@@ -504,7 +504,7 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
 
 ```bash
 cd sidecar
-uv sync                               # Python 3.14, everything pinned in uv.lock
+uv sync                               # Python 3.15, everything pinned in uv.lock
 uv run ruff check . && uv run black --check . && uv run mypy
 uv run pytest --cov                   # coverage gate: 90 %
 docker build -t brokersre-ib-gateway-sidecar:dev .
