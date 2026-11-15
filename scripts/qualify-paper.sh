@@ -95,6 +95,12 @@ checks="" # newline-separated "status<TAB>name<TAB>detail"
 reason=""
 twofa_prompted=false
 login_seconds=""
+logged_in_at=""
+settled=""
+# The image reports a window nobody handles only once it has stayed open for its grace period
+# (UNKNOWN_WINDOW_GRACE_S, 10 s by default, reported at most 2 s after that). The verdict on
+# such windows is therefore taken no sooner than this many seconds after the login was seen.
+window_settle_s=15
 
 # check <status> <name> <detail>: record one check (status is pass, fail or info) and print it.
 check() {
@@ -147,6 +153,7 @@ if [ -z "${reason}" ]; then
     case "${now}" in
       logged-in)
         login_seconds=$((${EPOCHSECONDS:-$(date +%s)} - started_epoch))
+        logged_in_at="${SECONDS}"
         break
         ;;
       needs-human)
@@ -217,6 +224,10 @@ if [ -z "${reason}" ]; then
   else
     check info resources "no resource sample in phase logged-in within 45 s"
   fi
+  # A window that opened with the login is reported only after the image's grace period:
+  # wait it out before the events are copied and the verdict on unknown windows is taken.
+  while [ "$((SECONDS - logged_in_at))" -lt "${window_settle_s}" ]; do sleep 1; done
+  settled=" up to ${window_settle_s} s after the login"
 fi
 
 # --- evidence that is collected in every case -------------------------------------------
@@ -234,7 +245,7 @@ if [ "${events_ok}" -eq 1 ] && running; then
     reason="${reason:-the event sequence has a gap}"
   fi
   unknown="$(in_container 'jq -s "[.[] | select(.event == \"unknown_window\")] | length" /var/log/ibgateway/events/events.jsonl' 2>/dev/null || echo "?")"
-  if [ "${unknown}" = "0" ]; then check pass unknown_windows "none"; else
+  if [ "${unknown}" = "0" ]; then check pass unknown_windows "none${settled}"; else
     check fail unknown_windows "${unknown} window(s) without a handler (titles in ibc/ibc.log inside the container)"
     reason="${reason:-a window without a handler appeared}"
   fi
