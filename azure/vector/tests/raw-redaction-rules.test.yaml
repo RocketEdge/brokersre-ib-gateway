@@ -205,3 +205,20 @@ tests:
             source: |
               bs = "\\"
               assert_eq!(.RawData, "a " + bs + "n[ACCT:…567] b " + bs + "r[ACCT:…567] c " + bs + "t[ACCT:…456] d " + bs + "n[ACCT:…345] e " + bs + "r[ACCT:…789] f " + bs + "t[ACCT:…765] g " + bs + "r[ACCT:…321] h " + bs + "ndur1234 i " + bs + "nu1234567890 j " + bs + "nduabc123456 k " + bs + "nq1234567 l " + bs + "ndur123456x")
+
+  # Digits are ASCII digits, as in the label patterns of entrypoint.sh and apply-config.sh:
+  # Rust's \d also matches other scripts' digits (Arabic-Indic, full-width), which no IBKR id
+  # uses, so the shape would differ between the redaction and the label check.
+  - name: redaction - digits of other scripts are not account-id digits
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "a U١٢٣٤٥٦٧ b DUR１２３４５６ c acctU٠١٢٣٤٥ d U1234567"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "a U١٢٣٤٥٦٧ b DUR１２３４５６ c acctU٠١٢٣٤٥ d [ACCT:…567]")

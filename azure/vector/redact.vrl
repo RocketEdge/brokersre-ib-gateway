@@ -5,7 +5,10 @@
 #         rewritten: an IBKR account id keeps only its last three characters, as [ACCT:…567].
 #         Keys, numbers, booleans and timestamps are untouched.
 # Shape   An account id is an optional D (paper), then one of U, F, I, then zero to two
-#         further letters, then 5 to 9 digits, and then NOT a letter or digit.
+#         further letters, then 5 to 9 ASCII digits, and then NOT a letter or digit.
+#         [0-9], never \d: Rust's \d matches every script's digits, which no IBKR id uses,
+#         and slice!(…, -3) counts bytes, so a match ending in a multi-byte digit would ship
+#         a broken character; with [0-9] the last three characters are always digits.
 #         Evidence: IBKR documents the prefixes U (individual and sub accounts), F (advisor
 #         or fund-manager master) and I (fully disclosed broker master):
 #         https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/
@@ -40,13 +43,13 @@
     if marked {
       text = replace(text, "_", "\u{E000}")
     }
-    text = replace_with(text, r'(?i)\bD?[UFI][A-Z]{0,2}\d{5,9}\b') -> |m| {
+    text = replace_with(text, r'(?i)\bD?[UFI][A-Z]{0,2}[0-9]{5,9}\b') -> |m| {
       "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    text = replace_with(text, r'(?P<lead>[a-z])D?[UFI][A-Z]{0,2}\d{5,9}\b') -> |m| {
+    text = replace_with(text, r'(?P<lead>[a-z])D?[UFI][A-Z]{0,2}[0-9]{5,9}\b') -> |m| {
       string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    text = replace_with(text, r'(?P<lead>\\[nrt])(?i:D?[UFI][A-Z]{0,2})\d{5,9}\b') -> |m| {
+    text = replace_with(text, r'(?P<lead>\\[nrt])(?i:D?[UFI][A-Z]{0,2})[0-9]{5,9}\b') -> |m| {
       string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
     }
     if marked {
