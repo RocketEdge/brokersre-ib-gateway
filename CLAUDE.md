@@ -242,14 +242,17 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   standard error, and a check that compares standard error then fails on a fresh machine
   only.
 - The shape of an account id (an optional `D`, then `U`, `F` or `I`, up to two further capital
-  letters, 5 to 9 digits; as a regular expression `D?[UFI][A-Z]{0,2}\d{5,9}`) is written in
-  four places that change together, each with its tests: `ACCOUNT_RE` in
+  letters, 5 to 9 digits; as a regular expression `D?[UFI][A-Z]{0,2}\d{5,9}`, with `[0-9]`
+  for `\d` in `redact.vrl`, where `\d` takes any script's digits and `slice!` counts bytes)
+  is written in four places that change together, each with its tests: `ACCOUNT_RE` in
   `sidecar/src/brokersre_sidecar/redaction.py` (the label check refuses a label it would
   rewrite; the farm-name guard of `probe/tracker.py` refuses five digits in a row instead,
   because the pattern does not start behind a capital and an id glued to a farm stem always
   is), rules 1 to 3 of `azure/vector/redact.vrl`, `account_like` in
   `azure/vector/entrypoint.sh` and `good_label` in `azure/vm/apply-config.sh` (`run.sh`
-  fails when the last two differ). The text follows: the bundle MANIFEST
+  fails when the last two differ in text, and `label_verdicts` when the three Azure copies
+  decide one of its boundary labels differently or unexpectedly; the VRL unit tests pin
+  each rule at the bounds of the shape). The text follows: the bundle MANIFEST
   (`support/bundle.py`), `sidecar/README.md`, `azure/README.md`, `docs/limitations.md` L32.
   The prefixes are IBKR's, the letters after them are one observation plus headroom: a real
   paper id (`DU`, one more letter, six digits; 2026-11-16) passed the earlier shape and a

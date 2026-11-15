@@ -451,10 +451,11 @@ An account id is recognised by its shape, in upper case only: an optional `D` (p
 `U`, `F` or `I`, up to two more capital letters, then 5 to 9 digits (`U1234567`, `DU1234567`,
 `DUX123456`). IBKR documents the prefixes `U`, `F` and `I`
 ([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
-[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf)) and
-paper accounts start with `DU`; a paper id with a third letter and six digits was seen in a
-real session on 2026-11-16 and is not in IBKR's documents, and the second further letter is
-headroom. An id of any other shape is **not** shortened, which is why the review matters.
+[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf), page 14)
+and that paper account numbers begin with `DU`
+([IBKR Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)); `DF`
+and `DI` are assumed. A paper id with a third letter and six digits was seen in a real
+session on 2026-11-16 and is in none of these, and the second further letter is headroom. An id of any other shape is **not** shortened, which is why the review matters.
 The same rule applies to the sidecar's own log and to notifications. Its price: any word of
 this shape is cut too (`ID12345` becomes `***345`).
 

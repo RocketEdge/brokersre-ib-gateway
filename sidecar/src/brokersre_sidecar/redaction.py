@@ -18,15 +18,24 @@ REDACTED = "[REDACTED]"
 # The shape of an IBKR account id: an optional D (paper), then one of U, F, I, then zero to
 # two further capital letters, then 5 to 9 digits.
 #
-# Evidence. IBKR documents the prefixes U (individual and sub accounts), F (advisor or
-# fund-manager master) and I (fully disclosed broker master):
-# https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/ and
-# https://www.interactivebrokers.ie/download/applicationguide.pdf. Paper accounts start with
-# DU (widely documented). A real paper session on 2026-11-16 showed DU, one more letter and
-# six digits, a shape IBKR's documents do not mention; the earlier pattern (DU, DF, U or F
-# directly followed by the digits) missed it and a support bundle carried the id in full.
-# The second further letter is headroom, an assumption: masking a token that is no id costs
-# readability only, missing an id breaks the rule in the module docstring.
+# Evidence (each source read on 2026-11-16).
+#   F and U: "The account number for the Fund Manager master account is denoted with the
+#     letter F", "The sub-Hedge Fund account number is denoted with the letter U" (IBKR
+#     Campus, hedge fund account overview):
+#     https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/
+#   I and U: a fully disclosed broker's "Master Account, whose Account ID begins with an I
+#     prefix", and its proprietary account, whose id "begins with a U prefix" (IBKR
+#     application guide, page 14):
+#     https://www.interactivebrokers.ie/download/applicationguide.pdf
+#   DU: "The account number for the paper trading account will begin with DU" (Interactive
+#     Brokers Securities Japan, customer service):
+#     https://www.interactivebrokers.co.jp/en/support/customer-service.php
+#   DF and DI: assumptions (paper counterparts of F and I); no source names them.
+#   The letter after DU: observed, in no source. A real paper session on 2026-11-16 showed
+#     DU, one more letter and six digits; the earlier pattern (DU, DF, U or F directly
+#     followed by the digits) missed it and a support bundle carried the id in full.
+#   The second further letter: headroom, an assumption. Masking a token that is no id costs
+#     readability only; missing an id breaks the rule in the module docstring.
 #
 # Boundaries. Loose on the left on purpose: an id glued to an underscore, a digit or
 # lower-case text (``acct_DUR123456``, the ``\\x00DU1234567`` of a bytes repr) must still be

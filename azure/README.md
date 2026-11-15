@@ -232,14 +232,16 @@ drops such lines and says so in its own log (`dropped an event older than 36 hou
 
 Redaction happens in Vector on your host, before the network. In every stream an account id
 becomes `[ACCT:…567]`. An id is recognised by its shape: an optional `D` (paper), then `U`,
-`F` or `I`, then up to two further letters, then 5 to 9 digits (`U1234567`, `DU1234567`,
-`DUX123456`); in any case, also next to an underscore, glued to a lower-case word or after
-an escaped line break. IBKR documents the prefixes `U`, `F` and `I`
+`F` or `I`, then up to two further letters, then 5 to 9 ASCII digits (`U1234567`,
+`DU1234567`, `DUX123456`); in any case, also next to an underscore, glued to a lower-case
+word or after an escaped line break. IBKR documents the prefixes `U`, `F` and `I`
 ([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
-[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf)) and
-paper accounts start with `DU`; a paper id with a third letter and six digits was seen in a
-real session on 2026-11-16 and is not in IBKR's documents, and the second further letter is
-headroom ([Limits](#limits)).
+[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf), page 14)
+and that paper account numbers begin with `DU`
+([IBKR Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)); `DF`
+and `DI` are assumed. A paper id with a third letter and six digits was seen in a real
+session on 2026-11-16 and is in none of these, and the second further letter is headroom
+([Limits](#limits)).
 
 Raw logs can contain your IBKR user name, so they stay on the host unless you choose one of:
 
@@ -337,8 +339,9 @@ pricing pages). Retention beyond the included days is extra.
 - An account id is recognised by its shape only, and the shape is IBKR's documented prefixes
   plus one observed paper id, not a specification. An id written without its prefix, with
   more than two letters after the prefix, or directly after an upper-case letter or a digit
-  (`XDU1234567`), is not recognised; neither is one followed by letters. The price of the
-  shape: a word that has it is rewritten although it is no id (`id12345`, `USD100000`).
+  (`XDU1234567`, `ACCTDUR123456`), is not recognised; neither is one directly followed by a
+  letter (`DUR123456x`, `U1234567F`). The price of the shape: a word that has it is
+  rewritten although it is no id (`id12345`, `USD100000`).
 
 ## Security
 

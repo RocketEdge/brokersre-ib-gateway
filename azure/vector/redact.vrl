@@ -9,15 +9,21 @@
 #         [0-9], never \d: Rust's \d matches every script's digits, which no IBKR id uses,
 #         and slice!(…, -3) counts bytes, so a match ending in a multi-byte digit would ship
 #         a broken character; with [0-9] the last three characters are always digits.
-#         Evidence: IBKR documents the prefixes U (individual and sub accounts), F (advisor
-#         or fund-manager master) and I (fully disclosed broker master):
+#         Evidence (each source read on 2026-11-16):
+#         F, a fund manager's master account, and U, a hedge fund's sub account (IBKR Campus:
+#         "denoted with the letter F" / "with the letter U"),
 #         https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/
+#         I, a fully disclosed broker's master account, and U, its proprietary account (IBKR
+#         application guide, page 14: "begins with an I prefix" / "with a U prefix"),
 #         https://www.interactivebrokers.ie/download/applicationguide.pdf
-#         Paper accounts start with DU (widely documented). A real paper session on
-#         2026-11-16 showed DU, one more letter and six digits, a shape IBKR's documents do
-#         not mention; the earlier pattern (DU, DF, U or F directly followed by the digits)
-#         missed it. The second further letter is headroom, an assumption: rewriting a word
-#         that is no id costs readability only, missing an id breaks the promise under Why.
+#         DU, a paper account (Interactive Brokers Securities Japan: "will begin with DU"),
+#         https://www.interactivebrokers.co.jp/en/support/customer-service.php
+#         DF and DI are assumptions (paper counterparts of F and I; no source names them).
+#         The letter after DU is observed, in no source: a real paper session on 2026-11-16
+#         showed DU, one more letter and six digits, which the earlier pattern (DU, DF, U or
+#         F directly followed by the digits) missed. The second further letter is headroom,
+#         an assumption: rewriting a word that is no id costs readability only, missing an
+#         id breaks the promise under Why.
 # Rules   An id is recognised
 #           1. in any case, when it stands on its own: start of text, punctuation, white space
 #              or an underscore before it (U1234567, =u1234567;, acct_DUR123456, U1234567_x);

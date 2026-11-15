@@ -9,13 +9,14 @@ Next step.
 
 - **What changed:** the shape by which an IBKR account id is recognised is now an optional
   `D`, then `U`, `F` or `I`, then zero to two further capital letters, then 5 to 9 digits
-  (`D?[UFI][A-Z]{0,2}\d{5,9}`). It replaces "`DU`, `DF`, `U` or `F` directly followed by 5 to
+  (`D?[UFI][A-Z]{0,2}\d{5,9}`; `[0-9]` for `\d` in `redact.vrl`). It replaces "`DU`, `DF`, `U` or `F` directly followed by 5 to
   9 digits" in the four places that carry it: `ACCOUNT_RE` of the sidecar (`redaction.py`;
   its label check refuses an `IBGW_INSTANCE` that this redaction would change), rules 1 to 3 of
   `azure/vector/redact.vrl`, `account_like` in `azure/vector/entrypoint.sh` and `good_label`
   in `azure/vm/apply-config.sh`. The support bundle's MANIFEST, `sidecar/README.md`,
   `azure/README.md` and L32 state the shape and that an id of any other shape is not
-  shortened. `azure/tests/run.sh` fails when the two label patterns of the Azure pack differ.
+  shortened. `azure/tests/run.sh` fails when the two label patterns of the Azure pack differ
+  in text, and when they and `redact.vrl` decide one of 43 boundary labels differently.
 - **Result:** the line that leaked, written with a made-up id of the same shape
   (`IBC: detected dialog entitled: DUR123456 Trader Workstation Configuration (Simulated
   Trading); event=Opened`), leaves the sidecar's support bundle with `***456` and the Azure
@@ -30,13 +31,19 @@ Next step.
   configuration window that IBC logs, while the bundle's MANIFEST said that account ids are
   shortened. The patterns and their fixtures came from the same assumption about the shape,
   so every test agreed with the pattern (the lesson of the first real IBC log, again).
-  (2) *The new shape is one observation plus headroom, not a specification.* IBKR documents
-  the prefixes `U` (individual and sub accounts), `F` (advisor or fund-manager master) and
-  `I` (fully disclosed broker master)
-  ([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
-  [application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf)),
-  and paper accounts are widely documented to start with `DU`; the letter after `DU` is in
-  none of these. The second further letter is an assumption. The trade is deliberate: a
+  (2) *The new shape is one observation plus headroom, not a specification.* IBKR names
+  `F` for a fund manager's master account and `U` for a hedge fund's sub account
+  ([IBKR Campus](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/)),
+  `I` for a fully disclosed broker's master account and `U` for that broker's proprietary
+  account ([application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf),
+  page 14), and says that a paper trading account number begins with `DU`
+  ([Interactive Brokers Securities Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)).
+  None of them says what follows the letters, and none names `DF` or `DI`: both are
+  assumptions. The first wording of this change said more than the sources ("`U` for
+  individual and sub accounts", "`F` for advisor masters", "`DU` widely documented"); a
+  review read the two IBKR documents and the wording now quotes them, with a source for
+  `DU` that was read rather than assumed. The letter after `DU` is an observation, the
+  second further letter an assumption. The trade is deliberate: a
   word of the shape that is no id is masked too (`ID12345`, `USD100000`; in the Azure pack
   in any case, `disk12345`), which costs readability, while a missed id breaks the promise.
   (3) *The label rule had to follow.* The Azure shipper refuses a label that the redaction
