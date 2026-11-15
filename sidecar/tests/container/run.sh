@@ -160,16 +160,16 @@ run_sidecar() { # extra-docker-args...
 
 echo "== structure =="
 if [ "$(docker run --rm --entrypoint id "${IMAGE}" -u)" = "1000" ]; then pass "runs as uid 1000"; else fail "uid" "not 1000"; fi
-# The gateway's log volume is mounted at /var/log/ibgateway. An EMPTY named volume takes the
-# owner and mode of that directory in the image of the LAST container created on it, and
-# `docker compose up` creates every container before it starts any. A root-owned directory
-# here handed the gateway (uid 1000) a log volume it could not write: it failed its preflight
-# (dirs_not_writable) in a restart loop (found with the first real session, 2026-11-16).
-log_mount="$(docker run --rm --entrypoint stat "${IMAGE}" -c '%u:%g %a' /var/log/ibgateway 2>&1)"
-if [ "${log_mount}" = "1000:1000 755" ]; then
-  pass "the mount point of the gateway's log volume is owned like the gateway's own (1000:1000, 755)"
+# The gateway's log volume is mounted at /var/log/ibgateway. Docker gives an EMPTY named
+# volume the owner and mode of that directory in the image of a container created on it, and
+# `docker compose up` creates the sidecar after the gateway. Up to 0.2.0 the directory was in
+# this image, root-owned, and handed the gateway (uid 1000) a log volume it could not write:
+# its preflight failed (dirs_not_writable) in a restart loop (first real session, 2026-11-16).
+# A path that is not in the image copies nothing.
+if docker run --rm --entrypoint python "${IMAGE}" -c 'import os, sys; sys.exit(1 if os.path.lexists("/var/log/ibgateway") else 0)'; then
+  pass "the image has no /var/log/ibgateway: an empty log volume keeps the gateway's owner"
 else
-  fail "log mount point" "/var/log/ibgateway is ${log_mount}; an empty log volume would take that owner"
+  fail "log mount point" "/var/log/ibgateway exists in the image; an empty log volume would take its owner"
 fi
 labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}|{{index .Config.Labels "org.opencontainers.image.description"}}')
 if [[ "${labels}" == MIT\|* && "${labels}" == *"trademarks of Interactive Brokers LLC"* ]]; then pass "OCI labels with licence and trademark sentence"; else fail "labels" "${labels}"; fi

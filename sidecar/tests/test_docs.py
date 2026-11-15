@@ -135,38 +135,88 @@ def test_the_default_compose_file_adds_nothing_to_the_gateway_service() -> None:
 
 
 LOG_VOLUME_MOUNT = (
-    "      - type: volume\n"
-    "        source: ibgw-logs\n"
-    "        target: /var/log/ibgateway\n"
-    "        read_only: true\n"
-    "        volume:\n"
-    "          nocopy: true\n"
+    "- type: volume\n"
+    "source: ibgw-logs\n"
+    "target: /var/log/ibgateway\n"
+    "read_only: true\n"
+    "volume:\n"
+    "nocopy: true\n"
 )
-"""How a sidecar mounts the gateway's log volume: read-only, and without the copy-up that
-would hand an EMPTY volume the owner of the sidecar image's mount point (compose creates the
-sidecar after the gateway; sidecar/tests/e2e/fresh-volumes.sh starts the files for real)."""
+"""How every container other than the gateway mounts the gateway's log volume (lines without
+their indentation): read-only, and without the copy-up that would hand an EMPTY volume the
+owner of that container image's mount point. compose creates such a container after the
+gateway; sidecar/tests/e2e/fresh-volumes.sh starts the sidecar files for real."""
+
+READERS_OF_THE_LOG_VOLUME = (
+    "compose/docker-compose.sidecar.yml",
+    "compose/docker-compose.sidecar-shared.yml",
+    "compose/docker-compose.azure.yml",
+    "docs/recipes/docker-compose.vector.yml",
+)
+"""The shipped compose files in which a container other than the gateway mounts its logs."""
 
 
 def _without_comments(text: str) -> str:
-    """Return ``text`` without whole-line comments and without trailing ``# ...`` comments."""
-    lines = (re.sub(r"\s+#.*$", "", line) for line in text.splitlines())
-    return (
-        "\n".join(line for line in lines if line.strip() and not line.lstrip().startswith("#"))
-        + "\n"
-    )
+    """Return ``text`` without comments, blank lines and indentation, one line per line.
+
+    Args:
+        text: A YAML file (or a Markdown file with YAML examples).
+
+    Returns:
+        The remaining lines, each stripped of its indentation and of a trailing ``# ...``
+        comment, joined with newlines and ending in one. Indentation is dropped so that the
+        same mount is recognised at any nesting depth.
+    """
+    lines = (re.sub(r"\s+#.*$", "", line).strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line and not line.startswith("#")) + "\n"
 
 
-def test_both_compose_overrides_mount_the_log_volume_read_only_and_without_copy_up() -> None:
-    for name in ("docker-compose.sidecar.yml", "docker-compose.sidecar-shared.yml"):
-        code = _without_comments((REPOSITORY_ROOT / "compose" / name).read_text(encoding="utf-8"))
+def test_every_reader_of_the_log_volume_mounts_it_read_only_and_without_copy_up() -> None:
+    for name in READERS_OF_THE_LOG_VOLUME:
+        code = _without_comments((REPOSITORY_ROOT / name).read_text(encoding="utf-8"))
         assert LOG_VOLUME_MOUNT in code, name
-        # The short form cannot say nocopy: it must not come back beside or instead of it.
+        # The short form must not come back beside or instead of it (it can say nocopy, but
+        # one form everywhere keeps this check simple).
         assert "ibgw-logs:/var/log/ibgateway" not in code, name
+
+
+def test_no_other_shipped_compose_file_mounts_the_log_volume_read_only() -> None:
+    # A read-only mount of the log volume is a reader; every reader must be in the list above.
+    candidates = [
+        *REPOSITORY_ROOT.glob("compose/*.yml"),
+        *REPOSITORY_ROOT.glob("docs/recipes/*.yml"),
+        *REPOSITORY_ROOT.glob("examples/*.yml"),
+        *REPOSITORY_ROOT.glob("windows/templates/*.tmpl"),
+    ]
+    assert len(candidates) >= 8
+    for path in candidates:
+        name = path.relative_to(REPOSITORY_ROOT).as_posix()
+        code = _without_comments(path.read_text(encoding="utf-8"))
+        if name in READERS_OF_THE_LOG_VOLUME:
+            continue
+        assert ":/var/log/ibgateway:ro" not in code, name
+        assert "target: /var/log/ibgateway\nread_only: true" not in code, name
 
 
 def test_the_readme_example_mounts_the_log_volume_the_same_way_and_says_why() -> None:
     assert LOG_VOLUME_MOUNT in _without_comments(README)
     assert "Keep `nocopy` when you write your own compose file." in README
+
+
+def test_the_compose_files_and_the_readme_name_the_version_of_the_package() -> None:
+    from brokersre_sidecar import __version__
+
+    tag = f"ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:{__version__}"
+    for name in (
+        "compose/docker-compose.sidecar.yml",
+        "compose/docker-compose.sidecar-shared.yml",
+        "sidecar/README.md",
+    ):
+        text = (REPOSITORY_ROOT / name).read_text(encoding="utf-8")
+        tags = set(
+            re.findall(r"ghcr\.io/rocketedge/brokersre-ib-gateway-sidecar:[0-9][^\s\"']*", text)
+        )
+        assert tags == {tag}, f"{name}: {sorted(tags)}"
 
 
 def test_the_readme_says_plainly_that_a_dead_host_is_silent_without_the_dead_man_ping() -> None:

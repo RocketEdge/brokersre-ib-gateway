@@ -2,29 +2,31 @@
 # Fresh volumes: the gateway image and the sidecar image CREATED together, the way
 # `docker compose up` does it, before either has written anything.
 #
-# Why this is a test of its own: an EMPTY named volume takes the owner and mode of its mount
-# point in the image of the LAST container created on it, and compose creates every container
-# before it starts any. The sidecar is created after the gateway (depends_on). A sidecar image
-# whose /var/log/ibgateway was root-owned therefore turned the gateway's log volume
+# Why this is a test of its own: Docker gives an EMPTY named volume the owner and mode of its
+# mount point in the image of a container created on it (when the image has that directory and
+# the mount does not say nocopy; this is engine behaviour, not documented). Compose creates
+# every container before it starts any, the sidecar after the gateway (depends_on). Up to
+# 0.2.0 the sidecar image had /var/log/ibgateway root-owned, so the gateway's log volume became
 # root-owned, the gateway (uid 1000) failed its preflight (dirs_not_writable), and its restart
 # policy started it again and again (found with the first real session, 2026-11-16).
 # sidecar/tests/e2e/run.sh could not show it: it uses `docker run`, so the gateway has written
 # to the volume before the sidecar exists.
 #
 # Two protections are checked, each on its own:
-#   1. the sidecar IMAGE owns that mount point as the gateway does (a plain read-only mount,
-#      as a hand-written compose file or `docker run` has it, leaves the volume alone);
-#   2. the shipped compose overrides mount the volume with `nocopy`, which keeps Docker from
-#      applying the mount point's owner at all (so an older sidecar image is safe too).
+#   1. the sidecar IMAGE has no /var/log/ibgateway, so a container created from it copies
+#      nothing onto the volume, whatever the mount says (a hand-written compose file or
+#      `docker run -v ...:ro` is safe);
+#   2. the shipped compose overrides mount the volume with `nocopy`, so an older sidecar image
+#      is safe too.
 # Then the shipped files are started as shipped, on fresh volumes, for both sidecar overrides.
 #
-# Nothing here can log in: the gateway runs with IBC_LAUNCH=no (IBC and IB Gateway are not
-# started) and the credentials are dummies.
+# Nothing here can log in: before anything starts, the test checks that the resolved
+# configuration has IBC_LAUNCH=no (IBC and IB Gateway are not started) and an internal network
+# (no route out); the credentials are dummies, and no port is published.
 #
 # Usage: sidecar/tests/e2e/fresh-volumes.sh <gateway image> <sidecar image>
-# Environment (optional): FRESH_RELAY_PORT (default 14204) and FRESH_SIDECAR_PORT (default
-#   19810): host ports used while the stacks run, so that a gateway already running on this
-#   host does not fail the test (the shipped files publish 4001, 4002 and 9810).
+# Names: every container, volume and network carries the prefix sidecar-fresh-<pid>, so two
+#   runs on one host do not meet.
 # Exit code: the number of failed checks.
 set -uo pipefail
 
@@ -39,12 +41,10 @@ GW_IMAGE="${1:?usage: fresh-volumes.sh <gateway image> <sidecar image>}"
 SC_IMAGE="${2:?usage: fresh-volumes.sh <gateway image> <sidecar image>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${here}/../../.." && pwd)"
-RELAY_PORT="${FRESH_RELAY_PORT:-14204}"
-SIDECAR_PORT="${FRESH_SIDECAR_PORT:-19810}"
-PROJECT="sidecar-fresh"
-VOLUME="sidecar-fresh-plain-logs"
-GW="sidecar-fresh-plain-gateway"
-SC="sidecar-fresh-plain-sidecar"
+PROJECT="sidecar-fresh-$$"
+VOLUME="${PROJECT}-plain-logs"
+GW="${PROJECT}-plain-gateway"
+SC="${PROJECT}-plain-sidecar"
 failures=0
 pass() { echo "PASS  $1"; }
 fail() {
@@ -69,16 +69,17 @@ host_work="$(host_path "${work}")"
 compose_dir="$(host_path "${repo_root}/compose")"
 
 # What the test changes about the shipped files, and nothing else: the sidecar image under
-# test, host ports that do not collide, and where the notification secret file is.
+# test, no published port, an internal network, and where the notification secret file is.
 printf '%s\n' \
   'services:' \
   '  ib-gateway:' \
-  '    ports: !override' \
-  "      - \"127.0.0.1:${RELAY_PORT}:4004\"" \
-  "      - \"127.0.0.1:${SIDECAR_PORT}:9810\"" \
+  '    ports: !reset []' \
   '  sidecar:' \
   "    image: ${SC_IMAGE}" \
   '    ports: !reset []' \
+  'networks:' \
+  '  default:' \
+  '    internal: true' \
   'secrets:' \
   '  notify-teams-url:' \
   "    file: ${host_work}/secrets/notify-teams-url" \
@@ -97,19 +98,18 @@ stack() {
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
   stack docker-compose.sidecar.yml down -v --remove-orphans >/dev/null 2>&1 || true
+  stack docker-compose.sidecar-shared.yml down -v --remove-orphans >/dev/null 2>&1 || true
   docker rm -f "${GW}" "${SC}" >/dev/null 2>&1 || true
   docker volume rm "${VOLUME}" >/dev/null 2>&1 || true
   rm -rf "${work}"
 }
 trap cleanup EXIT
-stack docker-compose.sidecar.yml down -v --remove-orphans >/dev/null 2>&1 || true
-docker rm -f "${GW}" "${SC}" >/dev/null 2>&1 || true
-docker volume rm "${VOLUME}" >/dev/null 2>&1 || true
+trap 'exit 130' INT TERM
 
 # volume_owner <volume>: "uid:gid mode" of the volume's top directory. It is read through a
 # mount point that does not exist in the image, so the probe itself changes nothing.
 volume_owner() {
-  docker run --rm -v "$1:/probe-volume:ro" --entrypoint stat "${SC_IMAGE}" -c '%u:%g %a' /probe-volume 2>&1
+  docker run --rm --network none -v "$1:/probe-volume:ro" --entrypoint stat "${GW_IMAGE}" -c '%u:%g %a' /probe-volume 2>&1
 }
 wait_for() { # seconds command...
   local t="$1"
@@ -120,21 +120,26 @@ wait_for() { # seconds command...
   done
   return 1
 }
+# py <program> [args...]: run Python (from the sidecar image) on standard input.
+py() { docker run --rm -i --network none --entrypoint python "${SC_IMAGE}" -c "$@"; }
 
 echo "== the images alone: gateway created first, sidecar last, a plain read-only mount =="
-expected="$(docker run --rm --entrypoint stat "${GW_IMAGE}" -c '%u:%g %a' /var/log/ibgateway 2>&1)"
+expected="$(docker run --rm --network none --entrypoint stat "${GW_IMAGE}" -c '%u:%g %a' /var/log/ibgateway 2>&1)"
 if [ "${expected}" = "1000:1000 755" ]; then
   pass "the gateway image owns its log directory as 1000:1000, mode 755"
 else
   fail "gateway image" "/var/log/ibgateway is ${expected}"
 fi
-docker create --name "${GW}" -v "${VOLUME}:/var/log/ibgateway" "${GW_IMAGE}" >/dev/null
-docker create --name "${SC}" -v "${VOLUME}:/var/log/ibgateway:ro" "${SC_IMAGE}" >/dev/null
-owner="$(volume_owner "${VOLUME}")"
-if [ "${owner}" = "${expected}" ]; then
-  pass "an empty log volume keeps the gateway's owner when the sidecar is created after the gateway"
+if docker create --name "${GW}" --network none -v "${VOLUME}:/var/log/ibgateway" "${GW_IMAGE}" >/dev/null \
+  && docker create --name "${SC}" --network none -v "${VOLUME}:/var/log/ibgateway:ro" "${SC_IMAGE}" >/dev/null; then
+  owner="$(volume_owner "${VOLUME}")"
+  if [ "${owner}" = "${expected}" ]; then
+    pass "an empty log volume keeps the gateway's owner when the sidecar is created after the gateway"
+  else
+    fail "fresh volume" "the volume is ${owner} after the sidecar was created; the gateway needs ${expected}"
+  fi
 else
-  fail "fresh volume" "the volume is ${owner} after the sidecar was created; the gateway needs ${expected}"
+  fail "fresh volume" "the two containers could not be created"
 fi
 docker rm -f "${GW}" "${SC}" >/dev/null 2>&1 || true
 docker volume rm "${VOLUME}" >/dev/null 2>&1 || true
@@ -143,19 +148,34 @@ for override in docker-compose.sidecar.yml docker-compose.sidecar-shared.yml; do
   echo "== ${override}: as shipped, on fresh volumes =="
   gateway="${PROJECT}-ib-gateway-1"
   sidecar="${PROJECT}-sidecar-1"
-  # The mount as compose understands it: read-only, and nocopy so that the owner of the
-  # sidecar image's mount point is never applied to the volume.
-  if stack "${override}" config --format json 2>/dev/null | docker run --rm -i --entrypoint python "${SC_IMAGE}" -c '
+  if ! stack "${override}" config --format json >"${work}/config.json" 2>"${work}/config.err"; then
+    fail "${override} config" "$(tail -3 "${work}/config.err" | tr '\n' ' ')"
+    continue
+  fi
+  # Nothing starts unless the configuration cannot log in and cannot reach anything.
+  if ! py '
 import json, sys
-mounts = [m for m in json.load(sys.stdin)["services"]["sidecar"]["volumes"] if m["target"] == "/var/log/ibgateway"]
+d = json.load(sys.stdin)
+gateway = d["services"]["ib-gateway"]
+networks = d.get("networks", {})
+ok = gateway["environment"].get("IBC_LAUNCH") == "no" and networks and all(n.get("internal") is True for n in networks.values())
+sys.exit(0 if ok else 1)
+' <"${work}/config.json"; then
+    fail "${override} safety" "the resolved configuration does not have IBC_LAUNCH=no and an internal network; nothing was started"
+    continue
+  fi
+  # The mount as compose understands it: read-only, and nocopy so that the owner of a sidecar
+  # image's mount point is never applied to the volume.
+  if py '
+import json, sys
+mounts = [m for m in json.load(sys.stdin)["services"]["sidecar"]["volumes"] if m["target"].rstrip("/") == "/var/log/ibgateway"]
 ok = len(mounts) == 1 and mounts[0].get("read_only") is True and mounts[0].get("volume", {}).get("nocopy") is True
 sys.exit(0 if ok else 1)
-'; then
+' <"${work}/config.json"; then
     pass "${override}: the log volume is mounted read-only and with nocopy"
   else
-    fail "${override} mount" "the sidecar's mount of /var/log/ibgateway is not read-only with nocopy"
+    fail "${override} mount" "the sidecar's mount of /var/log/ibgateway is not exactly one read-only nocopy mount"
   fi
-  stack "${override}" down -v --remove-orphans >/dev/null 2>&1 || true
   if stack "${override}" up -d >"${work}/up.log" 2>&1; then
     pass "${override}: docker compose up -d creates and starts both containers"
   else

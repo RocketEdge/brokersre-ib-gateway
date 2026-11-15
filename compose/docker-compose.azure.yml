@@ -41,7 +41,15 @@ x-vector-service: &vector-service
   mem_limit: 512m
   pids_limit: 256
   volumes:
-    - ibgw-logs:/var/log/ibgateway:ro
+    # The gateway's log volume, read-only. nocopy: Docker must never give a fresh, empty log
+    # volume the owner of this container's mount point (the gateway writes it as uid 1000).
+    # The Vector image has no such directory today; nocopy keeps that true whatever it ships.
+    - type: volume
+      source: ibgw-logs
+      target: /var/log/ibgateway
+      read_only: true
+      volume:
+        nocopy: true
     - ../azure/vector:/etc/vector:ro
     # The only writable path: the file checkpoints (which line of which file was delivered).
     # Rows in flight live in memory; an undelivered line is read again after a restart. It is

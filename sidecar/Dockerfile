@@ -69,16 +69,17 @@ RUN apt-get update \
 # uid 1000 like the gateway, so the shared log volume is readable. pip is removed: nothing is
 # installed at run time, and an installer in the image is attack surface with CVEs of its own.
 # /var/lib/sidecar is created owned by uid 1000 so a named volume mounted there is writable.
-# /var/log/ibgateway is where the GATEWAY's log volume is mounted, and it must be owned exactly
-# as in the gateway image (1000:1000, mode 755): an empty named volume takes the owner and
-# mode of its mount point in the image of the last container created on it, and compose
-# creates the sidecar after the gateway. Left root-owned, this directory made the gateway's
-# volume unwritable for the gateway (sidecar/tests/e2e/fresh-volumes.sh).
+# /var/log/ibgateway, where the GATEWAY's log volume is mounted, is deliberately NOT in the
+# image. Docker gives an empty named volume the owner and mode of its mount point in the image
+# of a container created on it, and compose creates the sidecar after the gateway: up to 0.2.0
+# this image had the directory root-owned, and the gateway could not write its own volume
+# (sidecar/tests/e2e/fresh-volumes.sh). A path that is not in the image copies nothing, so the
+# volume keeps what the gateway gave it, whatever the gateway's owner is. Without a mount the
+# path does not exist, and the sidecar reports the volume as missing instead of an empty one.
 RUN groupadd --gid 1000 sidecar \
  && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sidecar \
- && mkdir -p /var/lib/sidecar /var/log/ibgateway \
- && chown 1000:1000 /var/lib/sidecar /var/log/ibgateway \
- && chmod 755 /var/log/ibgateway \
+ && mkdir -p /var/lib/sidecar \
+ && chown 1000:1000 /var/lib/sidecar \
  && python -m pip uninstall --yes pip
 
 COPY --from=build /opt/sidecar /opt/sidecar
