@@ -5,6 +5,55 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — An account id with a third letter is redacted
+
+- **What changed:** the shape by which an IBKR account id is recognised is now an optional
+  `D`, then `U`, `F` or `I`, then zero to two further capital letters, then 5 to 9 digits
+  (`D?[UFI][A-Z]{0,2}\d{5,9}`). It replaces "`DU`, `DF`, `U` or `F` directly followed by 5 to
+  9 digits" in the four places that carry it: `ACCOUNT_RE` of the sidecar (`redaction.py`;
+  its label check and its farm-name guard use the same expression), rules 1 to 3 of
+  `azure/vector/redact.vrl`, `account_like` in `azure/vector/entrypoint.sh` and `good_label`
+  in `azure/vm/apply-config.sh`. The support bundle's MANIFEST, `sidecar/README.md`,
+  `azure/README.md` and L32 state the shape and that an id of any other shape is not
+  shortened. `azure/tests/run.sh` fails when the two label patterns of the Azure pack differ.
+- **Result:** the line that leaked, written with a made-up id of the same shape
+  (`IBC: detected dialog entitled: DUR123456 Trader Workstation Configuration (Simulated
+  Trading); event=Opened`), leaves the sidecar's support bundle with `***456` and the Azure
+  shipper with `[ACCT:…456]`; a label of that shape is refused by the sidecar, the shipper
+  and `apply-config.sh`. A run of capital letters that begins with another letter stays as
+  it was (`CPU12345`, `XYZ123456`), and so do ten digits and a third further letter. Each
+  new test was seen to fail against the old pattern first (test counts in the pull request).
+- **What did NOT work / root cause:** (1) *A real paper account id passed every pattern.*
+  The paper account of the session of 2026-11-16 had the shape `DU`, one more letter, six
+  digits. Every pattern expected the digits directly after `DU`, `DF`, `U` or `F`, so the
+  sidecar's support bundle carried the full id in `ibc-redacted.txt`, inside the title of the
+  configuration window that IBC logs, while the bundle's MANIFEST said that account ids are
+  shortened. The patterns and their fixtures came from the same assumption about the shape,
+  so every test agreed with the pattern (the lesson of the first real IBC log, again).
+  (2) *The new shape is one observation plus headroom, not a specification.* IBKR documents
+  the prefixes `U` (individual and sub accounts), `F` (advisor or fund-manager master) and
+  `I` (fully disclosed broker master)
+  ([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
+  [application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf)),
+  and paper accounts are widely documented to start with `DU`; the letter after `DU` is in
+  none of these. The second further letter is an assumption. The trade is deliberate: a
+  word of the shape that is no id is masked too (`ID12345`, `USD100000`; in the Azure pack
+  in any case, `disk12345`), which costs readability, while a missed id breaks the promise.
+  (3) *The label rule had to follow.* The Azure shipper refuses a label that the redaction
+  would rewrite, so it now also refuses a label such as `uk100234`; a deployment that used
+  one stops at the next start with exit code 78 and a message naming the variable.
+  (4) *The sidecar's farm-name guard had the same hole:* a farm notice ending in an id of
+  the observed shape in front of a farm stem would have been shown as a farm name in
+  `/status`. It was found with a constructed input, not in a session; the guard uses
+  `ACCOUNT_RE` and has a test for the new shape now.
+  (5) Not changed: the two redactions still differ in their boundaries. The sidecar matches
+  upper case only, anywhere after a character that is not a capital letter; the Azure pack
+  matches any case, but only a word of its own, an id in upper case glued to a lower-case
+  word, or one after an escaped line break (L32).
+- **Next step:** release the sidecar as 0.2.1 in a pull request of its own (this change
+  leaves the version alone); compare the shape with a live, an advisor and a broker id when
+  one is at hand (the shape only, never the id) and change the four places together.
+
 ### 2026-11-13 — The release step of the publish survives a GitHub error
 
 - **What changed:** `publish.yml` writes the GitHub release through the new

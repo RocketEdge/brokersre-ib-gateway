@@ -236,10 +236,24 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `azure/cloud-init/gateway.yaml` is pinned by `gateway.yaml.sha256`: change both
   deliberately, because existing VMs keep the old bootstrap. `vmConfig` in `vm.bicep` and
   `required_keys` in `azure/vm/apply-config.sh` change together. The account-id pattern
-  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`. A helper image used by a
-  check must be listed in `helper_images` in `run.sh` (pulled before any check): a first
-  `docker run` of an image writes its pull notice to standard error, and a check that
-  compares standard error then fails on a fresh machine only.
+  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`, and in the sidecar (next
+  item). A helper image used by a check must be listed in `helper_images` in `run.sh`
+  (pulled before any check): a first `docker run` of an image writes its pull notice to
+  standard error, and a check that compares standard error then fails on a fresh machine
+  only.
+- The shape of an account id (an optional `D`, then `U`, `F` or `I`, up to two further capital
+  letters, 5 to 9 digits; as a regular expression `D?[UFI][A-Z]{0,2}\d{5,9}`) is written in
+  four places that change together, each with its tests: `ACCOUNT_RE` in
+  `sidecar/src/brokersre_sidecar/redaction.py` (also the label check and the farm-name
+  guard), rules 1 to 3 of `azure/vector/redact.vrl`, `account_like` in
+  `azure/vector/entrypoint.sh` and `good_label` in `azure/vm/apply-config.sh` (`run.sh`
+  fails when the last two differ). The text follows: the bundle MANIFEST
+  (`support/bundle.py`), `sidecar/README.md`, `azure/README.md`, `docs/limitations.md` L32.
+  The prefixes are IBKR's, the letters after them are one observation plus headroom: a real
+  paper id (`DU`, one more letter, six digits; 2026-11-16) passed the earlier shape and a
+  support bundle carried it in full, while every fixture agreed with the pattern. Take a
+  new shape from the shape of a real id, and never write a real id into a test, a fixture,
+  a commit or a pull request.
 - Never end a pipeline with `grep -q` in a script that sets `pipefail`: the quiet grep exits
   at its first match, the writer gets SIGPIPE (exit 141) and the pipeline is "false" although
   the text was found. In an `if ...; then fail; else pass` check for a leaked secret that is
