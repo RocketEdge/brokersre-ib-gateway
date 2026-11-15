@@ -17,8 +17,9 @@ new contract version, announced in `docs/changes.md` before an image carrying it
 **Refined on 2026-11-16 without a new version** (no key, event or phase changed):
 `unknown_window` is raised when an unknown window has stayed open for
 `UNKNOWN_WINDOW_GRACE_S` seconds, no longer the moment it opens. A reader that reacts to
-the event gets it 10 to 12 seconds later by default, and no longer for a window that IBC
-or the Gateway dealt with.
+the event gets it about 10 seconds later by default (later only while lines of IBC that
+are already waiting are read first), and no longer for a window that IBC or the Gateway
+dealt with.
 
 ## Events: one JSON object per line, on stdout and in `events/events.jsonl`
 
@@ -100,7 +101,7 @@ can shape is echoed. The events carry no password and no username.
 | `twofa_initiated` | warn | `2fa-pending` | `IBC: Second Factor Authentication initiated` | IBC source |
 | `twofa_dialog` | warn | `2fa-pending` | `detected dialog entitled: Second Factor Authentication; event=Opened\|Activated` | IBC source |
 | `twofa_timeout` | warn | `login` | `IBC: Re-login after second factor authentication timeout in` | IBC source |
-| `login_completed` | info | `logged-in` | `IBC: Login has completed` at the end of the line (IBC's stop message `Login has completed: exiting via ...` is not a login) | IBC source |
+| `login_completed` | info | `logged-in` | `IBC: Login has completed` at the end of the line (IBC's stop message `Login has completed: exiting via ...` is not a login) | real log, 10.50.1g (2026-11-15 UTC) |
 | `login_failed` | error | `login` | `IBC: Login failed` | IBC source |
 | `login_failed_dialog` | error | `needs-human` | `detected dialog entitled: Unrecognized Username or Password; event=Opened` | real log, 10.50.1g |
 | `existing_session` | warn | `existing-session` | `detected dialog entitled: Existing session detected; event=Opened` | IBC source |
@@ -108,13 +109,15 @@ can shape is echoed. The events carry no password and no username.
 | `daily_restart` | info | `restarting` | `autorestart file found at <path>: authentication will not be required`, a line of IBC's start script without timestamp or `IBC:` prefix | IBC source |
 | `login_dialog` | info | `login` | `IBC: Login dialog WINDOW_OPENED` | real log, 10.50.1g |
 | `ibc_version` | info | `login` | `IBC: version` | real log, 10.50.1g |
-| `unknown_window` | warn | (none) | a window whose title is in neither this table nor `known-windows.txt` has stayed open for `UNKNOWN_WINDOW_GRACE_S` seconds (default 10; `0`: reported the moment it opens). A window that IBC reports closed within that time is not reported | real: the paper-account `Warning` that IBC accepts after every paper login is gone after 0.3 s and is not reported (`tests/fixtures/ibc-real-paper-login.log`); list from IBC source and three real starts |
+| `unknown_window` | warn | (none) | a window whose title is in neither this table nor `known-windows.txt` has stayed open for `UNKNOWN_WINDOW_GRACE_S` seconds (default 10; `0`: reported the moment it opens). What ends the wait without an event: IBC reports the window closed (of several waiting windows with one title, the newest counts as the one that closed), a new IBC starts (its `version` line: the Gateway process was replaced), or IBC's output ends. A frame whose title ends with an ellipsis is a start-up step, never unknown | real: the paper-account `Warning` that IBC accepts after every paper login is gone after 0.3 s and is not reported (`tests/fixtures/ibc-real-paper-login.log`); list from IBC source and three real starts |
 | `needs_human` | error | `needs-human` | more than `TWOFA_MAX_PROMPTS` second-factor prompts without a login (off by default) | IBC source |
 
 "Real log" means the line was seen in this image's IBC output and is covered by
-`tests/fixtures/ibc-real-failed-login.log`. "IBC source" means the exact text IBC 3.24.2's code
-logs, not yet confirmed by a real log: no login has succeeded on this image yet
-([limitations](limitations.md), L01). IBC reports every window as `event=Opened`, then
+`tests/fixtures/ibc-real-failed-login.log` (a rejected login, 2026-11-11) or
+`tests/fixtures/ibc-real-paper-login.log` (two completed paper logins, 2026-11-15 UTC).
+"IBC source" means the exact text IBC 3.24.2's code logs, not yet confirmed by a real log:
+the paper login asked for no second factor, and no session has run through a daily restart
+or met a competing session yet ([limitations](limitations.md), L01). IBC reports every window as `event=Opened`, then
 `Activated`, then `Focused`; dialog rows match `Opened` only, so one dialog is one event.
 `twofa_dialog` may never appear with Gateway 10.16 and later: according to IBC's source the
 login frame itself turns into the prompt there and only `twofa_initiated` is logged. Count

@@ -90,3 +90,13 @@ Rejected: listing `Warning` (hides the case the event exists for); treating IBC'
 `Click button` line as the answer (IBC logs it for windows on the list too, and a click
 is not a closed window); a background timer per window (events could then appear after
 the classifier, and the Gateway, had ended).
+
+The rules that make the wait correct (found by the independent review, 2026-11-16): the
+wait ends without an event when IBC reports the window closed, when a new IBC announces
+itself (the Gateway process was replaced inside one classifier run and wrote no "closed"
+line), or when IBC's output ends; of several waiting windows with one title the newest
+counts as the one that closed, so a window that stays open keeps its time; time is the
+kernel's uptime, so a clock step changes nothing; and a due window is reported only once no
+further line of IBC is waiting to be read, because after a pause of the process its
+"closed" line may already be in the pipe. A frame whose title ends with an ellipsis is a
+start-up step; a dialog with such a title is not.

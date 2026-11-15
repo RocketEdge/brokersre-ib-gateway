@@ -346,10 +346,16 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   building on the top.
 - `unknown_window` means a window that STAYS open (`UNKNOWN_WINDOW_GRACE_S`, 10 s), decided in
   the read loop of `classify-ibc-log.sh`: the `read` has a time limit only while a window
-  waits, and what bash hands back of an unfinished line at the limit is kept. Never put a title
-  that says nothing about the content (`Warning`) on `known-windows.txt`: the grace period
-  covers the one IBC answers. A test of that list sets `UNKNOWN_WINDOW_GRACE_S=0`, or the end
-  of the input hides a missing title (a waiting window is dropped when IBC's output ends).
+  waits, and what bash hands back of an unfinished line at the limit is kept (`LC_ALL=C`, or
+  bash can drop bytes there). Time is `/proc/uptime`, never the wall clock. A due window is
+  reported only once no line of IBC is waiting (its "closed" line may be in the pipe). A new
+  IBC (`ibc_version`) empties the waiting list: `ibcstart.sh` relaunches the Gateway inside
+  one classifier run and the old process writes no "closed" line. Never put a title that
+  says nothing about the content (`Warning`) on `known-windows.txt`: the grace period covers
+  the one IBC answers; a list line that starts with `frame:` applies to frames only. A test of
+  the list sets `UNKNOWN_WINDOW_GRACE_S=0`. A test of the grace period keeps the pipe open
+  past it (`{ printf ...; sleep N; } | classify-ibc-log.sh`): when the input ends every wait
+  ends, and a test that replays a file passes whatever the classifier does with a window.
 - IBC's window lines carry a title and no id. The start-up frame changes its title while open
   (opened as `Authenticating...`, closed as `Starting application...`), a normal paper login
   opens a `Warning` that IBC accepts, and the configuration dialog's title starts with the

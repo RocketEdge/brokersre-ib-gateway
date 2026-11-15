@@ -10,18 +10,23 @@ Next step.
 - **What changed:** the first completed logins on this image (a paper account, Gateway
   10.50.1g, 2026-11-15 UTC) raised `unknown_window` at every login although nothing was
   wrong. The classifier now waits `UNKNOWN_WINDOW_GRACE_S` seconds (default 10; `0` is the
-  old behaviour) and raises the event only when the window is still open then; a window that
-  IBC reports closed before that is not reported. The list of known titles gains the
-  start-up frame's steps as a family (a title that ends with an ellipsis). The automatic
-  screenshot is taken when the event is raised, so of a window that has been on the screen
-  for the grace period. The qualification script takes its verdict on unknown windows no
-  sooner than 15 seconds after the login. The IBC lines of the two real logins are a
-  fixture (`tests/fixtures/ibc-real-paper-login.log`, account id replaced).
-- **Result:** replaying the real log gives exactly `ibc_version`, `login_dialog`,
-  `login_completed` per start and no `unknown_window` (three before the change). The unit
-  suite in the image has 512 tests, all passing; 15 are new and 7 were adjusted for this.
-  `login_completed` is now confirmed against real IBC output, and so is IBC's stop message
-  that must not count as a login (L01). No key, event or phase of the log contract changed.
+  old behaviour) and raises the event only when the window is still open then. The wait
+  ends without an event when IBC reports the window closed, when a new IBC starts (the
+  Gateway process was replaced and its windows went with it), or when IBC's output ends.
+  The list of known titles gains the start-up frame's steps as a family (a FRAME whose
+  title ends with an ellipsis; a line of the list can now be limited to frames). The
+  automatic screenshot is taken when the event is raised, so of a window that has been on
+  the screen for the grace period. The qualification script takes its verdict on unknown
+  windows the grace period plus 5 seconds after the login. The IBC lines of the two real
+  logins are a fixture (`tests/fixtures/ibc-real-paper-login.log`, account id replaced).
+- **Result:** the real log through a pipe that stays open past the grace period gives
+  exactly `ibc_version`, `login_dialog`, `login_completed` per start and no
+  `unknown_window` (three before the change); with IBC's "closed" lines for the warning
+  removed, the warning of the running Gateway is reported. One real qualification with a
+  paper account passed on a local build of the stable image with these scripts (L16). The
+  unit suite in the image passes in full (counts in the pull request). `login_completed` is
+  now confirmed against real IBC output, and so is IBC's stop message that must not count
+  as a login (L01). No key, event or phase of the log contract changed.
 - **What did NOT work / root cause:** (1) *A title cannot tell a window nobody handles from
   one that IBC answers.* Every paper login opens a dialog titled `Warning` (this is not a
   brokerage account); IBC accepts it in the same millisecond and it is gone 0.3 s later.
@@ -33,14 +38,32 @@ Next step.
   was not listed and appeared in one of two starts. (3) *IBC names a window by its title
   only.* The start-up frame opens as `Authenticating...` and closes as `Starting
   application...`, so an opened window cannot always be matched to its closing; that is why
-  the frame's titles are listed, and it is a stated limit for other windows (L10). (4) A
-  background timer per window was rejected: its event could appear after the classifier and
-  the Gateway had ended. The wait is a time limit on the classifier's own read, used only
-  while a window waits, and the unfinished line bash returns at the limit is kept (a test
-  splits `Login has completed` across it).
-- **Next step:** a qualification against a real paper login with this image; watch real
-  sessions for windows that stay open and are harmless (L10); the automatic picture of a
-  real blocking dialog (L25).
+  the frame's titles are a family on the list, and it is a stated limit for other windows
+  (L10). (4) A background timer per window was rejected: its event could appear after the
+  classifier and the Gateway had ended. The wait is a time limit on the classifier's own
+  read, used only while a window waits, and the unfinished line bash returns at the limit
+  is kept. (5) *The independent review found what the first version got wrong.* The
+  waiting list outlived a restart of the Gateway inside one classifier run (`ibcstart.sh`
+  relaunches it, and the old process writes no "closed" line), so a window of the old
+  process was reported after it was gone and every later answered `Warning` looked unknown;
+  a new IBC now empties the list. The oldest of several windows with one title counted as
+  the one that closed, so each answered window restarted the clock of a stuck one; the
+  newest counts now. Time came from the wall clock (a step could report a closed window or
+  delay a stuck one); it comes from the kernel's uptime now. After a pause of the process,
+  a window was reported although its "closed" line was already in the pipe; a due window
+  is reported only once no line is waiting (at most 1,000 lines later). The family rule for
+  titles with an ellipsis applied to dialogs too, which can wait for an answer; it is
+  limited to frames. In a UTF-8 locale bash can drop bytes when a timed read ends inside a
+  character; the classifier runs with `LC_ALL=C`. (6) *Tests that replay a file cannot see a
+  waiting window:* the input ends within milliseconds and every wait ends with it, so the
+  first real-log test passed whatever the classifier did with the warning. Every
+  grace-period test now keeps the pipe open past the grace period, and the real-log test has
+  a counterpart without the "closed" lines. A mutation run (19 deliberate breakages) kills
+  17; the two survivors are equivalent (a redundant `break`, and the clock source, which no
+  test can see without a clock step).
+- **Next step:** a qualification of the published image; watch real sessions for windows
+  that stay open and are harmless (L10); the automatic picture of a real blocking dialog
+  (L25).
 
 ### 2026-11-13 — The release step of the publish survives a GitHub error
 
