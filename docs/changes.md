@@ -11,7 +11,7 @@ Next step.
   `D`, then `U`, `F` or `I`, then zero to two further capital letters, then 5 to 9 digits
   (`D?[UFI][A-Z]{0,2}\d{5,9}`). It replaces "`DU`, `DF`, `U` or `F` directly followed by 5 to
   9 digits" in the four places that carry it: `ACCOUNT_RE` of the sidecar (`redaction.py`;
-  its label check and its farm-name guard use the same expression), rules 1 to 3 of
+  its label check refuses an `IBGW_INSTANCE` that this redaction would change), rules 1 to 3 of
   `azure/vector/redact.vrl`, `account_like` in `azure/vector/entrypoint.sh` and `good_label`
   in `azure/vm/apply-config.sh`. The support bundle's MANIFEST, `sidecar/README.md`,
   `azure/README.md` and L32 state the shape and that an id of any other shape is not
@@ -41,7 +41,18 @@ Next step.
   in any case, `disk12345`), which costs readability, while a missed id breaks the promise.
   (3) *The label rule had to follow.* The Azure shipper refuses a label that the redaction
   would rewrite, so it now also refuses a label such as `uk100234`; a deployment that used
-  one stops at the next start with exit code 78 and a message naming the variable.
+  one stops at the next start with exit code 78 and a message naming the variable. The
+  sidecar refused only a label that was an id as a whole (`fullmatch`), so a label its own
+  redaction rewrites was accepted, and the first review of this change found what that
+  does: `gw-UAT10001` and `gw-UAT20001` both became `gw-***001`, one de-duplication and
+  PagerDuty incident key for two gateways; `desk-DUR123456` left the container in full in
+  the bundle's file name, its MANIFEST and `settings.json` while `status.json` showed
+  `desk-***456`. The sidecar now refuses a label when `redact_accounts(label) != label`,
+  the principle the Azure pack already used (a property test checks it for generated
+  labels). **Behaviour change:** labels such as `ID12345`, `IB10001`, `UK100234`,
+  `FIX12345`, `UAT20261116`, `gw-UAT10001` and `desk-DU1234567` stop the sidecar at start
+  (the message names `IBGW_INSTANCE`, never the value); lower-case labels stay valid in the
+  sidecar, whose redaction is upper case only.
   (4) *The sidecar's farm-name guard had the same hole:* a farm notice ending in an id of
   the observed shape in front of a farm stem would have been shown as a farm name in
   `/status`. It was found with a constructed input, not in a session; the guard uses

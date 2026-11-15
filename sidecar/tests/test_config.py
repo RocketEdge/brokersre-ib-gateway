@@ -6,10 +6,12 @@ from datetime import time
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from brokersre_sidecar.config import ConfigError, Settings, load_secrets, load_settings
 from brokersre_sidecar.config.secrets import SecretFileError, read_secret_file
-from brokersre_sidecar.redaction import SecretRegistry
+from brokersre_sidecar.redaction import SecretRegistry, redact_accounts
 
 
 def problems(env: dict[str, str]) -> str:
@@ -163,6 +165,62 @@ def test_a_secret_in_a_plain_variable_is_refused_without_echoing_it(name: str) -
 
 def test_a_problem_never_echoes_a_refused_value() -> None:
     assert "CANARY_INSTANCE" not in problems({"IBGW_INSTANCE": "CANARY_INSTANCE with space"})
+
+
+def test_two_labels_the_redaction_would_make_equal_are_both_refused() -> None:
+    # Notifications, the de-duplication key and the PagerDuty incident key carry the label
+    # after redaction: accepted, these two gateways would share the key gw-***001.
+    first, second = "gw-UAT10001", "gw-UAT20001"
+    assert redact_accounts(first) == redact_accounts(second) == "gw-***001"
+    assert "IBGW_INSTANCE" in problems({"IBGW_INSTANCE": first})
+    assert "IBGW_INSTANCE" in problems({"IBGW_INSTANCE": second})
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "desk-DUR123456",  # the archive name, MANIFEST and settings.json would carry it in full
+        "prod_U1234567",
+        "deskDU1234567",
+        "DUR123456-paper",
+        "U1234567x",
+        "ID12345",  # no id, but the redaction rewrites it all the same
+    ],
+)
+def test_a_label_the_redaction_would_rewrite_is_refused_without_echoing_it(label: str) -> None:
+    text = problems({"IBGW_INSTANCE": label})
+    assert text.startswith("IBGW_INSTANCE: ")
+    assert "account id" in text
+    assert label not in text
+    assert redact_accounts(label) not in text
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["paper-1", "CPU12345", "XYZ123456", "XDUR123456", "DUABC123456", "U1234", "uk100234"],
+)
+def test_a_label_the_redaction_leaves_alone_is_accepted(label: str) -> None:
+    # The sidecar's redaction matches upper case only, so a lower-case uk100234 stays as it is
+    # in every output and is a valid label here (the Azure shipper refuses it: its redaction
+    # matches any case).
+    assert load_settings({"IBGW_INSTANCE": label}).instance == label
+
+
+@given(
+    label=st.from_regex(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,6}D?[UFI][A-Z]{0,2}[0-9]{4,10}[A-Za-z0-9._-]{0,6}",
+        fullmatch=True,
+    )
+)
+def test_every_accepted_label_leaves_the_redaction_unchanged(label: str) -> None:
+    # The invariant behind the rule: whatever the sidecar prints from the label (status,
+    # notifications, keys, the support bundle) is the label itself, so no two labels merge
+    # and no output carries an id the redaction would have shortened elsewhere.
+    try:
+        settings = load_settings({"IBGW_INSTANCE": label})
+    except ConfigError:
+        return
+    assert redact_accounts(settings.instance) == settings.instance
 
 
 def test_channel_sets_default_to_every_configured_channel() -> None:
