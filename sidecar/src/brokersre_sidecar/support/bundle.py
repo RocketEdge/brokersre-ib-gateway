@@ -54,7 +54,9 @@ Files
 Redaction
   Account ids are shortened to *** plus their last three characters. An account id is
   recognised by its shape only: an optional D, then U, F or I, up to two more capital
-  letters, then 5 to 9 digits. An id of any other shape is NOT shortened. Values after
+  letters, then 5 to 9 digits. An id of any other shape is NOT shortened, nor an id in
+  lower case (du0000000), nor one directly behind another capital letter (ACCTDU0000000).
+  Values after
   identity keys (user, username, login id, account, password) and e-mail addresses are
   replaced by [REDACTED]. Loaded secrets are replaced by [REDACTED]. Lines of the raw IBC
   log without the "IBC:" marker (dialog dumps) and the gateway's own jts logs are left out.

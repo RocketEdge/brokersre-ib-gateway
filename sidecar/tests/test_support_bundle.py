@@ -200,6 +200,10 @@ def test_the_manifest_says_which_shape_of_account_id_is_recognised(tmp_path: Pat
         manifest
     )
     assert "An id of any other shape is NOT shortened" in manifest
+    # The two holes of the shape itself, named with made-up examples, so that the reviewer
+    # of a bundle knows where to look (first review of 2026-11-16; L32).
+    assert "nor an id in lower case (du0000000)" in manifest
+    assert "nor one directly behind another capital letter (ACCTDU0000000)" in manifest
 
 
 def test_the_number_of_lines_is_bounded(tmp_path: Path) -> None:
