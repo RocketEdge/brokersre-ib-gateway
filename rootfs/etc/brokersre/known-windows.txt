@@ -1,6 +1,8 @@
 # Window titles that are part of a normal Gateway life cycle. One extended regular expression
 # per line, matched against the WHOLE title that IBC logs in
 #   "IBC: detected (dialog|frame) entitled: <title>; event=Opened".
+# A line that starts with "frame:" applies to frames only; any other line applies to dialogs
+# and frames alike.
 # A window whose title matches none of these lines (and no row of ibc-patterns.tsv) and that
 # is still open after UNKNOWN_WINDOW_GRACE_S seconds raises the `unknown_window` event: nothing
 # dealt with it, so it may block the login or the daily restart until a person looks at it.
@@ -18,16 +20,13 @@
 IBKR Gateway
 \*\* no title \*\*
 
-# REAL: the start-up frame. Its title is the step it is in and changes while it is open
-# ("Connecting to server (trying for another 19 seconds)...", "Authenticating...", and it
-# closes as "Starting application..."). Three steps were seen; the last line of this block
-# covers the family: a title that ends with an ellipsis is a progress indicator and asks
-# nothing of a person. A start that hangs in a step is reported by `login_stalled`.
-Connecting to server.*
-Attempt [0-9]+: connection error.*
-Authenticating\.\.\.
-Starting application\.\.\.
-.*\.\.\.
+# REAL: the start-up frame. Its title is the step it is in and changes while it is open: seen
+# as "Connecting to server (trying for another 19 seconds)..." and as "Authenticating...", and
+# it closes as "Starting application...". The line covers the family: a FRAME whose title ends
+# with an ellipsis is a progress indicator and asks nothing of a person. A start that hangs in
+# a step is reported by `login_stalled`. A DIALOG with such a title is not covered: it may be
+# waiting for an answer.
+frame:.*\.\.\.
 # IBC: Gateway and TWS frames under their other names
 IB Gateway
 Interactive Brokers Gateway
