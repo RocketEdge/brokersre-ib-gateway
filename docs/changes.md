@@ -5,6 +5,37 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — The sidecar no longer takes the gateway's log volume away from it
+
+- **What changed:** started as shipped on fresh volumes, the reference compose file plus a
+  sidecar override did not come up: the gateway failed its preflight with
+  `dirs_not_writable` (`/var/log/ibgateway` owned 0:0) and its restart policy started it
+  again and again; no login was attempted. Two changes, each sufficient alone: the sidecar
+  image owns its mount point for the gateway's log volume as the gateway image does
+  (1000:1000, mode 755; sidecar 0.2.1), and both sidecar compose files mount that volume
+  with `nocopy` (long syntax). `sidecar/README.md` shows the same mount and says how to get
+  out of the loop. New test `sidecar/tests/e2e/fresh-volumes.sh`, run by the sidecar
+  workflow's end-to-end job, which now also runs when the reference compose file changes.
+- **Result:** against the published images and the previous compose files the new test fails
+  14 of 16 checks and shows the loop (`restarting restarts=11`). With this change 16 of 16
+  pass, for both overrides. With the published sidecar 0.2.0 and the new compose files 15
+  pass (only the image's own check fails): `nocopy` protects an older image. Sidecar suite:
+  822 passed; container smoke suite: 47 passed, one new (the mount point's owner).
+- **What did NOT work / root cause:** (1) *An empty named volume is not neutral.* Docker
+  gives it the owner and mode of its mount point in the image of the last container created
+  on it. The sidecar image created `/var/log/ibgateway` and left it root-owned, compose
+  creates the sidecar after the gateway (`depends_on`), so the gateway's volume became
+  root-owned before the gateway ever wrote to it. (2) *No test created the two together.*
+  `sidecar/tests/e2e/run.sh` starts the gateway with `docker run` and the sidecar after it,
+  when the volume is no longer empty; the compose files were only rendered (`config -q`),
+  never started together. The first real session did what the README tells a user to do
+  and hit it at once. (3) The log shipper of the Azure pack mounts the same volume and is
+  not affected: its image has no such directory, and Docker then leaves the volume alone
+  (checked by experiment). (4) A failed preflight under `restart: unless-stopped` is
+  started again without limit; that is how a mount error became a loop. Nothing is sent to
+  IBKR in that state (the preflight runs before IBC), so the policy was left as it is.
+- **Next step:** the sidecar 0.2.1 publish; the stack as shipped with a real paper login.
+
 ### 2026-11-13 — The release step of the publish survives a GitHub error
 
 - **What changed:** `publish.yml` writes the GitHub release through the new

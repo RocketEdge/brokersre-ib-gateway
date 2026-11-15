@@ -26,6 +26,7 @@ bash azure/tests/run.sh [group...]                                              
 docker build -t brokersre-ib-gateway-sidecar:dev sidecar
 IMAGE=brokersre-ib-gateway-sidecar:dev sidecar/tests/container/run.sh                    # sidecar smoke suite (SMOKE_TIMEOUT_SCALE=5 for an emulated arm64 image)
 sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev                # gateway + sidecar on an internal network; never contacts IBKR
+sidecar/tests/e2e/fresh-volumes.sh <gateway image> brokersre-ib-gateway-sidecar:dev      # both images created together on fresh volumes; the shipped compose files started without a login
 pwsh -NoProfile -Command "Invoke-Pester windows/tests" ; powershell -NoProfile -Command "Invoke-Pester windows/tests"   # Windows kit, Pester 6.2.0, under BOTH PowerShell 7 and Windows PowerShell 5.1
 pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # PSScriptAnalyzer 1.25.0, 0 findings
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
@@ -344,3 +345,13 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   earlier does not get it (the `quiet_grep` fix was missing from every branch above the
   supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
   building on the top.
+- An EMPTY named volume takes the owner and mode of its mount point in the image of the
+  LAST container created on it, and `docker compose up` creates every container before it
+  starts any (the sidecar after the gateway). A sidecar image with a root-owned
+  `/var/log/ibgateway` made the gateway's log volume unwritable for the gateway
+  (`dirs_not_writable`, restart loop; first real session, 2026-11-16). Two protections,
+  keep both: every image that mounts the gateway's log volume owns that mount point as
+  the gateway does (1000:1000, 755), and the compose files mount it with `volume.nocopy`
+  (long syntax; the short `:ro` form cannot say it). Containers started one after the
+  other with `docker run` never show this: test with `docker compose up` or `docker
+  create` on fresh volumes (`sidecar/tests/e2e/fresh-volumes.sh`).
