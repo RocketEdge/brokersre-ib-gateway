@@ -244,8 +244,10 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - The shape of an account id (an optional `D`, then `U`, `F` or `I`, up to two further capital
   letters, 5 to 9 digits; as a regular expression `D?[UFI][A-Z]{0,2}\d{5,9}`) is written in
   four places that change together, each with its tests: `ACCOUNT_RE` in
-  `sidecar/src/brokersre_sidecar/redaction.py` (also the label check and the farm-name
-  guard), rules 1 to 3 of `azure/vector/redact.vrl`, `account_like` in
+  `sidecar/src/brokersre_sidecar/redaction.py` (the label check refuses a label it would
+  rewrite; the farm-name guard of `probe/tracker.py` refuses five digits in a row instead,
+  because the pattern does not start behind a capital and an id glued to a farm stem always
+  is), rules 1 to 3 of `azure/vector/redact.vrl`, `account_like` in
   `azure/vector/entrypoint.sh` and `good_label` in `azure/vm/apply-config.sh` (`run.sh`
   fails when the last two differ). The text follows: the bundle MANIFEST
   (`support/bundle.py`), `sidecar/README.md`, `azure/README.md`, `docs/limitations.md` L32.

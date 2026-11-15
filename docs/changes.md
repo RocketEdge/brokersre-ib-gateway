@@ -53,10 +53,16 @@ Next step.
   `FIX12345`, `UAT20261116`, `gw-UAT10001` and `desk-DU1234567` stop the sidecar at start
   (the message names `IBGW_INSTANCE`, never the value); lower-case labels stay valid in the
   sidecar, whose redaction is upper case only.
-  (4) *The sidecar's farm-name guard had the same hole:* a farm notice ending in an id of
-  the observed shape in front of a farm stem would have been shown as a farm name in
-  `/status`. It was found with a constructed input, not in a session; the guard uses
-  `ACCOUNT_RE` and has a test for the new shape now.
+  (4) *The sidecar's farm-name guard had the same hole, and the first attempt left half of
+  it open.* A farm notice ending in an id of the observed shape in front of a farm stem
+  would have been shown as a farm name in `/status` (found with a constructed input, not
+  in a session). The first fix kept `ACCOUNT_RE` as the guard, on the upper-cased
+  candidate; the review found that an id BEHIND the stem still passed
+  (`secdefu1234567`), because after upper-casing the letter before the id is a capital
+  and the pattern does not start behind one. The guard now refuses any candidate with five
+  digits in a row: every account id has them, no farm name known to the tracker does
+  (`usfarm`, `usfarm.nj`, `cashfarm`, `ushmds`, `secdefnj`, `usfuture`, `usopt`), and the
+  rule does not depend on the account-id shape at all.
   (5) Not changed: the two redactions still differ in their boundaries. The sidecar matches
   upper case only, anywhere after a character that is not a capital letter; the Azure pack
   matches any case, but only a word of its own, an id in upper case glued to a lower-case
