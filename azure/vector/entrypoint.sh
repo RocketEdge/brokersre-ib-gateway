@@ -112,11 +112,13 @@ if [ -n "${HOST_LABEL}" ]; then
   matches "${HOST_LABEL}" "${label}" \
     || die "HOST_LABEL must be empty or 1 to 64 letters, digits, dots, underscores or hyphens"
 fi
+# The shape in words for the two refusals below; the value itself is never printed.
+account_shape="the shape of an IBKR account id, which the redaction would rewrite in the events but not in the metrics: an optional D, then U, F or I, up to two more letters, then 5 to 9 digits, in any case where it stands on its own (the whole label, or next to a dot, underscore or hyphen) or in capitals right after a lower-case letter"
 if printf '%s' "${IBGW_INSTANCE}" | grep -Eq -- "${account_like}"; then
-  die "IBGW_INSTANCE looks like an IBKR account id; choose a label that is not one (for example paper-1)"
+  die "IBGW_INSTANCE contains ${account_shape}; choose a label without it (for example paper-1)"
 fi
 if printf '%s' "${HOST_LABEL}" | grep -Eq -- "${account_like}"; then
-  die "HOST_LABEL looks like an IBKR account id; choose a label that is not one"
+  die "HOST_LABEL contains ${account_shape}; choose a label without it (on the VM of azure/bicep/vm.bicep the host label is <namePrefix>-vm)"
 fi
 if [ "${IBGW_INSTANCE}" = default ] && [ -z "${HOST_LABEL}" ]; then
   die "this gateway has no label of its own: set IBGW_INSTANCE to a name that is unique in the workspace (for example paper-1), or set HOST_LABEL; IBGW_INSTANCE=default alone cannot be told apart from another gateway"

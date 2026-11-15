@@ -150,6 +150,14 @@ user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayIm
 apply --restart-gateway
 expect "a host label with the prefix I is refused" '${status} -eq 2 && "${output}" == *"hostLabel"*'
 
+# vm.bicep makes the host label <namePrefix>-vm, so a namePrefix such as ib10001 gives a label
+# that is refused; the message says what the shape is and that the prefix decides it, and it
+# never repeats the value.
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .hostLabel = "ib10001-vm" | .instanceLabel = "gw-UAT10001"'
+apply --restart-gateway
+expect "an id-shaped label is refused with the shape and the namePrefix named, never the value" \
+  '${status} -eq 2 && "${output}" == *"instanceLabel"*"an optional D, then U, F or I, up to two more letters, then 5 to 9 digits"* && "${output}" == *"hostLabel"*"namePrefix"* && "${output}" != *"10001"*'
+
 user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .packCommit = "'"${commit_two}"'"'
 apply
 expect "a new pack commit that leaves the gateway definition alone is applied without asking" \

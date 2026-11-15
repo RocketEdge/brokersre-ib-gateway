@@ -463,6 +463,19 @@ VARIABLES
   expect "apply-config.sh refuses a label by the same pattern as entrypoint.sh" \
     '-n "${entrypoint_pattern}" && "${vm_pattern}" == "${entrypoint_pattern}"'
   label_verdicts "${entrypoint_pattern}" "${vm_pattern}"
+  # The refusal must tell the operator what to avoid without repeating the value: the shape
+  # in words. ib10001-vm is the host label a VM with namePrefix ib10001 is given.
+  local variable value
+  for variable in IBGW_INSTANCE HOST_LABEL; do
+    if [[ "${variable}" == IBGW_INSTANCE ]]; then value=gw-UAT10001; else value=ib10001-vm; fi
+    out="$(entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "${variable}=${value}" -- validate --no-environment 2>&1)"
+    if [[ $? -eq 78 && "${out}" == *"${variable}"* && "${out}" == *"an optional D, then U, F or I, up to two more letters, then 5 to 9 digits"* && "${out}" != *"${value}"* && "${out}" != *"10001"* ]]; then
+      pass "the refusal of an id-shaped ${variable} names the shape, not the value"
+    else
+      fail "the refusal of an id-shaped ${variable} names the shape, not the value" "exit and message"
+      show "${out}"
+    fi
+  done
   expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 

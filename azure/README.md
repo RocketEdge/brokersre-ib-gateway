@@ -95,8 +95,13 @@ HOST_LABEL=desk-host-1
 labels would hide each other's silence. The shipper therefore refuses to start (exit code 78)
 with the default label `default` and no `HOST_LABEL`, and refuses a label that looks like an
 IBKR account id. "Looks like" means the shape the
-[redaction](#what-is-and-is-not-shipped) rewrites, whether or not the label is an id:
-`uk100234` is refused too.
+[redaction](#what-is-and-is-not-shipped) rewrites, whether or not the label is an id: an
+optional `D`, then `U`, `F` or `I`, up to two more letters, then 5 to 9 digits, in any case
+where it stands on its own (the whole label, or next to `.`, `_` or `-`) or in capitals right
+after a lower-case letter. The message names the variable and the shape, never the value.
+**Behaviour change (2026-11-16):** from this change on, labels such as `uk100234`,
+`gw-UAT10001`, `ib10001-vm` or `deskDUR123456` are refused; before it only `DU`, `DF`, `U` or
+`F` directly followed by the digits counted. `paper-1`, `wolf100234` and `CPU12345` stay valid.
 
 You should see the values back in
 `docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml --profile azure config`.
@@ -166,10 +171,14 @@ network, or the range of an `AzureBastionSubnet` that you add yourself (this tem
 create a Bastion). The serial console needs an account with a password; the template creates
 none, so the serial console does not work either.
 
-**Changing the VM later.** The image digests, the pack commit, the labels, the raw-log switch
-and the gateway settings live in the VM's *userData*, which can change in place; the
-first-boot script (*customData*) is fixed, because Azure refuses to change it on an existing
-VM. To change something:
+**Changing the VM later.** The image digests, the pack commit, the instance label, the
+raw-log switch and the gateway settings live in the VM's *userData*, which can change in
+place; the first-boot script (*customData*) is fixed, because Azure refuses to change it on an
+existing VM. The host label cannot change either: it is the VM name `<namePrefix>-vm`, and a
+new `namePrefix` is a new VM. A `namePrefix` with the shape of an account id as a part of its
+own (for example `ib10001`, giving `ib10001-vm`) makes `apply-config.sh` refuse the VM's
+configuration ([labels](#3-put-the-values-into-composeenv)); such a VM has to be deployed again
+with another `namePrefix`. To change something:
 
 ```bash
 # 1. redeploy with the new values (updates the userData; the VM keeps running)

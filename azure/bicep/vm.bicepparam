@@ -37,6 +37,9 @@ param keyVaultAllowedCidrs = [
 
 param tradingMode = 'paper'
 // The label of this gateway on every row; unique in the workspace (alerts tell gateways apart
-// by it).
+// by it). Nothing in it may have the shape of an account id (gw-UAT10001 is refused; see the
+// parameter's description in vm.bicep). namePrefix (default ibgw) names the VM and so the
+// host label <namePrefix>-vm, which cannot change later: a prefix such as ib10001 makes the
+// VM refuse its own configuration.
 param instanceLabel = 'paper-1'
 param timeZone = 'America/New_York'
