@@ -200,6 +200,9 @@ def test_an_account_id_glued_to_other_text_is_still_shortened() -> None:
         "UABC12345",
         "DUR1234",  # four digits
         "dur123456 and i1234567",  # lower case
+        # Upper case only, the further letters included: IBKR prints ids in capitals, and a
+        # capitalised word in front of a number (a ticket, a host) stays readable.
+        "Ufo12345 Ida123456 DUr123456 Fab1234567",
     ],
 )
 def test_text_that_only_resembles_an_account_id_is_left_alone(text: str) -> None:
