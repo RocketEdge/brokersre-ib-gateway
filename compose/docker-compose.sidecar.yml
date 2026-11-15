@@ -13,7 +13,7 @@
 # or a ping URL in here.
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1
     restart: unless-stopped
     depends_on:
       ib-gateway:
@@ -56,7 +56,15 @@ services:
       - notify-teams-url
       # - deadman-ping-url
     volumes:
-      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      # The gateway's log volume, read-only. nocopy matters on a fresh volume: without it
+      # Docker gives an empty volume the owner of this mount point in the LAST image created
+      # on it (the sidecar's), and the gateway could then not write its own logs.
+      - type: volume
+        source: ibgw-logs
+        target: /var/log/ibgateway
+        read_only: true
+        volume:
+          nocopy: true
       - sidecar-state:/var/lib/sidecar     # notifier state, so a restart neither repeats nor forgets
     # The image's HEALTHCHECK calls /livez: it reports the sidecar's own health, not the gateway's.
 

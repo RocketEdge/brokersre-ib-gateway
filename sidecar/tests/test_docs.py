@@ -127,12 +127,46 @@ def test_the_default_compose_file_adds_nothing_to_the_gateway_service() -> None:
     assert "network_mode" not in code
     assert "\n  ib-gateway:\n" not in code  # no override of the gateway service
     assert ":9810:9810" in code  # the sidecar publishes its own port
-    assert "ibgw-logs:/var/log/ibgateway:ro" in code
     shared = (REPOSITORY_ROOT / "compose/docker-compose.sidecar-shared.yml").read_text(
         encoding="utf-8"
     )
     assert 'network_mode: "service:ib-gateway"' in shared
     assert "GATEWAY_HOST: 127.0.0.1" in shared
+
+
+LOG_VOLUME_MOUNT = (
+    "      - type: volume\n"
+    "        source: ibgw-logs\n"
+    "        target: /var/log/ibgateway\n"
+    "        read_only: true\n"
+    "        volume:\n"
+    "          nocopy: true\n"
+)
+"""How a sidecar mounts the gateway's log volume: read-only, and without the copy-up that
+would hand an EMPTY volume the owner of the sidecar image's mount point (compose creates the
+sidecar after the gateway; sidecar/tests/e2e/fresh-volumes.sh starts the files for real)."""
+
+
+def _without_comments(text: str) -> str:
+    """Return ``text`` without whole-line comments and without trailing ``# ...`` comments."""
+    lines = (re.sub(r"\s+#.*$", "", line) for line in text.splitlines())
+    return (
+        "\n".join(line for line in lines if line.strip() and not line.lstrip().startswith("#"))
+        + "\n"
+    )
+
+
+def test_both_compose_overrides_mount_the_log_volume_read_only_and_without_copy_up() -> None:
+    for name in ("docker-compose.sidecar.yml", "docker-compose.sidecar-shared.yml"):
+        code = _without_comments((REPOSITORY_ROOT / "compose" / name).read_text(encoding="utf-8"))
+        assert LOG_VOLUME_MOUNT in code, name
+        # The short form cannot say nocopy: it must not come back beside or instead of it.
+        assert "ibgw-logs:/var/log/ibgateway" not in code, name
+
+
+def test_the_readme_example_mounts_the_log_volume_the_same_way_and_says_why() -> None:
+    assert LOG_VOLUME_MOUNT in _without_comments(README)
+    assert "Keep `nocopy` when you write your own compose file." in README
 
 
 def test_the_readme_says_plainly_that_a_dead_host_is_silent_without_the_dead_man_ping() -> None:

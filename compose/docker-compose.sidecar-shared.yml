@@ -22,7 +22,7 @@ services:
       - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
 
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1
     # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
     # this policy starts it again inside the gateway's new network namespace.
     restart: unless-stopped
@@ -53,7 +53,15 @@ services:
       - notify-teams-url
       # - deadman-ping-url
     volumes:
-      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      # The gateway's log volume, read-only. nocopy matters on a fresh volume: without it
+      # Docker gives an empty volume the owner of this mount point in the LAST image created
+      # on it (the sidecar's), and the gateway could then not write its own logs.
+      - type: volume
+        source: ibgw-logs
+        target: /var/log/ibgateway
+        read_only: true
+        volume:
+          nocopy: true
       - sidecar-state:/var/lib/sidecar     # notifier state, so a restart neither repeats nor forgets
 
 secrets:

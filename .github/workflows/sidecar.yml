@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - sidecar/**
+      - compose/docker-compose.example.yml
       - compose/docker-compose.sidecar.yml
       - compose/docker-compose.sidecar-shared.yml
       - docs/sidecar.md
@@ -21,6 +22,7 @@ on:
   pull_request:
     paths:
       - sidecar/**
+      - compose/docker-compose.example.yml
       - compose/docker-compose.sidecar.yml
       - compose/docker-compose.sidecar-shared.yml
       - docs/sidecar.md
@@ -78,10 +80,10 @@ jobs:
         working-directory: .
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -x sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh
+          shellcheck -x sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh sidecar/tests/e2e/fresh-volumes.sh
       - name: shfmt (diff only)
         working-directory: .
-        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh
+        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d sidecar/tests/container/run.sh sidecar/tests/e2e/run.sh sidecar/tests/e2e/fresh-volumes.sh
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
@@ -170,5 +172,7 @@ jobs:
           cache-from: type=gha,scope=sidecar
           provenance: false
           sbom: false
+      - name: Fresh volumes (both images created together; the shipped compose files started as shipped, without a login)
+        run: sidecar/tests/e2e/fresh-volumes.sh "$TEST_IMAGE" "$SIDECAR_IMAGE"
       - name: End-to-end check (internal Docker network; a notification after the gateway stops)
         run: sidecar/tests/e2e/run.sh "$TEST_IMAGE" "$SIDECAR_IMAGE"

@@ -40,7 +40,7 @@ RUN uv sync --frozen --no-dev --no-editable
 # Runtime stage.
 FROM base AS runtime
 
-ARG VERSION=0.2.0
+ARG VERSION=0.2.1
 ARG REVISION=unknown
 ARG CREATED=unknown
 
@@ -69,10 +69,16 @@ RUN apt-get update \
 # uid 1000 like the gateway, so the shared log volume is readable. pip is removed: nothing is
 # installed at run time, and an installer in the image is attack surface with CVEs of its own.
 # /var/lib/sidecar is created owned by uid 1000 so a named volume mounted there is writable.
+# /var/log/ibgateway is where the GATEWAY's log volume is mounted, and it must be owned exactly
+# as in the gateway image (1000:1000, mode 755): an empty named volume takes the owner and
+# mode of its mount point in the image of the last container created on it, and compose
+# creates the sidecar after the gateway. Left root-owned, this directory made the gateway's
+# volume unwritable for the gateway (sidecar/tests/e2e/fresh-volumes.sh).
 RUN groupadd --gid 1000 sidecar \
  && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sidecar \
  && mkdir -p /var/lib/sidecar /var/log/ibgateway \
- && chown 1000:1000 /var/lib/sidecar \
+ && chown 1000:1000 /var/lib/sidecar /var/log/ibgateway \
+ && chmod 755 /var/log/ibgateway \
  && python -m pip uninstall --yes pip
 
 COPY --from=build /opt/sidecar /opt/sidecar

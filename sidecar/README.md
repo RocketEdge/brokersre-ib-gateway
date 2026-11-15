@@ -77,7 +77,7 @@ The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-c
 ```yaml
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0   # pin by digest in production
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1   # pin by digest in production
     restart: unless-stopped
     read_only: true
     user: "1000:1000"
@@ -94,9 +94,23 @@ services:
       DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url   # recommended, see below
     secrets: [notify-teams-url, deadman-ping-url]
     volumes:
-      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      - type: volume                       # the gateway's log volume, read-only
+        source: ibgw-logs
+        target: /var/log/ibgateway
+        read_only: true
+        volume:
+          nocopy: true                     # leave the owner of a fresh volume to the gateway
       - sidecar-state:/var/lib/sidecar     # de-duplication state across restarts
 ```
+
+Keep `nocopy` when you write your own compose file. Docker gives an empty named volume the
+owner of its mount point in the image of the last container created on it, and compose
+creates the sidecar after the gateway. Sidecar images up to 0.2.0 have that directory
+root-owned: without `nocopy` the gateway (uid 1000) cannot write its log volume on a first
+start, fails its preflight with `dirs_not_writable` and is restarted in a loop. From 0.2.1 the
+image owns the directory as the gateway does, so a plain `ibgw-logs:/var/log/ibgateway:ro`
+works too. If a stack is already in that loop: `docker compose ... down` (the volumes stay),
+correct the mount or the image, `docker compose ... up -d`.
 
 Check a configuration without starting anything, and test the channels:
 
