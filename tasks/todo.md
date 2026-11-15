@@ -114,3 +114,11 @@
 - [x] `scripts/release-upsert.sh`: the release is created or updated with five attempts and read back; `publish.yml` uses it (the HTTP 502 of 2026-11-13)
 - [ ] First publish with the new step; then consider the same for the archive upload in `detect-releases.yml`
 - [ ] A check after each publish that every channel tag equals the digest in its release (L30)
+
+## The real paper session of 2026-11-16 (branches `fix/unknown-window-grace`, `fix/sidecar-log-volume-owner`, `fix/account-id-third-letter`)
+
+- [x] The first completed logins on this image: login, health, API handshake, relay, sidecar readiness, notifications, graceful stop and restart work with a real paper account
+- [x] The gateway with a sidecar did not start on fresh volumes (`dirs_not_writable` loop): the sidecar image has no `/var/log/ibgateway` and every reader mounts the log volume with `nocopy` (sidecar 0.2.1)
+- [ ] Publish sidecar 0.2.1 and watch the run through "Verify the signature" (a re-run cannot sign a tag that was already pushed)
+- [ ] Start the shipped stack (reference compose plus sidecar override) with a real paper login once 0.2.1 is published
+- [ ] Decide L33: should a failed preflight keep the container up in a phase of its own instead of exiting into a restart loop?

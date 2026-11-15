@@ -345,13 +345,20 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   earlier does not get it (the `quiet_grep` fix was missing from every branch above the
   supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
   building on the top.
-- An EMPTY named volume takes the owner and mode of its mount point in the image of the
-  LAST container created on it, and `docker compose up` creates every container before it
-  starts any (the sidecar after the gateway). A sidecar image with a root-owned
-  `/var/log/ibgateway` made the gateway's log volume unwritable for the gateway
-  (`dirs_not_writable`, restart loop; first real session, 2026-11-16). Two protections,
-  keep both: every image that mounts the gateway's log volume owns that mount point as
-  the gateway does (1000:1000, 755), and the compose files mount it with `volume.nocopy`
-  (long syntax; the short `:ro` form cannot say it). Containers started one after the
-  other with `docker run` never show this: test with `docker compose up` or `docker
-  create` on fresh volumes (`sidecar/tests/e2e/fresh-volumes.sh`).
+- Docker gives an EMPTY named volume the owner and mode of its mount point in the image of
+  a container created on it, when that image has the directory and the mount does not say
+  `nocopy` (engine behaviour, seen on Engine 29; not documented). `docker compose up`
+  creates every container before it starts any, the sidecar after the gateway. A sidecar
+  image with a root-owned `/var/log/ibgateway` made the gateway's log volume unwritable
+  for the gateway (`dirs_not_writable`, restart loop; first real session, 2026-11-16).
+  Two protections, keep both: no image other than the gateway's has `/var/log/ibgateway`
+  (the sidecar since 0.2.1; the Vector image never had it), and every shipped compose
+  file mounts the log volume into another container read-only with `volume.nocopy`, in
+  the long syntax (`sidecar/tests/test_docs.py` lists the files and fails on a new
+  read-only mount that is not on the list). Containers started one after the other with
+  `docker run` never show this: test with `docker compose up` or `docker create` on fresh
+  volumes (`sidecar/tests/e2e/fresh-volumes.sh`). A stack already in the loop is repaired
+  only by creating the gateway container again (`down` then `up -d`, or `up -d
+  --force-recreate`); `up -d` alone re-creates the sidecar only.
+- `docker compose run --rm sidecar <command>` starts the gateway first (`depends_on`), and
+  the gateway logs in: always `--no-deps` for a sidecar command.

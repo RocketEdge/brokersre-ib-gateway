@@ -104,19 +104,26 @@ services:
 ```
 
 Keep `nocopy` when you write your own compose file. Docker gives an empty named volume the
-owner of its mount point in the image of the last container created on it, and compose
-creates the sidecar after the gateway. Sidecar images up to 0.2.0 have that directory
-root-owned: without `nocopy` the gateway (uid 1000) cannot write its log volume on a first
-start, fails its preflight with `dirs_not_writable` and is restarted in a loop. From 0.2.1 the
-image owns the directory as the gateway does, so a plain `ibgw-logs:/var/log/ibgateway:ro`
-works too. If a stack is already in that loop: `docker compose ... down` (the volumes stay),
-correct the mount or the image, `docker compose ... up -d`.
+owner of its mount point in the image of a container created on it (engine behaviour, seen
+with Docker Engine 29; Docker's documentation describes the copying of content, not the
+owner), and compose creates the sidecar after the gateway. Sidecar images up to 0.2.0 have
+that directory, root-owned: without `nocopy` the gateway (uid 1000) cannot write its log
+volume on a first start, fails its preflight with `dirs_not_writable` and is restarted in a
+loop. From 0.2.1 the image has no such directory, so a plain `ibgw-logs:/var/log/ibgateway:ro`
+is safe too.
 
-Check a configuration without starting anything, and test the channels:
+A stack that is already in that loop is not repaired by `docker compose ... up -d` alone: it
+re-creates the sidecar, not the gateway, and the empty volume stays root-owned. The gateway
+container must be created again: `docker compose ... down` (the volumes stay) and then
+`docker compose ... up -d`, or `docker compose ... up -d --force-recreate`, with the mount
+above or sidecar 0.2.1 or later.
+
+Check a configuration and test the channels without starting the gateway (`--no-deps`:
+without it compose starts the gateway first, which logs in):
 
 ```bash
-docker compose run --rm sidecar check-config
-docker compose run --rm sidecar notify test
+docker compose run --rm --no-deps sidecar check-config
+docker compose run --rm --no-deps sidecar notify test
 ```
 
 ## Network modes
