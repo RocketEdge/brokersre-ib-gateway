@@ -14,8 +14,19 @@
 #     event is fixed text, never the matched line.
 #   - unknown_window: a line "detected (dialog|frame) entitled: <title>; event=Opened" that
 #     matches no row and whose title matches no line of
-#     ${IBC_KNOWN_WINDOWS:-/etc/brokersre/known-windows.txt} raises one `unknown_window` event
-#     (warn, no phase change). The title stays in ibc.log only: it is raw Gateway text.
+#     ${IBC_KNOWN_WINDOWS:-/etc/brokersre/known-windows.txt} starts a wait of
+#     UNKNOWN_WINDOW_GRACE_S seconds (default 10, whole seconds; anything else is the default).
+#     When IBC reports "event=Closed" for that title within the wait, nothing is said: IBC or
+#     the Gateway dealt with the window (the paper-account "Warning" that IBC accepts is gone
+#     0.3 s after it opens). A window still open when the wait ends raises one
+#     `unknown_window` event (warn, no phase change): that is the window a person must look
+#     at. UNKNOWN_WINDOW_GRACE_S=0 reports every such window the moment it opens. The title
+#     stays in ibc.log only: it is raw Gateway text.
+#     Limits: IBC names a window by its title only, so of two open windows with one title the
+#     one that opened first counts as the one that closed; a window whose title changes while
+#     it is open is reported although it closed (the start-up frame does that, which is why
+#     its titles are on the list). The wait ends with IBC's output: a window that went down
+#     with IBC is not reported.
 #   - second-factor cap (off by default): when TWOFA_MAX_PROMPTS is a positive number and more
 #     than that many `twofa_initiated` events arrive without a `login_completed` between them,
 #     the classifier emits `needs_human`, sets the phase `needs-human` and asks IBC to STOP
@@ -49,6 +60,19 @@ max_prompts="${TWOFA_MAX_PROMPTS:-0}"
 prompts=0
 held=0
 
+# Seconds an unknown window may stay open before it is reported; 0 reports it at once.
+# 10# keeps a value such as 08 decimal (bash would read it as a broken octal number).
+grace="${UNKNOWN_WINDOW_GRACE_S:-10}"
+[[ "${grace}" =~ ^[0-9]{1,6}$ ]] || grace=10
+grace=$((10#${grace}))
+# Unknown windows that are open, oldest first: the title, and either the value of SECONDS at
+# which the window is due to be reported or the word "reported". Kept in step by index.
+waiting_titles=()
+waiting_due=()
+# More open unknown windows than this are not followed: every line of IBC's output walks the
+# list, and IBC's output pipe must never wait for the classifier.
+max_waiting=32
+
 events=() regexes=() phases=() levels=()
 while IFS=$'\t' read -r event regex phase level; do
   [[ -z "${event}" || "${event}" == \#* ]] && continue
@@ -69,6 +93,8 @@ fi
 # Matches IBC's window report and captures the title; only the Opened report counts, because
 # IBC logs Activated and Focused for the same window right after it.
 window_opened_re='IBC: detected (dialog|frame) entitled: (.*); event=Opened$'
+# The report that ends a window's life (IBC logs Lost focus and Deactivated before it).
+window_closed_re='IBC: detected (dialog|frame) entitled: (.*); event=Closed$'
 
 # write_phase PHASE: the classifier's phase write. Held back while the gateway is ending
 # (phase stopping, stopped or exited): from then on the phase belongs to the entrypoint, and
@@ -85,6 +111,71 @@ window_is_known() {
     if [[ "${title}" =~ ^(${known})$ ]]; then return 0; fi
   done
   return 1
+}
+
+# report_unknown_window: the event, and a picture of what the window says (only with
+# SCREENSHOTS=yes). The picture is taken beside this loop, not in it: IBC's output pipe must
+# never wait for the log volume.
+report_unknown_window() {
+  log_event ibc warn unknown_window "IBC reported a window it has no handler for; it may block the login or a restart (title in ibc/ibc.log)"
+  (screenshot_save unknown_window) &
+}
+
+# window_opened TITLE: an unknown window opened. Without a grace period it is reported now.
+# Otherwise it joins the waiting list and is due once it has been open for the whole grace
+# period (SECONDS counts whole seconds, so one more is added: never early, at most 2 s late).
+window_opened() {
+  local first
+  if [ "${grace}" -eq 0 ]; then
+    report_unknown_window
+    return 0
+  fi
+  if [ "${#waiting_titles[@]}" -ge "${max_waiting}" ]; then
+    first=("${!waiting_titles[@]}")
+    unset "waiting_titles[${first[0]}]" "waiting_due[${first[0]}]"
+  fi
+  waiting_titles+=("$1")
+  waiting_due+=("$((SECONDS + grace + 1))")
+}
+
+# window_closed TITLE: the window of this title that has been open longest is gone, whether
+# it was reported or not. A title nobody waits for changes nothing.
+window_closed() {
+  local i
+  for i in "${!waiting_titles[@]}"; do
+    if [ "${waiting_titles[${i}]}" == "$1" ]; then
+      unset "waiting_titles[${i}]" "waiting_due[${i}]"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# report_due_windows: report each waiting window whose grace period is over. It stays on the
+# list as "reported" until IBC says it closed, so that a second window with the same title is
+# not mistaken for it.
+report_due_windows() {
+  local i
+  for i in "${!waiting_due[@]}"; do
+    if [ "${waiting_due[${i}]}" != reported ] && [ "${SECONDS}" -ge "${waiting_due[${i}]}" ]; then
+      waiting_due[i]=reported
+      report_unknown_window
+    fi
+  done
+}
+
+# set_wait: put into ${wait_s} the seconds until the next waiting window is due (at least 1),
+# or nothing when no window waits. With nothing to wait for, the read of the next line blocks
+# without a time limit, exactly as it did before windows could wait.
+set_wait() {
+  local i left
+  wait_s=""
+  for i in "${!waiting_due[@]}"; do
+    [ "${waiting_due[${i}]}" == reported ] && continue
+    left=$((waiting_due[i] - SECONDS))
+    [ "${left}" -lt 1 ] && left=1
+    if [ -z "${wait_s}" ] || [ "${left}" -lt "${wait_s}" ]; then wait_s="${left}"; fi
+  done
 }
 
 # after_event EVENT: bookkeeping that outlives the line (the second-factor prompt cap, the
@@ -113,8 +204,11 @@ after_event() {
   esac
 }
 
-while IFS= read -r line || [ -n "${line}" ]; do
-  matched=0
+# classify_line LINE: one line of IBC's output. The first matching row of the pattern table
+# becomes an event (and a phase); a window report that matches no row starts or ends the wait
+# for an unknown window.
+classify_line() {
+  local line="$1" matched=0 i title
   for i in "${!events[@]}"; do
     if [[ "${line}" =~ ${regexes[${i}]} ]]; then
       matched=1
@@ -128,12 +222,38 @@ while IFS= read -r line || [ -n "${line}" ]; do
     fi
   done
   # Without a list of known windows every window would look unknown, so nothing is reported.
-  if [ "${matched}" -eq 0 ] && [ "${#known_windows[@]}" -gt 0 ] && [[ "${line}" =~ ${window_opened_re} ]]; then
-    if ! window_is_known "${BASH_REMATCH[2]}"; then
-      log_event ibc warn unknown_window "IBC reported a window it has no handler for; it may block the login or a restart (title in ibc/ibc.log)"
-      # What the window says is on the screen: keep a picture of it (only with SCREENSHOTS=yes).
-      # Beside this loop, not in it: IBC's output pipe must never wait for the log volume.
-      (screenshot_save unknown_window) &
+  if [ "${matched}" -eq 0 ] && [ "${#known_windows[@]}" -gt 0 ]; then
+    if [[ "${line}" =~ ${window_opened_re} ]]; then
+      title="${BASH_REMATCH[2]}"
+      window_is_known "${title}" || window_opened "${title}"
+    elif [[ "${line}" =~ ${window_closed_re} ]]; then
+      window_closed "${BASH_REMATCH[2]}"
     fi
   fi
+}
+
+# The read has a time limit only while a window waits. When the limit ends the read, bash
+# hands over what has arrived of an unfinished line: it is kept and put in front of the rest,
+# so a line is never classified in two halves.
+partial=""
+while :; do
+  set_wait
+  if [ -n "${wait_s}" ]; then
+    IFS= read -r -t "${wait_s}" line
+  else
+    IFS= read -r line
+  fi
+  read_status=$?
+  if [ "${read_status}" -gt 128 ]; then
+    partial+="${line}"
+    report_due_windows
+    continue
+  fi
+  line="${partial}${line}"
+  partial=""
+  # End of input: a last line without a line end is still a line.
+  if [ "${read_status}" -ne 0 ] && [ -z "${line}" ]; then break; fi
+  classify_line "${line}"
+  report_due_windows
+  if [ "${read_status}" -ne 0 ]; then break; fi
 done

@@ -1,25 +1,38 @@
 # Window titles that are part of a normal Gateway life cycle. One extended regular expression
 # per line, matched against the WHOLE title that IBC logs in
 #   "IBC: detected (dialog|frame) entitled: <title>; event=Opened".
-# A window whose title matches none of these lines (and no row of ibc-patterns.tsv) raises the
-# `unknown_window` event: IBC has no handler for it, so it may block the login or the daily
-# restart until a person looks at it.
+# A window whose title matches none of these lines (and no row of ibc-patterns.tsv) and that
+# is still open after UNKNOWN_WINDOW_GRACE_S seconds raises the `unknown_window` event: nothing
+# dealt with it, so it may block the login or the daily restart until a person looks at it.
 #
-# Sources: REAL = seen in this image's IBC output (IB Gateway 10.50.1g); IBC = a title IBC's
-# source code looks for (IBC 3.24.2), so IBC handles the window itself.
+# Sources: REAL = seen in this image's IBC output (IB Gateway 10.50.1g; the failed login of
+# 2026-11-11 and the completed paper logins of 2026-11-15, tests/fixtures/ibc-real-*.log);
+# IBC = a title IBC's source code looks for (IBC 3.24.2), so IBC handles the window itself.
 #
-# REAL: the Gateway window (login and main window share the title) and start-up progress
+# Deliberately NOT listed: "Warning". Every paper login opens a dialog with that title (this is
+# not a brokerage account) and IBC accepts it at once, but the title says nothing about the
+# content. The grace period covers the one IBC answers; a warning nobody answers is reported.
+#
+# REAL: the Gateway window (the login window, the main window and a confirmation dialog share
+# the title)
 IBKR Gateway
 \*\* no title \*\*
 
+# REAL: the start-up frame. Its title is the step it is in and changes while it is open
+# ("Connecting to server (trying for another 19 seconds)...", "Authenticating...", and it
+# closes as "Starting application..."). Three steps were seen; the last line of this block
+# covers the family: a title that ends with an ellipsis is a progress indicator and asks
+# nothing of a person. A start that hangs in a step is reported by `login_stalled`.
 Connecting to server.*
 Attempt [0-9]+: connection error.*
+Authenticating\.\.\.
+Starting application\.\.\.
+.*\.\.\.
 # IBC: Gateway and TWS frames under their other names
 IB Gateway
 Interactive Brokers Gateway
 IBKR Trader Workstation
 .*Gateway
-Starting application\.\.\.
 # IBC: login and session dialogs it drives itself
 Login
 New Login
@@ -30,10 +43,13 @@ Existing session detected
 Re-login is required
 Password Notice
 Unrecognized Username or Password
-# IBC: configuration and confirmation dialogs it opens or dismisses
+# REAL: the configuration dialog IBC opens after a login; its title starts with the account id
+# ("<account id> Trader Workstation Configuration (Simulated Trading)" on a paper account)
 .*Configuration.*
-Tip of the Day
+# REAL: shown while the Gateway closes after IBC's STOP
 Shutdown progress
+# IBC: confirmation dialogs it opens or dismisses
+Tip of the Day
 NSE Compliance
 Order Preview
 Trades
