@@ -255,6 +255,98 @@ group_vector() {
     forced_mode redacted "" /etc/vector/tests/raw-failclosed.test.yaml
 }
 
+# Boundary labels and the verdict each must get: "refused" when redact.vrl rewrites the label
+# (so the label patterns must refuse it), "accepted" when it leaves the label alone. Each line
+# differs from a neighbour in one respect of the shape (an optional D, then U, F or I, up to
+# two further letters, 5 to 9 digits) or of its boundaries (rule 1: a word of its own in any
+# case; rule 2: upper case glued to a lower-case letter). Labels hold no backslash, so rule 3
+# cannot apply to them. ib10001-vm is the host label of a VM deployed with namePrefix ib10001.
+boundary_labels='refused U12345
+refused U123456789
+refused DUR123456
+refused DUAB1234567
+refused I1234567
+refused DI123456
+refused FAB98765
+refused dur123456
+refused Dur123456
+refused uk100234
+refused ib10001-vm
+refused gw-UAT10001
+refused paper-DUR123456
+refused paper.dur123456
+refused desk_DUR123456
+refused DUR123456-x
+refused DUR123456.x
+refused DUR123456_x
+refused deskDUR123456
+refused deskDUAB1234567
+refused deskI1234567
+refused deskU12345
+refused deskU123456789
+refused deskFAB98765-x
+accepted paper-1
+accepted ibgw-vm
+accepted U1234
+accepted U1234567890
+accepted DUABC123456
+accepted XYZ123456
+accepted CPU12345
+accepted XDUR123456
+accepted DUR123456x
+accepted U1234567F
+accepted 7DUR123456
+accepted wolf100234
+accepted deskdur123456
+accepted deskDUr123456
+accepted deskDUABC123456
+accepted deskU1234
+accepted deskU1234567890
+accepted deskQ1234567
+accepted deskDUR123456x'
+
+# label_verdicts <account_like of entrypoint.sh> <good_label pattern of apply-config.sh>:
+# decides every boundary label three times, each with the engine that decides it in
+# production: redact.vrl in the pinned Vector image (vector vrl), account_like with that
+# image's grep exactly as entrypoint.sh calls it, good_label's pattern with jq's test() as
+# apply-config.sh calls it. Two checks: the three agree on every label (a label the patterns
+# accept but the redaction rewrites would read differently in the events table, which is
+# redacted, and the metrics table, which is not, and the alert queries join the two on
+# Instance), and each verdict is the expected one (the patterns' boundaries, pinned as the VRL
+# unit tests pin the rules).
+label_verdicts() {
+  local entrypoint_pattern="$1" vm_pattern="$2" labels redacted by_vrl by_entrypoint by_vm table problems
+  labels="$(printf '%s\n' "${boundary_labels}" | cut -d' ' -f2)"
+  redacted="$(printf '%s\n' "${labels}" | sed 's/.*/{"label":"&"}/' \
+    | vector_container -i -- -c 'cat >/var/tmp/labels.jsonl &&
+      /usr/local/bin/vector vrl --input /var/tmp/labels.jsonl --program /etc/vector/redact.vrl --print-object 2>/dev/null' \
+    | jq_cli -r '.label')"
+  by_vrl="$(paste -d' ' <(printf '%s\n' "${labels}") <(printf '%s\n' "${redacted}") \
+    | awk '{ print (NF == 2 && $1 == $2) ? "accepted" : (NF == 2 ? "refused" : "missing") }')"
+  by_entrypoint="$(printf '%s\n' "${labels}" | vector_container -i -e "ACCOUNT_LIKE=${entrypoint_pattern}" -- -c '
+    while IFS= read -r label; do
+      if printf "%s" "${label}" | grep -Eq -- "${ACCOUNT_LIKE}"; then echo refused; else echo accepted; fi
+    done')"
+  by_vm="$(printf '%s\n' "${labels}" \
+    | jq_cli -R -r --arg pattern "${vm_pattern}" 'if test($pattern) then "refused" else "accepted" end')"
+  table="$(paste -d' ' <(printf '%s\n' "${boundary_labels}") <(printf '%s\n' "${by_vrl}") \
+    <(printf '%s\n' "${by_entrypoint}") <(printf '%s\n' "${by_vm}"))"
+  problems="$(awk 'NF != 5 || $3 != $4 || $3 != $5 { print $2 ": redact.vrl " $3 ", entrypoint.sh " $4 ", apply-config.sh " $5 }' <<<"${table}")"
+  if [[ -n "${table}" && -z "${problems}" ]]; then
+    pass "redact.vrl, entrypoint.sh and apply-config.sh decide each of $(wc -l <<<"${table}") boundary labels alike"
+  else
+    fail "redact.vrl, entrypoint.sh and apply-config.sh decide each boundary label alike" "they disagree"
+    show "${problems}"
+  fi
+  problems="$(awk 'NF != 5 || $1 != $3 || $1 != $4 || $1 != $5 { print $2 ": expected " $1 "; redact.vrl " $3 ", entrypoint.sh " $4 ", apply-config.sh " $5 }' <<<"${table}")"
+  if [[ -n "${table}" && -z "${problems}" ]]; then
+    pass "every boundary label is refused exactly when the redaction would rewrite it"
+  else
+    fail "every boundary label is refused exactly when the redaction would rewrite it" "unexpected verdicts"
+    show "${problems}"
+  fi
+}
+
 # sinks_without_auth <file>: the sink template without comments and without its auth blocks.
 sinks_without_auth() {
   awk '
@@ -370,6 +462,7 @@ VARIABLES
   vm_pattern="$(sed -n 's/^    and (test("\(.*\)") | not);$/\1/p' "${repo}/azure/vm/apply-config.sh")"
   expect "apply-config.sh refuses a label by the same pattern as entrypoint.sh" \
     '-n "${entrypoint_pattern}" && "${vm_pattern}" == "${entrypoint_pattern}"'
+  label_verdicts "${entrypoint_pattern}" "${vm_pattern}"
   expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 
