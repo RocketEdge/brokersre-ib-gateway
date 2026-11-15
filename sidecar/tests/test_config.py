@@ -92,6 +92,8 @@ def test_explicit_values_are_parsed() -> None:
         ({"TIME_ZONE": "Mars/Olympus"}, "TIME_ZONE"),
         ({"IBGW_INSTANCE": "has space"}, "IBGW_INSTANCE"),
         ({"IBGW_INSTANCE": "DU1234567"}, "IBGW_INSTANCE"),
+        ({"IBGW_INSTANCE": "DUR123456"}, "IBGW_INSTANCE"),  # a paper id with a third letter
+        ({"IBGW_INSTANCE": "I1234567"}, "IBGW_INSTANCE"),
         ({"PROBE_ENABLED": "maybe"}, "PROBE_ENABLED"),
         ({"IBKR_REGION": "antarctica"}, "IBKR_REGION"),
         ({"DEADMAN_PING_INTERVAL_S": "5"}, "DEADMAN_PING_INTERVAL_S"),

@@ -90,6 +90,27 @@ def test_account_ids_keep_only_their_last_three_characters(text: str, expected: 
     assert redact_accounts(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The shape of a real paper account (2026-11-16): DU, one more letter, six digits.
+        ("paper DUR123456 ready", "paper ***456 ready"),
+        ("DUAB1234567", "***567"),  # a second further letter: headroom, not observed
+        ("I1234567", "***567"),  # I: the master account of a fully disclosed broker
+        ("DI123456", "***456"),
+        ("UX12345", "***345"),
+        ("FAB123456789", "***789"),
+        ("acct_DUR123456_x", "acct_***456_x"),
+        ("accountDUR123456", "account***456"),
+        ("['15', '1', 'DUR123456,UX12345']", "['15', '1', '***456,***345']"),
+    ],
+)
+def test_account_ids_with_further_letters_after_the_prefix_are_shortened(
+    text: str, expected: str
+) -> None:
+    assert redact_accounts(text) == expected
+
+
 def test_secret_registry_replaces_every_registered_value() -> None:
     registry = SecretRegistry()
     registry.add("hunter2hunter2")
@@ -172,10 +193,34 @@ def test_an_account_id_glued_to_other_text_is_still_shortened() -> None:
         "SHELF123456",
         "U1234567890",  # ten digits: not an account id
         "sha256:9aaaf1234567deadbeef",  # lower-case hex is never an account id
+        "XYZ123456",  # the first capital letter is not D, U, F or I
+        "XDUR123456",  # an id behind another capital letter is part of a longer word
+        "DUR1234567890",  # ten digits after the letters
+        "DUABC123456",  # a third further letter
+        "UABC12345",
+        "DUR1234",  # four digits
+        "dur123456 and i1234567",  # lower case
     ],
 )
 def test_text_that_only_resembles_an_account_id_is_left_alone(text: str) -> None:
     assert redact_accounts(text) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ID12345", "***345"),
+        ("USD100000", "***000"),
+        ("FIX12345", "***345"),
+        ("0FA2345678", "0***678"),  # upper-case hex
+    ],
+)
+def test_a_token_with_the_shape_of_an_account_id_is_shortened_although_it_is_none(
+    text: str, expected: str
+) -> None:
+    # The price of recognising ids by shape, accepted on purpose: masking such a token costs
+    # readability, missing an account id breaks the product's promise.
+    assert redact_accounts(text) == expected
 
 
 def test_a_refused_rename_is_retried_on_windows_and_final_elsewhere(

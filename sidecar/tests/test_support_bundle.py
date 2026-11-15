@@ -161,6 +161,47 @@ def test_only_ibc_lines_of_the_raw_log_are_included_and_only_redacted(tmp_path: 
     assert "launcher.log" not in "".join(files)
 
 
+def test_a_paper_account_id_with_a_third_letter_in_a_window_title_is_shortened(
+    tmp_path: Path,
+) -> None:
+    # Found in a real paper session on 2026-11-16: the account id had the shape DU, one more
+    # letter, six digits, and IBC logs it as part of the title of the configuration window.
+    # The bundle carried it in full although its MANIFEST says account ids are shortened.
+    volume = tmp_path / "volume"
+    write_volume(volume)
+    with open(volume / "ibc" / "ibc.log", "a", encoding="utf-8", newline="\n") as log:
+        log.write(
+            "2026-11-16 09:00:00:000 IBC: detected dialog entitled: DUR123456 Trader"
+            " Workstation Configuration (Simulated Trading); event=Opened\n"
+        )
+    out = tmp_path / "out"
+    out.mkdir()
+    path = create_bundle(
+        out,
+        settings=load_settings({"GATEWAY_LOG_DIR": str(volume)}),
+        registry=SecretRegistry(),
+        status_json=None,
+        now=T0,
+    )
+    files = read_bundle(path)
+    assert files["ibc-redacted.txt"].splitlines()[-1] == (
+        "2026-11-16 09:00:00:000 IBC: detected dialog entitled: ***456 Trader"
+        " Workstation Configuration (Simulated Trading); event=Opened"
+    )
+    assert "DUR123456" not in "".join(files.values())
+
+
+def test_the_manifest_says_which_shape_of_account_id_is_recognised(tmp_path: Path) -> None:
+    # Redaction is by shape; whoever reviews a bundle before sharing it must be able to read
+    # what that shape is, and that an id of another shape stays as it is.
+    _, files = make(tmp_path)
+    manifest = " ".join(files["MANIFEST.txt"].split())
+    assert "an optional D, then U, F or I, up to two more capital letters, then 5 to 9 digits" in (
+        manifest
+    )
+    assert "An id of any other shape is NOT shortened" in manifest
+
+
 def test_the_number_of_lines_is_bounded(tmp_path: Path) -> None:
     volume = tmp_path / "volume"
     write_volume(volume, events=300)

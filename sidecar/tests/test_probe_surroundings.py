@@ -242,6 +242,10 @@ def test_an_unreadable_proc_never_triggers() -> None:
         ("Market data farm connection is broken:jdoe123", "other"),
         ("Market data farm connection is broken:CANARYUSER", "other"),
         ("Market data farm connection is broken:DU1234567", "other"),
+        # An account id in front of a farm stem has the shape of a farm name; it is refused
+        # because it holds an account id (here: DU, one more letter, six digits).
+        ("Market data farm connection is broken:du1234567farm", "other"),
+        ("Market data farm connection is broken:dur123456farm", "other"),
         ("Market data farm connection is broken:has space", "other"),
         ("Market data farm connection is broken:" + "farm" * 10, "other"),
         ("", "other"),

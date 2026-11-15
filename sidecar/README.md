@@ -447,6 +447,17 @@ phase, the status document, versions and non-secret settings. Account ids are cu
 last three characters; of the raw IBC log only the lines marked `IBC:` are included, after
 redaction. Review it before sharing.
 
+An account id is recognised by its shape, in upper case only: an optional `D` (paper), then
+`U`, `F` or `I`, up to two more capital letters, then 5 to 9 digits (`U1234567`, `DU1234567`,
+`DUX123456`). IBKR documents the prefixes `U`, `F` and `I`
+([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
+[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf)) and
+paper accounts start with `DU`; a paper id with a third letter and six digits was seen in a
+real session on 2026-11-16 and is not in IBKR's documents, and the second further letter is
+headroom. An id of any other shape is **not** shortened, which is why the review matters.
+The same rule applies to the sidecar's own log, to notifications and to the `IBGW_INSTANCE`
+label. Its price: any word of this shape is cut too (`ID12345` becomes `***345`).
+
 ## Security posture
 
 - uid 1000, read-only root file system, `cap_drop: [ALL]`, `no-new-privileges`; the only
