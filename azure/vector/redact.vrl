@@ -32,17 +32,24 @@
 #         (good_label) and the sidecar (redaction.py, ACCOUNT_RE): change the four together.
 # How     Rust regular expressions have no look-around. An underscore counts as a word
 #         character, so it is swapped for a private-use character (U+E000) while rule 1 runs
-#         with \b, and swapped back afterwards; text that already contains U+E000 keeps it.
+#         with \b, and swapped back afterwards. A text that already holds U+E000 is escaped
+#         first and restored last, with U+E001 as the escape character (U+E001 is written
+#         U+E001 U+E002, U+E000 is written U+E001 U+E003): every original character comes
+#         back exactly, and its underscores still count as boundaries. The rules never
+#         match or write U+E000 to U+E003. Before this escape such a text skipped the swap
+#         and an id behind an underscore in it (acct_DUR123456) was shipped in full.
 # Why     "An account id may leave the container only as its last three characters" must hold
 #         for every column of every stream, including keys the gateway adds later; walking all
 #         string values makes that true by construction instead of per column.
 . = map_values(., recursive: true) -> |value| {
   if is_string(value) {
     text = string!(value)
-    marked = !contains(text, "\u{E000}")
-    if marked {
-      text = replace(text, "_", "\u{E000}")
+    escaped = contains(text, "\u{E000}")
+    if escaped {
+      text = replace(text, "\u{E001}", "\u{E001}\u{E002}")
+      text = replace(text, "\u{E000}", "\u{E001}\u{E003}")
     }
+    text = replace(text, "_", "\u{E000}")
     text = replace_with(text, r'(?i)\bD?[UFI][A-Z]{0,2}[0-9]{5,9}\b') -> |m| {
       "[ACCT:…" + slice!(m.string, -3) + "]"
     }
@@ -52,8 +59,10 @@
     text = replace_with(text, r'(?P<lead>\\[nrt])(?i:D?[UFI][A-Z]{0,2})[0-9]{5,9}\b') -> |m| {
       string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    if marked {
-      text = replace(text, "\u{E000}", "_")
+    text = replace(text, "\u{E000}", "_")
+    if escaped {
+      text = replace(text, "\u{E001}\u{E003}", "\u{E000}")
+      text = replace(text, "\u{E001}\u{E002}", "\u{E001}")
     }
     text
   } else {

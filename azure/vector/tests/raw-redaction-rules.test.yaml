@@ -222,3 +222,23 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.RawData, "a U١٢٣٤٥٦٧ b DUR１２３４５６ c acctU٠١٢٣٤٥ d [ACCT:…567]")
+
+  # redact.vrl swaps an underscore for U+E000 while rule 1 runs. A text that already held
+  # U+E000 used to skip the swap, and acct_DUR123456 in it was shipped in full (first review
+  # of 2026-11-16). The private-use characters of the escape (U+E000 to U+E003) must come
+  # back exactly as they were, alone and in every pair the escape itself writes.
+  - name: redaction - a text that already holds U+E000 keeps its underscore boundary and its private-use characters
+    inputs:
+      - insert_at: raw_gate
+        type: vrl
+        source: |
+          .message = "\u{E000} acct_DUR123456 a_b \u{E001}\u{E003} c_\u{E001}\u{E002}_d \u{E002}\u{E003} \u{E001}\u{E000}_U7654321_"
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "\u{E000} acct_[ACCT:…456] a_b \u{E001}\u{E003} c_\u{E001}\u{E002}_d \u{E002}\u{E003} \u{E001}\u{E000}_[ACCT:…321]_")
+              assert!(!contains(encode_json(.), "DUR123456"), "full account id shipped")
