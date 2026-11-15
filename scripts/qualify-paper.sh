@@ -96,11 +96,13 @@ reason=""
 twofa_prompted=false
 login_seconds=""
 logged_in_at=""
-settled=""
+settled=" (no wait for late reports: the login did not complete)"
 # The image reports a window nobody handles only once it has stayed open for its grace period
-# (UNKNOWN_WINDOW_GRACE_S, 10 s by default, reported at most 2 s after that). The verdict on
-# such windows is therefore taken no sooner than this many seconds after the login was seen.
-window_settle_s=15
+# (UNKNOWN_WINDOW_GRACE_S, 10 s unless QUALIFY_DOCKER_ARGS sets it). The verdict on such
+# windows is taken this many seconds after the login was seen: the grace period plus a margin
+# for a window that opened a few seconds after the login and for the report itself.
+window_margin_s=5
+window_grace_s=10
 
 # check <status> <name> <detail>: record one check (status is pass, fail or info) and print it.
 check() {
@@ -226,8 +228,13 @@ if [ -z "${reason}" ]; then
   fi
   # A window that opened with the login is reported only after the image's grace period:
   # wait it out before the events are copied and the verdict on unknown windows is taken.
+  # The grace period is the container's own setting, read back from it.
+  configured_grace="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${name}" 2>/dev/null \
+    | sed -n 's/^UNKNOWN_WINDOW_GRACE_S=\([0-9]\{1,6\}\)$/\1/p' | tail -n 1)"
+  if [ -n "${configured_grace}" ]; then window_grace_s=$((10#${configured_grace})); fi
+  window_settle_s=$((window_grace_s + window_margin_s))
   while [ "$((SECONDS - logged_in_at))" -lt "${window_settle_s}" ]; do sleep 1; done
-  settled=" up to ${window_settle_s} s after the login"
+  settled=" reported within ${window_settle_s} s of the login (grace period ${window_grace_s} s: a window that opened up to ${window_margin_s} s after the login is covered)"
 fi
 
 # --- evidence that is collected in every case -------------------------------------------
