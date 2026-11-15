@@ -14,6 +14,12 @@ new contract version, announced in `docs/changes.md` before an image carrying it
 - every log file on the volume is size-capped and rotated;
 - the relay on 4003/4004 listens only while the phase is `logged-in`.
 
+**Refined on 2026-11-16 without a new version** (no key, event or phase changed):
+`unknown_window` is raised when an unknown window has stayed open for
+`UNKNOWN_WINDOW_GRACE_S` seconds, no longer the moment it opens. A reader that reacts to
+the event gets it 10 to 12 seconds later by default, and no longer for a window that IBC
+or the Gateway dealt with.
+
 ## Events: one JSON object per line, on stdout and in `events/events.jsonl`
 
 ```json
@@ -102,7 +108,7 @@ can shape is echoed. The events carry no password and no username.
 | `daily_restart` | info | `restarting` | `autorestart file found at <path>: authentication will not be required`, a line of IBC's start script without timestamp or `IBC:` prefix | IBC source |
 | `login_dialog` | info | `login` | `IBC: Login dialog WINDOW_OPENED` | real log, 10.50.1g |
 | `ibc_version` | info | `login` | `IBC: version` | real log, 10.50.1g |
-| `unknown_window` | warn | (none) | a window opened whose title is in neither this table nor `known-windows.txt` | real mechanism; list from IBC source |
+| `unknown_window` | warn | (none) | a window whose title is in neither this table nor `known-windows.txt` has stayed open for `UNKNOWN_WINDOW_GRACE_S` seconds (default 10; `0`: reported the moment it opens). A window that IBC reports closed within that time is not reported | real: the paper-account `Warning` that IBC accepts after every paper login is gone after 0.3 s and is not reported (`tests/fixtures/ibc-real-paper-login.log`); list from IBC source and three real starts |
 | `needs_human` | error | `needs-human` | more than `TWOFA_MAX_PROMPTS` second-factor prompts without a login (off by default) | IBC source |
 
 "Real log" means the line was seen in this image's IBC output and is covered by

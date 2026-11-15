@@ -344,3 +344,16 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   earlier does not get it (the `quiet_grep` fix was missing from every branch above the
   supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
   building on the top.
+- `unknown_window` means a window that STAYS open (`UNKNOWN_WINDOW_GRACE_S`, 10 s), decided in
+  the read loop of `classify-ibc-log.sh`: the `read` has a time limit only while a window
+  waits, and what bash hands back of an unfinished line at the limit is kept. Never put a title
+  that says nothing about the content (`Warning`) on `known-windows.txt`: the grace period
+  covers the one IBC answers. A test of that list sets `UNKNOWN_WINDOW_GRACE_S=0`, or the end
+  of the input hides a missing title (a waiting window is dropped when IBC's output ends).
+- IBC's window lines carry a title and no id. The start-up frame changes its title while open
+  (opened as `Authenticating...`, closed as `Starting application...`), a normal paper login
+  opens a `Warning` that IBC accepts, and the configuration dialog's title starts with the
+  account id. IBC stamps its first lines in UTC and the later ones in `TIME_ZONE`. All of it
+  is in `tests/fixtures/ibc-real-paper-login.log` (real, scrubbed, 2026-11-15 UTC).
+- A bare `wait` in a bats test never returns (bats keeps jobs of its own in the test's
+  shell): `wait "${pid}"`.

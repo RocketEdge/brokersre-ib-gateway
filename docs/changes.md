@@ -5,6 +5,43 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — `unknown_window` is raised for a window that stays open, not for one that opens
+
+- **What changed:** the first completed logins on this image (a paper account, Gateway
+  10.50.1g, 2026-11-15 UTC) raised `unknown_window` at every login although nothing was
+  wrong. The classifier now waits `UNKNOWN_WINDOW_GRACE_S` seconds (default 10; `0` is the
+  old behaviour) and raises the event only when the window is still open then; a window that
+  IBC reports closed before that is not reported. The list of known titles gains the
+  start-up frame's steps as a family (a title that ends with an ellipsis). The automatic
+  screenshot is taken when the event is raised, so of a window that has been on the screen
+  for the grace period. The qualification script takes its verdict on unknown windows no
+  sooner than 15 seconds after the login. The IBC lines of the two real logins are a
+  fixture (`tests/fixtures/ibc-real-paper-login.log`, account id replaced).
+- **Result:** replaying the real log gives exactly `ibc_version`, `login_dialog`,
+  `login_completed` per start and no `unknown_window` (three before the change). The unit
+  suite in the image has 512 tests, all passing; 15 are new and 7 were adjusted for this.
+  `login_completed` is now confirmed against real IBC output, and so is IBC's stop message
+  that must not count as a login (L01). No key, event or phase of the log contract changed.
+- **What did NOT work / root cause:** (1) *A title cannot tell a window nobody handles from
+  one that IBC answers.* Every paper login opens a dialog titled `Warning` (this is not a
+  brokerage account); IBC accepts it in the same millisecond and it is gone 0.3 s later.
+  The event was raised the moment it opened, so the qualification ended "not qualified"
+  for that alone and the sidecar sent an `unknown_window` alert at the next stop. Listing
+  `Warning` would have hidden every warning that nobody answers, so the title stays off the
+  list and the time a window stays open decides. (2) *The list came from IBC's source and
+  one failed start.* The start-up frame is titled with its current step; `Authenticating...`
+  was not listed and appeared in one of two starts. (3) *IBC names a window by its title
+  only.* The start-up frame opens as `Authenticating...` and closes as `Starting
+  application...`, so an opened window cannot always be matched to its closing; that is why
+  the frame's titles are listed, and it is a stated limit for other windows (L10). (4) A
+  background timer per window was rejected: its event could appear after the classifier and
+  the Gateway had ended. The wait is a time limit on the classifier's own read, used only
+  while a window waits, and the unfinished line bash returns at the limit is kept (a test
+  splits `Login has completed` across it).
+- **Next step:** a qualification against a real paper login with this image; watch real
+  sessions for windows that stay open and are harmless (L10); the automatic picture of a
+  real blocking dialog (L25).
+
 ### 2026-11-13 — The release step of the publish survives a GitHub error
 
 - **What changed:** `publish.yml` writes the GitHub release through the new

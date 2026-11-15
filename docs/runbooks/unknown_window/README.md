@@ -4,14 +4,16 @@ Alert class `unknown_window` · default severity warning · [all runbooks](../RE
 
 ## What it means
 
-In the last 15 minutes the Gateway opened a window whose title is on none of the gateway's
-lists, and the gateway is not logged in. The window may block the login, or it may be
-harmless: the lists come from IBC's source and one real start, so a harmless window that is
-missing from them raises this alert too ([limitations](../../limitations.md), L10).
+In the last 15 minutes the Gateway showed a window whose title is on none of the gateway's
+lists and that stayed open for `UNKNOWN_WINDOW_GRACE_S` (10 seconds by default), and the
+gateway is not logged in. A window that IBC or the Gateway closes sooner is not reported.
+The window may block the login, or it may be harmless: the lists come from IBC's source
+and three real starts, so a harmless window that is missing from them and stays open
+raises this alert too ([limitations](../../limitations.md), L10).
 
 One title has been seen to block so far, in both real sessions of 2026-11-13 (one account,
-Gateway 10.50.1g): `Paper Account Notice` within two seconds of the login dialog, in paper
-mode, with the phase staying `login`. Its text said that the account had no paper trading
+Gateway 10.50.1g): `Paper Account Notice`, which opened within two seconds of the login
+dialog, in paper mode, with the phase staying `login`. Its text said that the account had no paper trading
 access. Whether IBKR uses the same title for other notices is not known, so read the text
 before you conclude anything from the title.
 
