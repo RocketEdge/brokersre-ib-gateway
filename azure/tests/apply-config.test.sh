@@ -133,6 +133,23 @@ user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayIm
 apply --restart-gateway
 expect "an instance label with an account id glued to a word is refused (the redaction would change it)" '${status} -eq 2 && "${output}" == *"instanceLabel"*'
 
+# The shape of a real paper account (2026-11-16): DU, one more letter, six digits.
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .instanceLabel = "DUR123456"'
+apply --restart-gateway
+expect "an instance label that is a paper account id with a third letter is refused" '${status} -eq 2 && "${output}" == *"instanceLabel"*'
+
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .hostLabel = "desk_dur123456"'
+apply --restart-gateway
+expect "a host label that contains such an id in lower case is refused" '${status} -eq 2 && "${output}" == *"hostLabel"*'
+
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .instanceLabel = "deskDUAB1234567"'
+apply --restart-gateway
+expect "an instance label with such an id glued to a word is refused" '${status} -eq 2 && "${output}" == *"instanceLabel"*'
+
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .hostLabel = "I1234567"'
+apply --restart-gateway
+expect "a host label with the prefix I is refused" '${status} -eq 2 && "${output}" == *"hostLabel"*'
+
 user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_two}"'" | .packCommit = "'"${commit_two}"'"'
 apply
 expect "a new pack commit that leaves the gateway definition alone is applied without asking" \
@@ -153,6 +170,13 @@ export FAKE_GATEWAY_EXISTS=0
 user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_one}"'" | .packCommit = "'"${commit_three}"'"'
 apply
 expect "without a gateway container there is nothing to restart: the change is applied" '${status} -eq 0 && "$(grep -c "${gateway_one}" "${overlay}")" == 1'
+
+# Labels the redaction leaves alone stay valid: a first letter other than D, U, F or I, a
+# third further letter after the prefix.
+user_data '.vectorImage = "'"${vector_two}"'" | .shipRawLogs = true | .gatewayImage = "'"${gateway_one}"'" | .packCommit = "'"${commit_three}"'" | .instanceLabel = "XYZ123456" | .hostLabel = "DUABC123456"'
+apply
+expect "labels that only resemble an account id are accepted (XYZ123456, DUABC123456)" \
+  '${status} -eq 0 && "$(grep -c "^IBGW_INSTANCE=XYZ123456$" "${IBGW_ROOT}/.env")" == 1 && "$(grep -c "^HOST_LABEL=DUABC123456$" "${IBGW_ROOT}/.env")" == 1'
 
 FAKE_SCENARIO=no-identity apply
 expect "an unreachable metadata service fails without touching anything" '${status} -eq 5 && "$(grep -c "${gateway_one}" "${overlay}")" == 1'

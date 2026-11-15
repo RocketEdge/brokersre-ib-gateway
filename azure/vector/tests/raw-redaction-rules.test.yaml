@@ -64,3 +64,89 @@ tests:
             source: |
               assert_eq!(.Msg, "window acct_[ACCT:…567] and [ACCT:…321]")
               assert_eq!(.Props.title, "id=[ACCT:…234]")
+
+  # Found in a real paper session on 2026-11-16: the account id had the shape DU, one more
+  # letter, six digits, and IBC logs it in the title of the configuration window. The pattern
+  # of the time (DU, DF, U or F directly followed by the digits) did not match it.
+  - name: redaction - the window title of a paper account (DU, a third letter, six digits) is redacted
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/ibc/ibc.log
+          message: "2026-11-16 09:00:00:000 IBC: detected dialog entitled: DUR123456 Trader Workstation Configuration (Simulated Trading); event=Opened"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "2026-11-16 09:00:00:000 IBC: detected dialog entitled: [ACCT:…456] Trader Workstation Configuration (Simulated Trading); event=Opened")
+              assert!(!contains(encode_json(.), "DUR123456"), "full account id shipped")
+
+  - name: redaction - an id with one or two further letters after the prefix, or with the prefix I, is caught in every position
+    inputs:
+      - insert_at: raw_gate
+        type: vrl
+        source: |
+          .message = "a DUAB1234567 b I1234567 c UX12345 d dur123456 e i7654321 f acctDUR234567 g acct_DUR345678_x h " + "\\" + "nDUR456789 i " + "\\" + "tux56789 j =FAB98765; k (di123456) l DI654321."
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "a [ACCT:…567] b [ACCT:…567] c [ACCT:…345] d [ACCT:…456] e [ACCT:…321] f acct[ACCT:…567] g acct_[ACCT:…678]_x h " + "\\" + "n[ACCT:…789] i " + "\\" + "t[ACCT:…789] j =[ACCT:…765]; k ([ACCT:…456]) l [ACCT:…321].")
+
+  # First letter not D, U, F or I; an id behind another capital letter; ten digits; a third
+  # further letter; four digits; a four-letter word; an id followed by letters.
+  - name: redaction - a word that differs from the shape of an id in one respect is left alone
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "XYZ123456 CPU12345 XDUR123456 DUR1234567890 DUABC123456 UABC12345 DUR1234 fuse1234567 wolf100234 dur123456abc"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "XYZ123456 CPU12345 XDUR123456 DUR1234567890 DUABC123456 UABC12345 DUR1234 fuse1234567 wolf100234 dur123456abc")
+
+  # The price of recognising ids by shape, accepted on purpose: masking such a word costs
+  # readability, missing an account id breaks the promise.
+  - name: redaction - a word with the shape of an id is rewritten although it is none
+    inputs:
+      - insert_at: raw_gate
+        type: log
+        log_fields:
+          file: /var/log/ibgateway/jts/launcher.log
+          message: "id12345 USD100000 fix12345 disk12345 uk100234"
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "[ACCT:…345] [ACCT:…000] [ACCT:…345] [ACCT:…345] [ACCT:…234]")
+
+  - name: redaction - an event that carries the window title of a paper account is redacted too
+    inputs:
+      - insert_at: events_row
+        type: vrl
+        source: |
+          .file = "/var/log/ibgateway/events/events.jsonl"
+          .message = encode_json({
+            "ts": format_timestamp!(now(), "%Y-%m-%d") + "T00:00:00.456Z",
+            "src": "ibc", "level": "warn", "event": "unknown_window",
+            "msg": "unknown window: DUR123456 Trader Workstation Configuration (Simulated Trading)",
+            "data": {"title": "dur123456 Trader Workstation Configuration"}, "boot_id": "443d261aecbd4789", "seq": 13
+          })
+    outputs:
+      - extract_from: events_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.Msg, "unknown window: [ACCT:…456] Trader Workstation Configuration (Simulated Trading)")
+              assert_eq!(.Props.title, "[ACCT:…456] Trader Workstation Configuration")
+              assert!(!contains(downcase(encode_json(.)), "dur123456"), "full account id shipped")

@@ -345,6 +345,31 @@ VARIABLES
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=deskDU1234567 -- validate --no-environment
   check "accepts a label that only resembles an account id (wolf100234, the redaction leaves it alone)" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=wolf100234 -- validate --no-environment
+  # The shape of a real paper account (2026-11-16): DU, one more letter, six digits. The
+  # redaction rewrites it, so a label of that shape must be refused like any other id; the
+  # labels accepted below are the words the redaction unit tests leave alone.
+  expect_refusal "refuses an IBGW_INSTANCE that is a paper account id with a third letter (DUR123456)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=DUR123456 -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE with the prefix I (I1234567)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=I1234567 -- validate --no-environment
+  expect_refusal "refuses a HOST_LABEL that contains such an id in lower case (desk_dur123456)" "HOST_LABEL" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e HOST_LABEL=desk_dur123456 -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE with such an id glued to a word (deskDUAB1234567)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=deskDUAB1234567 -- validate --no-environment
+  check "accepts labels whose first letter is not D, U, F or I (XYZ123456, CPU12345)" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=XYZ123456 -e HOST_LABEL=CPU12345 -- validate --no-environment
+  check "accepts labels with a third further letter or ten digits (DUABC123456, DUR1234567890)" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=DUABC123456 -e HOST_LABEL=DUR1234567890 -- validate --no-environment
+  # A label is refused for its shape, not for being an id: the redaction rewrites uk100234.
+  expect_refusal "refuses a label that has the shape of an id although it is none (uk100234)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=uk100234 -- validate --no-environment
+  # azure/vm/apply-config.sh validates the same two labels before they reach the env file and
+  # repeats the pattern: the two copies must be the same text.
+  local entrypoint_pattern vm_pattern
+  entrypoint_pattern="$(sed -n "s/^account_like='\(.*\)'$/\1/p" "${repo}/azure/vector/entrypoint.sh")"
+  vm_pattern="$(sed -n 's/^    and (test("\(.*\)") | not);$/\1/p' "${repo}/azure/vm/apply-config.sh")"
+  expect "apply-config.sh refuses a label by the same pattern as entrypoint.sh" \
+    '-n "${entrypoint_pattern}" && "${vm_pattern}" == "${entrypoint_pattern}"'
   expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 

@@ -79,9 +79,11 @@ fi
 # One line per problem; the patterns keep every value safe to write into the files below
 # (no quote, no line break) and refuse what the stack would refuse later.
 problems="$(jq --raw-output --arg keys "${required_keys}" '
-  # The same rule as azure/vector/entrypoint.sh: a label the redaction would rewrite is refused.
+  # The same rule and the same pattern as account_like in azure/vector/entrypoint.sh: a label
+  # the redaction would rewrite is refused (the shape of an account id: an optional D, then
+  # U, F or I, up to two further letters, 5 to 9 digits; azure/vector/redact.vrl explains it).
   def good_label: type == "string" and test("^[A-Za-z0-9._-]{1,64}$")
-    and (test("((^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])|[a-z](DU|DF|U|F))[0-9]{5,9}([^A-Za-z0-9]|$)") | not);
+    and (test("((^|[^A-Za-z0-9])[Dd]?[UuFfIi][A-Za-z]{0,2}|[a-z]D?[UFI][A-Z]{0,2})[0-9]{5,9}([^A-Za-z0-9]|$)") | not);
   . as $d
   | (($keys | split(" ")) - ($d | keys) | map("\(.) is missing")[]),
     (if ($d.schemaVersion == 1) then empty else "schemaVersion must be 1" end),
