@@ -61,6 +61,9 @@ UBUNTU_IMAGE="ubuntu:26.04"
 # Canary identifiers: obviously fake, used to prove that redaction works and nothing leaks.
 CANARY_USERNAME=CANARY_USER_zq7
 CANARY_ACCOUNT=DU1234567
+# The shape of the real paper id that leaked on 2026-11-16 (DU, one more letter, six digits),
+# made up. It rides in the line after the over-long raw line and in an events fixture line.
+CANARY_ACCOUNT_SHAPED=DUQ864209
 
 # jq_cli <jq arguments...>: reads stdin. Programs and JSON arguments are passed as strings,
 # never as file paths, so the host binary and the container take the same call.
@@ -645,10 +648,10 @@ group_pipeline() {
   # An over-long raw line (300 KB, more than the source's max_line_bytes) that carries the user
   # name and an account id at both ends: it is not shipped, the line after it is, and nothing
   # of it may appear in the shipper's own log (checked on the whole output further down).
-  as_gateway "{ printf '%s' 'LONG_LINE_BEGIN ${CANARY_USERNAME} ${CANARY_ACCOUNT} ' &&
+  as_gateway "{ printf '%s' 'LONG_LINE_BEGIN ${CANARY_USERNAME} ${CANARY_ACCOUNT} ${CANARY_ACCOUNT_SHAPED} ' &&
     head -c 300000 /dev/zero | tr '\\000' 'x' &&
-    printf '%s\\n' ' ${CANARY_USERNAME} ${CANARY_ACCOUNT} LONG_LINE_END' &&
-    printf '%s\\n' '2026-11-12 01:06:00 INFO line after the long one'; } >>/var/log/ibgateway/jts/launcher.log"
+    printf '%s\\n' ' ${CANARY_USERNAME} ${CANARY_ACCOUNT} ${CANARY_ACCOUNT_SHAPED} LONG_LINE_END' &&
+    printf '%s\\n' '2026-11-12 01:06:00 INFO line after the long one, account ${CANARY_ACCOUNT_SHAPED}'; } >>/var/log/ibgateway/jts/launcher.log"
   expect_rows "skips a raw line longer than the limit and ships the line after it" "${a}" "${raw_stream}" 7
   # The log lines of Vector's file source are switched off (they would print the discarded
   # line), so the counters the shipper prints every minute must say what those lines used to
@@ -708,8 +711,14 @@ group_pipeline() {
   lowered="${output,,}"
   expect "the user name is neither in a row nor in the shipper's own log" '"${lowered}" != *"${CANARY_USERNAME,,}"*'
   expect "the user name was replaced by [USER]" '"${rows}" == *"[USER]"*'
-  expect "no full account id is in a row or in the shipper's own log" '"${output}" != *"${CANARY_ACCOUNT}"*'
+  expect "no full account id is in a row or in the shipper's own log" \
+    '"${output}" != *"${CANARY_ACCOUNT}"* && "${output}" != *"${CANARY_ACCOUNT_SHAPED}"*'
   expect "account ids keep their last three characters" '"${rows}" == *"[ACCT:…567]"*'
+  counts="$(for stream in "${events_stream}" "${raw_stream}"; do
+    grep -F "\"capture\":\"${stream}\"" "${capture_file}" | grep -cF "[ACCT:…${CANARY_ACCOUNT_SHAPED: -3}]"
+  done | tr '\n' ' ')"
+  expect "an id of the paper shape seen on 2026-11-16 is shortened in one events row and one raw row" \
+    '"${counts}" == "1 1 "'
   expect "the raw history from before the first start is not shipped" '"${rows}" != *"OLD_LINE_MARKER"*'
   expect "nothing of the over-long raw line is in a row or in the shipper's own log" \
     '"${output}" != *"LONG_LINE_"* && "${output}" != *"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"* && "${output}" == *"line after the long one"*'

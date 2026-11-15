@@ -96,8 +96,10 @@ set_phase() { # token: written atomically (temporary file + rename), like the ga
   printf '%s\n' "$1" >"${work}/volume/state/phase.tmp"
   mv -f "${work}/volume/state/phase.tmp" "${work}/volume/state/phase"
 }
+# Two made-up account ids: the old shape, and the shape of the real paper id that leaked on
+# 2026-11-16 (DU, one more letter, six digits; shortened to ***209).
 add_event() { # name
-  printf '{"ts":"%s","src":"ibc","level":"info","event":"%s","msg":"CANARY_USERNAME DU7654321","boot_id":"%s","seq":%s}\n' \
+  printf '{"ts":"%s","src":"ibc","level":"info","event":"%s","msg":"CANARY_USERNAME DU7654321 DUQ864209","boot_id":"%s","seq":%s}\n' \
     "$(now)" "$1" "${BOOT}" "${RANDOM}" >>"${work}/volume/events/events.jsonl"
 }
 add_metrics() {
@@ -245,7 +247,7 @@ received="$(docker logs "${RECEIVER}" 2>&1 | grep '"class":"twofa_pending"' | he
 if [[ "${received}" == *'"kind":"firing"'* && "${received}" == *'"severity":"critical"'* && "${received}" == *'"instance":"smoke-1"'* && "${received}" == *'Approve the IBKR Mobile prompt now'* ]]; then pass "the message carries class, severity, instance and the instruction"; else fail "message" "${received}"; fi
 # The receiver logs "POST <path> <body>"; the path is the secret URL itself, the body must not repeat it.
 body="${received#POST /hook/"${CANARY}" }"
-if [[ "${body}" == *CANARY* || "${body}" == *DU7654321* || "${body}" == *"${RECEIVER}"* ]]; then fail "payload hygiene" "${body}"; else pass "no username, account id or URL in the payload"; fi
+if [[ "${body}" == *CANARY* || "${body}" == *DU7654321* || "${body}" == *DUQ864209* || "${body}" == *"${RECEIVER}"* ]]; then fail "payload hygiene" "${body}"; else pass "no username, account id or URL in the payload"; fi
 if in_sidecar python -c '
 import http.client, json
 c = http.client.HTTPConnection("127.0.0.1", 9810, timeout=5)
@@ -292,7 +294,7 @@ for l in lines:
   fail "log format" "non-JSON or incomplete lines"
   docker logs "${SIDECAR}" 2>&1 | head -5
 fi
-if docker logs "${SIDECAR}" 2>&1 | grep -Eq "${CANARY}|${PING}|CANARY_USERNAME|DU7654321"; then fail "log leak" "secret, username or account id in the log"; else pass "no secret, username or account id in the log"; fi
+if docker logs "${SIDECAR}" 2>&1 | grep -Eq "${CANARY}|${PING}|CANARY_USERNAME|DU7654321|DUQ864209"; then fail "log leak" "secret, username or account id in the log"; else pass "no secret, username or account id in the log"; fi
 started=$(date +%s)
 docker stop -t "$((10 * SCALE))" "${SIDECAR}" >/dev/null 2>&1
 elapsed=$(($(date +%s) - started))
@@ -321,8 +323,9 @@ import sys, tarfile
 with tarfile.open(sys.argv[1]) as archive:
     text = "".join(archive.extractfile(m).read().decode() for m in archive.getmembers())
 assert "CANARY_USERNAME" not in text and "DU7654321" not in text, "leak"
+assert "DUQ864209" not in text, "leak of an id with a third letter"
 assert "CANARY_DEADMAN_ID" not in text and "CANARY_WEBHOOK_PATH" not in text, "secret URL"
-assert "***321" in text
+assert "***321" in text and "***209" in text
 ' "$(tr -d '\r' <"${work}/bundle.out")"; then pass "support bundle is written and redacted"; else fail "bundle" "$(cat "${work}/bundle.out")"; fi
 
 echo "== optional shared network namespace: the sidecar rejoins a restarted gateway =="
