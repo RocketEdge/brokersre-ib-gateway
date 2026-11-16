@@ -421,7 +421,9 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   dropped the resolution of a message accepted just before the kill (second review of
   #32, reverted). Test restarts from the snapshot saved after the last step, never from a
   live `export_state()`. `Notifier.tick` writes the state before it queues the step's
-  messages (a channel may accept a message the moment it is queued); keep that order. The
+  messages (a channel may accept a message the moment it is queued); keep that order. Only
+  the stop cancels an evaluation: a stop during the write logs `notify_queued_at_stop`
+  (info), a failed or overdue write `notify_queued_unsaved` (warning). The
   state is saved again after the shutdown flush (`Notifier.save_on_stop`; compose gives
   the sidecar `stop_grace_period: 20s`). A `resolved` is sent once and not tracked: a
   stop or kill while it is queued, or every attempt failing, loses it (L34, planned for

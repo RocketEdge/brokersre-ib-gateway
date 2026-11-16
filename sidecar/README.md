@@ -409,6 +409,13 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   for the window: once per 15 minutes per class at most, so a condition that flaps
   faster than its channels answer still sends no more than one extra announcement. A
   late escalation result moves no window and lets nothing through.
+- The state is written before an evaluation's messages are queued, so that a message a
+  channel may accept is on disk as in flight when the sidecar is killed. A stalled disk
+  therefore delays an alert by up to 5 seconds, once per stalled write; while that write
+  hangs, or for 30 seconds after a failed one, messages go out without waiting, and
+  `notify_queued_unsaved` (a warning) says they were queued before their state was
+  written. A stop that interrupts the write logs `notify_queued_at_stop` instead (no
+  warning: the save after the stop flush records them).
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
   `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write), and written once
   more when the sidecar stops, after the queued messages were flushed (if an earlier
