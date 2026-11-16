@@ -47,7 +47,7 @@
 - [x] `api-handshake.sh`: read-only proof that the API answers; `HEALTHCHECK_API=handshake` (opt-in)
 - [x] `scripts/qualify-paper.sh`: one real paper login with checks and a result document; offline test in the container suite
 - [x] Workflow `qualify-paper.yml` (manual, by digest, from `main`), ADR 0014; GitHub environment `paper-qualification` created (required reviewer, `main` only, secrets `PAPER_USERID` and `PAPER_PASSWORD`)
-- [ ] First qualified run: needs an account with paper trading enabled at IBKR. The attempt of 2026-11-12 was rejected; on 2026-11-13 IBKR accepted the credentials, but the account had no paper trading access (L31) and the run ended "not qualified". The two secrets of the environment are unset until such an account exists; then set them and dispatch the workflow
+- [x] First qualified run: needs an account with paper trading enabled at IBKR. The attempt of 2026-11-12 was rejected; on 2026-11-13 IBKR accepted the credentials, but the account had no paper trading access (L31) and the run ended "not qualified". Done 2026-11-16 with the script, run by hand: the published stable `7773ff7` and latest `cc3a6a9` qualified (L16); the workflow's first run waits for its reviewer (below)
 - [ ] After three recorded passes: move `stable` only after a `qualified-paper` attestation exists
 
 ## Roadmap P3: rejected-login latch (2026-11-12, branch `feat/p3-login-latch`)
@@ -67,8 +67,10 @@
 
 - [x] `sidecar/`: read-only API probe, `/livez` `/readyz` `/status` `/metrics`, notifier with an escalation ladder (seven channels), dead-man ping, own network namespace by default, ADR 0010
 - [x] Workflows: tests + image + smoke + end to end; publish from `main` only (both architectures tested and scanned before the push); weekly rescan
-- [ ] First runs of the three workflows; the first-publish path of `sidecar-publish.yml`
-- [ ] A paper login with the sidecar attached (L20); one real message per channel
+- [x] First runs of the tests workflow and of `sidecar-publish.yml`, its first-publish path included (run 43183803821, 2026-11-12: pushed, signed, signature verified; four publish runs by 2026-11-16)
+- [ ] First run of `sidecar-rescan.yml` (weekly; it has never run)
+- [x] A paper login with the sidecar attached (L20; 2026-11-15/16 UTC, sidecar 0.2.0 and 0.2.1)
+- [ ] One real message per channel
 - [ ] A person checks the reset-window table against IBKR's system status page (L21)
 
 ## Roadmap P2: supply chain (2026-11-12, branch `feat/p2-supply-chain`)
@@ -115,10 +117,15 @@
 - [ ] First publish with the new step; then consider the same for the archive upload in `detect-releases.yml`
 - [ ] A check after each publish that every channel tag equals the digest in its release (L30)
 
-## The real paper session of 2026-11-16 (branches `fix/unknown-window-grace`, `fix/sidecar-log-volume-owner`, `fix/account-id-third-letter`)
+## The real paper session of 2026-11-16 (branches `fix/unknown-window-grace`, `fix/sidecar-log-volume-owner`, `fix/account-id-third-letter`, `docs/paper-session-2026-11-16`)
 
 - [x] The first completed logins on this image: login, health, API handshake, relay, sidecar readiness, notifications, graceful stop and restart work with a real paper account
 - [x] The gateway with a sidecar did not start on fresh volumes (`dirs_not_writable` loop): the sidecar image has no `/var/log/ibgateway` and every reader mounts the log volume with `nocopy` (sidecar 0.2.1)
-- [ ] Publish sidecar 0.2.1 and watch the run through "Verify the signature" (a re-run cannot sign a tag that was already pushed)
-- [ ] Start the shipped stack (reference compose plus sidecar override) with a real paper login once 0.2.1 is published
+- [x] Publish sidecar 0.2.1 and watch the run through "Verify the signature" (a re-run cannot sign a tag that was already pushed): published, signed and verified by the publish workflow (2026-11-16)
+- [x] Start the shipped stack (reference compose plus sidecar override) with a real paper login once 0.2.1 is published: logged in on fresh volumes, no `dirs_not_writable`, no false alert (2026-11-16)
 - [ ] Decide L33: should a failed preflight keep the container up in a phase of its own instead of exiting into a restart loop?
+- [ ] Approve the waiting run 43789700905 of `qualify-paper.yml` (the published stable digest `7773ff7`; the secrets `PAPER_USERID` and `PAPER_PASSWORD` of the environment `paper-qualification` were set on 2026-11-16 at 02:01 UTC) and record its result (L04, L16)
+- [ ] Review the sidecar 0.2.2 pull request from the branch `fix/sidecar-resolved-and-skew` when it is opened: no `resolved` followed a short stop of the gateway while a second channel (Teams) was unreachable, because the firing message's result is recorded only when every channel has finished
+- [ ] `sidecar/README.md` (about lines 543 to 549) still says "Not verified against a logged-in gateway"; correct it in the sidecar 0.2.2 pull request, which changes that file (L20 has what was seen)
+- [ ] Observe with a real paper login: a daily restart, a second-factor prompt and a competing session (L01, L02, L09, L12)
+- [ ] Decide what `tail-gateway-logs.sh` should do about `ibgateway.*.log`, a name that was not seen (L03), and correct its header (lines 4 to 7, which call the name unverified documentation) with that decision: a change under `rootfs/` rebuilds the image

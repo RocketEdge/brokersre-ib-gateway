@@ -104,8 +104,13 @@ docker compose -f compose/docker-compose.example.yml up -d
 docker compose -f compose/docker-compose.example.yml logs -f
 ```
 
-You should see JSON events ending with `ibc_starting`, `ibc_version` and `login_dialog`. If IBKR
-asks for a second factor, the event `twofa_dialog` appears: approve the prompt in IBKR Mobile.
+You should see JSON events with `ibc_starting`, `ibc_version` and `login_dialog`, then
+`login_completed` and `relay_opened` once IBKR has accepted the login (in the paper logins of
+2026-11-15/16, none of which asked for a second factor, `login_completed` came 8.2 to 11.4 s
+after the event `container_start`). If IBKR asks for a second factor, the event
+`twofa_initiated` appears (`twofa_dialog` may not: according to IBC's source, Gateway 10.16
+and later logs only the first, [log contract](docs/log-contract.md)): approve the prompt in
+IBKR Mobile.
 The image never answers a second factor for you. Stop following the log with Ctrl+C.
 
 ### 3. Check that it is logged in
@@ -188,9 +193,10 @@ Gateway run after 01:00 ET on Sunday". Either way, once a week a person must app
 prompt, and no setting of this image changes that: the image never answers, types or bypasses
 a second factor.
 
-What happens: the phase becomes `2fa-pending` and the events `twofa_initiated` and
-`twofa_dialog` appear (recognised from the text IBC's code logs; not yet seen in a real
-session of this image, [limitations](docs/limitations.md) L09). Approve the prompt in IBKR
+What happens: the phase becomes `2fa-pending` and the event `twofa_initiated` appears, with
+`twofa_dialog` only where the Gateway opens a separate dialog (according to IBC's source,
+Gateway 10.16 and later does not); both are recognised from the text IBC's code logs, not yet
+seen in a real session of this image ([limitations](docs/limitations.md) L09). Approve the prompt in IBKR
 Mobile. A prompt that is not answered
 expires after about three minutes; with the defaults IBC then logs in again and asks again,
 without limit. Each time the phase passes through `login` for a few seconds (event
@@ -227,8 +233,10 @@ The API relay listens only while the gateway is logged in, so "connection refuse
 ready yet": retry. [examples/README.md](examples/README.md) states the readiness rules in plain
 words (wait for healthy, stop sending on IBKR code 1100, continue on 1102, re-subscribe on 1101,
 expect the daily restart) and ships read-only samples that follow them: `wait-for-gateway.sh`,
-a compose file with the strategy on a private network, and a Python and a C# client. The
-samples were run against stand-ins only, never against a logged-in Gateway.
+a compose file with the strategy on a private network, and a Python and a C# client.
+`wait-for-gateway.sh` and the Python client ran against a logged-in paper Gateway
+(2026-11-15/16 UTC); the C# client and the compose file with the strategy were run against
+stand-ins only.
 
 ## Environment variables
 
@@ -299,8 +307,10 @@ unhealthy. The finer lifecycle lives in `/var/log/ibgateway/state/phase`:
 It goes to stdout and, as the identical line, to `/var/log/ibgateway/events/events.jsonl`, so a
 sidecar that mounts only the log volume sees what `docker logs` shows. `seq` counts the events
 of one container start without gaps: a reader can tell that it lost nothing. Raw IBC output
-goes to `/var/log/ibgateway/ibc/ibc.log` and the Gateway's own logs are mirrored under
-`/var/log/ibgateway/jts/`, so a dialog that echoes a username can never leak through an event.
+goes to `/var/log/ibgateway/ibc/ibc.log` and the Gateway's `launcher.log` is mirrored under
+`/var/log/ibgateway/jts/` (its log after the login is encrypted by IBKR and stays in the
+settings directory, [limitations](docs/limitations.md) L03), so a dialog that echoes a
+username can never leak through an event.
 
 **Resources.** `/var/log/ibgateway/metrics/metrics.jsonl` gets one sample every 30 s from the
 container's own cgroup and `/proc` (memory, CPU, processes, the Gateway JVM, open files, disk).
@@ -359,8 +369,9 @@ Configure its dead-man ping as well: without one, nobody is told when the host i
 Every alert links a one-page runbook ([docs/runbooks](docs/runbooks/README.md)): what it
 means, what to check first, what to do and what not to do.
 The sidecar is tested against the real gateway image with IBC not launched and against
-stand-in API servers; it has not run against a logged-in Gateway yet
-([docs/sidecar.md](docs/sidecar.md) lists what that leaves open).
+stand-in API servers, and it ran against a logged-in paper Gateway in the sessions of
+2026-11-15/16 UTC; [limitations](docs/limitations.md) L20 lists what those sessions left
+unproven.
 
 ## Shipping to Azure Log Analytics
 
@@ -442,9 +453,11 @@ a username that another session is using.
 
 In this repository the same script runs in the workflow `Qualify (paper login)`, which is
 dispatched by hand, only from `main`, only for an image given by digest, behind a required
-reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). No image has passed it yet
-([limitations](docs/limitations.md), L16): its first real run met an account without paper
-trading access. The account you use must have its paper trading account enabled at IBKR;
+reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The published digests
+`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d) passed the script with a
+real paper account on 2026-11-16, run by hand. A digest that a channel tag moves to later,
+after a rebuild for example, is not covered by those runs, and the workflow has not run yet
+([limitations](docs/limitations.md), L16). The account you use must have its paper trading account enabled at IBKR;
 credentials that work on IBKR's website are not proof of that.
 
 ## Get notified of new images
@@ -478,8 +491,9 @@ image-pin workflow and merge it only after it is verified.
 digest its channel tag points at and prints one JSON document: exit 0 up to date, 10 a
 different image behind the tag, 2 no answer. It only asks; it never pulls or restarts
 anything. [docs/upgrade-check.md](docs/upgrade-check.md) has a cron and a Task Scheduler
-example that only notify. It was tested with a stand-in `docker` and by hand against other
-projects' public images, not yet against this repository's registry.
+example that only notify. It was tested with a stand-in `docker`, by hand against other
+projects' public images, and against this repository's registry on a gateway running a
+published image (`up-to-date`, exit 0; [limitations](docs/limitations.md) L27).
 
 ## Building and testing
 

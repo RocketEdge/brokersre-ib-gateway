@@ -154,7 +154,7 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   archived installer under `downloads/`.
 - `ibcstart.sh` resolves Java from `.install4j/inst_jre.cfg` in the Gateway directory; the
   Dockerfile writes it (bundled JRE on x64, system OpenJDK 25 on arm64).
-- Three rows of `ibc-patterns.tsv` are confirmed by a real log, the rest are from IBC 3.24.x
+- Four rows of `ibc-patterns.tsv` are confirmed by a real log, the rest are from IBC 3.24.x
   sources (`docs/limitations.md` L01). IBC logs every dialog three times (`event=Opened`,
   `Activated`, `Focused`): match `Opened` only. The login window and the Gateway main window are
   both titled "IBKR Gateway": never classify by that title.
