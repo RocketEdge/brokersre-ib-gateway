@@ -74,3 +74,30 @@ after every timeout, for as long as the container runs.
 A real log shows different wording for the second-factor lines; or IBC gains a setting that
 caps prompts itself; or a consumer needs a field that is neither in the event nor derivable
 from the files on the volume.
+
+## Amendment 2026-11-16: `unknown_window` waits for the window to stay open
+
+Decision 4 raised the event the moment a window with an unknown title opened. The first
+completed paper logins showed that a title cannot tell a window nobody handles from one
+that IBC answers: every paper login opens a dialog titled `Warning`, which IBC accepts
+and which is gone 0.3 seconds later. Putting `Warning` on the list of known titles would
+have hidden every warning that nobody answers. The event is therefore raised when the
+window is still open after `UNKNOWN_WINDOW_GRACE_S` seconds (default 10), and not at all
+when IBC reports it closed before that. `0` restores the first behaviour. No key, event
+or phase changed, so the contract version stays 2.
+
+Rejected: listing `Warning` (hides the case the event exists for); treating IBC's
+`Click button` line as the answer (IBC logs it for windows on the list too, and a click
+is not a closed window); a background timer per window (events could then appear after
+the classifier, and the Gateway, had ended).
+
+The rules that make the wait correct (found by the independent review, 2026-11-16): the
+wait ends without an event when IBC reports the window closed, when a new IBC announces
+itself (the Gateway process was replaced inside one classifier run and wrote no "closed"
+line), or when IBC's output ends; of several waiting windows with one title the newest
+counts as the one that closed, so a window that stays open keeps its time; time is the
+kernel's uptime, so a clock step changes nothing; and a due window is reported only once no
+further line of IBC is waiting to be read, because after a pause of the process its
+"closed" line may already be in the pipe. Lines are read first for at most one second,
+counted from the first postponement, so that a stream of lines cannot hide a window. A frame whose title ends with an ellipsis is a
+start-up step; a dialog with such a title is not.

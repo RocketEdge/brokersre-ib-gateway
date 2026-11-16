@@ -1,0 +1,192 @@
+# REAL LOG, scrubbed: IBC 3.24.2 + IB Gateway 10.50.1g (paper), 2026-11-15 UTC: two completed paper logins of one session (start, login, stop requested, start, login). Only the "IBC:" lines are kept (the JVM property dump, the dialog structure dumps, host name and session id are dropped). The account id in the configuration dialog title is replaced by DUX000000, a made-up id of the same shape (three letters, six digits); no credential appears in IBC output. IBC stamps its first lines in UTC and the later ones in the TIME_ZONE of the container (America/New_York here).
+2026-11-15 20:10:39:434 IBC: version: 3.24.2
+2026-11-15 20:10:39:437 IBC: using default settings provider: ini file is /run/brokersre/config.ini
+2026-11-15 20:10:39:437 IBC: using default login manager: will get username and password from settings; FIX username and password (if required) from settings
+2026-11-15 20:10:39:437 IBC: using default main window manager
+2026-11-15 20:10:39:438 IBC: using default trading mode manager: constructor parameter args but trading mode not present - will be taken from settings
+2026-11-15 20:10:39:438 IBC: using default config dialog manager
+2026-11-15 20:10:39:445 IBC: CommandServer is starting with port 7462
+2026-11-15 20:10:39:470 IBC: CommandServer listening on address: 127.0.0.1 port: 7462
+2026-11-15 20:10:39:470 IBC: CommandServer started and is ready to accept commands
+2026-11-15 20:10:39:587 IBC: TWS Settings directory is: /home/ibgateway/Jts/settings
+2026-11-15 20:10:39:587 IBC: Starting session: will exit if login dialog is not displayed within 60 seconds
+2026-11-15 20:10:39:593 IBC: Ensuring /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-15 20:10:39:594 IBC: Found setting: [Logon]/s3store=true
+2026-11-15 20:10:39:594 IBC: Found setting: [Logon]/Locale=en
+2026-11-15 20:10:39:594 IBC: Found setting: [Logon]/displayedproxymsg=1
+2026-11-15 20:10:39:594 IBC: Found setting: [Logon]/UseSSL=true
+2026-11-15 20:10:39:594 IBC: Found setting: [IBGateway]/ApiOnly=true
+2026-11-15 20:10:39:595 IBC: Found setting: [IBGateway]/TrustedIPs=127.0.0.1
+2026-11-15 20:10:39:595 IBC: Confirmed /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-15 20:10:39:595 IBC: Starting Gateway
+2026-11-15 15:10:41:711 IBC: Getting config dialog
+2026-11-15 15:10:41:711 IBC: Getting config dialog
+2026-11-15 15:10:41:712 IBC: Creating config dialog future
+2026-11-15 15:10:41:712 IBC: Getting config dialog
+2026-11-15 15:10:41:713 IBC: Waiting for config dialog future to complete
+2026-11-15 15:10:41:713 IBC: Waiting for config dialog future to complete
+2026-11-15 15:10:41:713 IBC: Getting main window
+2026-11-15 15:10:41:713 IBC: Creating main window future
+2026-11-15 15:10:42:569 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-15 15:10:42:573 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-15 15:10:42:573 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-15 15:10:42:573 IBC: Login dialog WINDOW_OPENED: LoginState is LOGGED_OUT
+2026-11-15 15:10:42:574 IBC: trading mode from settings: tradingMode=paper
+2026-11-15 15:10:42:574 IBC: Setting Trading mode = paper
+2026-11-15 15:10:42:679 IBC: Setting user name
+2026-11-15 15:10:42:680 IBC: Setting password
+2026-11-15 15:10:42:681 IBC: Login attempt: 1
+2026-11-15 15:10:42:682 IBC: trading mode from settings: tradingMode=paper
+2026-11-15 15:10:42:705 IBC: Click button: Paper Log In
+2026-11-15 15:10:43:061 IBC: Button now disabled: Paper Log In
+2026-11-15 15:10:43:085 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-15 15:10:43:086 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-15 15:10:43:087 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-15 15:10:43:093 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-15 15:10:43:093 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-15 15:10:43:093 IBC: Found Gateway main window
+2026-11-15 15:10:43:094 IBC: Got main window from future
+2026-11-15 15:10:43:094 IBC: Invoking config dialog menu
+2026-11-15 15:10:43:647 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Opened
+2026-11-15 15:10:43:654 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-15 15:10:43:654 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-15 15:10:43:654 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Activated
+2026-11-15 15:10:43:655 IBC: detected frame entitled: Connecting to server (trying for another 19 seconds)...; event=Focused
+2026-11-15 15:10:47:371 IBC: detected frame entitled: Starting application...; event=Lost focus
+2026-11-15 15:10:47:375 IBC: detected frame entitled: Starting application...; event=Closed
+2026-11-15 15:10:47:375 IBC: Login has completed
+2026-11-15 15:10:47:375 IBC: detected dialog entitled: Warning; event=Opened
+2026-11-15 15:10:47:376 IBC: Click button: I understand and accept
+2026-11-15 15:10:47:454 IBC: detected frame entitled: Starting application...; event=Deactivated
+2026-11-15 15:10:47:454 IBC: detected dialog entitled: Warning; event=Activated
+2026-11-15 15:10:47:454 IBC: detected dialog entitled: Warning; event=Focused
+2026-11-15 15:10:47:486 IBC: detected dialog entitled: DUX000000 Trader Workstation Configuration (Simulated Trading); event=Opened
+2026-11-15 15:10:47:486 IBC: Got config dialog from future
+2026-11-15 15:10:47:486 IBC: Got config dialog from future
+2026-11-15 15:10:47:486 IBC: Got config dialog from future
+2026-11-15 15:10:47:493 IBC: Setting Auto restart time
+2026-11-15 15:10:47:518 IBC: Auto restart time set to 11:45 PM
+2026-11-15 15:10:47:518 IBC: Setting ReadOnlyApi
+2026-11-15 15:10:47:626 IBC: Read-Only API checkbox is already set to: true
+2026-11-15 15:10:47:634 IBC: 'Bypass Order Precautions for API Orders' is now selected
+2026-11-15 15:10:47:634 IBC: 'Bypass Bond warning for API Orders.' is now selected
+2026-11-15 15:10:47:634 IBC: 'Bypass negative yield to worst confirmation for API Orders.' is now selected
+2026-11-15 15:10:47:634 IBC: 'Bypass Called Bond warning for API Orders' is now selected
+2026-11-15 15:10:47:635 IBC: 'Bypass "same action pair trade" warning for API orders.' is now selected
+2026-11-15 15:10:47:635 IBC: 'Bypass price-based volatility risk warning for API Orders.' is now selected
+2026-11-15 15:10:47:635 IBC: Checkbox 'Bypass US Stocks market data in shares warning for API Orders' not found
+2026-11-15 15:10:47:635 IBC: 'Bypass Redirect Order warning for Stock API Orders' is now selected
+2026-11-15 15:10:47:635 IBC: 'Bypass No Overfill Protection precaution for destinations where implied natively.' is now selected
+2026-11-15 15:10:47:635 IBC: detected dialog entitled: Warning; event=Lost focus
+2026-11-15 15:10:47:635 IBC: detected dialog entitled: Warning; event=Deactivated
+2026-11-15 15:10:47:635 IBC: detected dialog entitled: Warning; event=Closed
+2026-11-15 15:10:47:650 IBC: Configuration tasks completed
+2026-11-15 15:10:47:650 IBC: Click button: OK
+2026-11-15 15:10:47:840 IBC: detected dialog entitled: IBKR Gateway; event=Opened
+2026-11-15 15:10:47:843 IBC: Click button: OK
+2026-11-15 15:10:47:921 IBC: detected dialog entitled: IBKR Gateway; event=Activated
+2026-11-15 15:10:47:922 IBC: detected dialog entitled: IBKR Gateway; event=Focused
+2026-11-15 15:10:47:923 IBC: detected dialog entitled: IBKR Gateway; event=Lost focus
+2026-11-15 15:10:47:928 IBC: detected dialog entitled: IBKR Gateway; event=Deactivated
+2026-11-15 15:10:47:940 IBC: detected dialog entitled: IBKR Gateway; event=Closed
+2026-11-15 15:10:47:941 IBC: detected dialog entitled: DUX000000 Trader Workstation Configuration (Simulated Trading); event=Closed
+2026-11-15 15:10:48:880 IBC: detected dialog entitled: Pending Tasks; event=Closed
+2026-11-15 15:15:06:499 IBC: CommandServer: ControlFrom setting = 127.0.0.1
+2026-11-15 15:15:06:500 IBC: CommandServer accepted connection from: /127.0.0.1
+2026-11-15 15:15:06:502 IBC: Closing command channel
+2026-11-15 15:15:06:504 IBC: CommandServer: ControlFrom setting = 127.0.0.1
+2026-11-15 15:15:06:504 IBC: CommandServer accepted connection from: /127.0.0.1
+2026-11-15 15:15:06:504 IBC: CommandServer received command: STOP
+2026-11-15 15:15:06:506 IBC: Closing command channel
+2026-11-15 15:15:06:507 IBC: Login has completed: exiting via [File, Close] menu
+2026-11-15 15:15:06:507 IBC: Getting main window
+2026-11-15 15:15:06:507 IBC: Main window already found
+2026-11-15 15:15:06:626 IBC: detected dialog entitled: Shutdown progress; event=Opened
+2026-11-15 15:15:06:626 IBC: CommandServer closing
+2026-11-15 15:15:06:626 IBC: detected dialog entitled: Shutdown progress; event=Activated
+2026-11-15 15:15:06:626 IBC: CommandServer is shutdown
+2026-11-15 15:15:06:627 IBC: detected dialog entitled: Shutdown progress; event=Focused
+2026-11-15 20:15:34:229 IBC: version: 3.24.2
+2026-11-15 20:15:34:233 IBC: using default settings provider: ini file is /run/brokersre/config.ini
+2026-11-15 20:15:34:233 IBC: using default login manager: will get username and password from settings; FIX username and password (if required) from settings
+2026-11-15 20:15:34:233 IBC: using default main window manager
+2026-11-15 20:15:34:233 IBC: using default trading mode manager: constructor parameter args but trading mode not present - will be taken from settings
+2026-11-15 20:15:34:234 IBC: using default config dialog manager
+2026-11-15 20:15:34:244 IBC: CommandServer is starting with port 7462
+2026-11-15 20:15:34:269 IBC: CommandServer listening on address: 127.0.0.1 port: 7462
+2026-11-15 20:15:34:270 IBC: CommandServer started and is ready to accept commands
+2026-11-15 20:15:34:389 IBC: TWS Settings directory is: /home/ibgateway/Jts/settings
+2026-11-15 20:15:34:390 IBC: Starting session: will exit if login dialog is not displayed within 60 seconds
+2026-11-15 20:15:34:397 IBC: Ensuring /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-15 20:15:34:398 IBC: Found setting: [Logon]/s3store=true
+2026-11-15 20:15:34:398 IBC: Found setting: [Logon]/Locale=en
+2026-11-15 20:15:34:398 IBC: Found setting: [Logon]/displayedproxymsg=1
+2026-11-15 20:15:34:398 IBC: Found setting: [Logon]/UseSSL=true
+2026-11-15 20:15:34:398 IBC: Found setting: [IBGateway]/ApiOnly=true
+2026-11-15 20:15:34:398 IBC: Found setting: [IBGateway]/TrustedIPs=127.0.0.1
+2026-11-15 20:15:34:398 IBC: Confirmed /home/ibgateway/Jts/settings/jts.ini contains required minimal lines
+2026-11-15 20:15:34:398 IBC: Starting Gateway
+2026-11-15 15:15:37:233 IBC: Getting config dialog
+2026-11-15 15:15:37:233 IBC: Getting config dialog
+2026-11-15 15:15:37:234 IBC: Creating config dialog future
+2026-11-15 15:15:37:234 IBC: Getting config dialog
+2026-11-15 15:15:37:235 IBC: Waiting for config dialog future to complete
+2026-11-15 15:15:37:235 IBC: Waiting for config dialog future to complete
+2026-11-15 15:15:37:235 IBC: Getting main window
+2026-11-15 15:15:37:235 IBC: Creating main window future
+2026-11-15 15:15:38:112 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-15 15:15:38:116 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-15 15:15:38:116 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-15 15:15:38:116 IBC: Login dialog WINDOW_OPENED: LoginState is LOGGED_OUT
+2026-11-15 15:15:38:117 IBC: trading mode from settings: tradingMode=paper
+2026-11-15 15:15:38:117 IBC: Setting Trading mode = paper
+2026-11-15 15:15:38:217 IBC: Setting user name
+2026-11-15 15:15:38:218 IBC: Setting password
+2026-11-15 15:15:38:219 IBC: Login attempt: 1
+2026-11-15 15:15:38:220 IBC: trading mode from settings: tradingMode=paper
+2026-11-15 15:15:38:243 IBC: Click button: Paper Log In
+2026-11-15 15:15:38:603 IBC: Button now disabled: Paper Log In
+2026-11-15 15:15:38:632 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-15 15:15:38:633 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-15 15:15:38:634 IBC: detected frame entitled: IBKR Gateway; event=Activated
+2026-11-15 15:15:38:640 IBC: detected frame entitled: IBKR Gateway; event=Focused
+2026-11-15 15:15:38:640 IBC: detected frame entitled: IBKR Gateway; event=Opened
+2026-11-15 15:15:38:641 IBC: Found Gateway main window
+2026-11-15 15:15:38:641 IBC: Got main window from future
+2026-11-15 15:15:38:641 IBC: Invoking config dialog menu
+2026-11-15 15:15:38:787 IBC: detected frame entitled: Authenticating...; event=Opened
+2026-11-15 15:15:38:787 IBC: detected frame entitled: IBKR Gateway; event=Lost focus
+2026-11-15 15:15:38:787 IBC: detected frame entitled: IBKR Gateway; event=Deactivated
+2026-11-15 15:15:38:787 IBC: detected frame entitled: Authenticating...; event=Activated
+2026-11-15 15:15:38:788 IBC: detected frame entitled: Authenticating...; event=Focused
+2026-11-15 15:15:41:566 IBC: detected frame entitled: Starting application...; event=Lost focus
+2026-11-15 15:15:41:566 IBC: detected frame entitled: Starting application...; event=Closed
+2026-11-15 15:15:41:566 IBC: Login has completed
+2026-11-15 15:15:41:567 IBC: detected dialog entitled: Warning; event=Opened
+2026-11-15 15:15:41:567 IBC: Click button: I understand and accept
+2026-11-15 15:15:41:645 IBC: detected frame entitled: Starting application...; event=Deactivated
+2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Activated
+2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Focused
+2026-11-15 15:15:41:683 IBC: detected dialog entitled: DUX000000 Trader Workstation Configuration (Simulated Trading); event=Opened
+2026-11-15 15:15:41:683 IBC: Got config dialog from future
+2026-11-15 15:15:41:683 IBC: Got config dialog from future
+2026-11-15 15:15:41:683 IBC: Got config dialog from future
+2026-11-15 15:15:41:688 IBC: Setting ReadOnlyApi
+2026-11-15 15:15:41:821 IBC: Read-Only API checkbox is already set to: true
+2026-11-15 15:15:41:821 IBC: Setting Auto restart time
+2026-11-15 15:15:41:847 IBC: Auto restart time already set to 11:45 PM
+2026-11-15 15:15:41:857 IBC: 'Bypass Order Precautions for API Orders' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass Bond warning for API Orders.' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass negative yield to worst confirmation for API Orders.' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass Called Bond warning for API Orders' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass "same action pair trade" warning for API orders.' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass price-based volatility risk warning for API Orders.' is already selected
+2026-11-15 15:15:41:857 IBC: Checkbox 'Bypass US Stocks market data in shares warning for API Orders' not found
+2026-11-15 15:15:41:857 IBC: 'Bypass Redirect Order warning for Stock API Orders' is already selected
+2026-11-15 15:15:41:857 IBC: 'Bypass No Overfill Protection precaution for destinations where implied natively.' is already selected
+2026-11-15 15:15:41:857 IBC: detected dialog entitled: Warning; event=Lost focus
+2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Deactivated
+2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Closed
+2026-11-15 15:15:41:877 IBC: Configuration tasks completed
+2026-11-15 15:15:41:878 IBC: Click button: OK
+2026-11-15 15:15:41:957 IBC: detected dialog entitled: DUX000000 Trader Workstation Configuration (Simulated Trading); event=Closed
