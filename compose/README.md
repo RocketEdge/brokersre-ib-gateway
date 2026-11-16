@@ -76,15 +76,16 @@ foreach ($instance in 'live', 'paper') {
 }
 ```
 
-Linux, macOS, WSL or Git Bash:
+Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 
 <!-- tested by tests/bats/ci/doc-commands.bats -->
 
-```bash
+```sh
 for instance in live paper; do
   mkdir -p "compose/secrets/${instance}"
-  read -r -p "IBKR username for ${instance}: " u && printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
-  read -r -s -p "IBKR password for ${instance}: " p && printf '%s' "$p" > "compose/secrets/${instance}/ib-password" && echo
+  printf 'IBKR username for %s: ' "${instance}"; IFS= read -r u; printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
+  printf 'IBKR password for %s: ' "${instance}"; stty -echo; IFS= read -r p; stty echo; echo
+  printf '%s' "$p" > "compose/secrets/${instance}/ib-password"
 done
 unset u p
 ```

@@ -57,10 +57,10 @@ From the repository folder, next to a gateway started from `compose/docker-compo
 
    <!-- tested by tests/bats/ci/doc-commands.bats -->
 
-   ```bash
+   ```sh
    mkdir -p compose/secrets/vector
-   read -r -s -p 'Loki password: ' p && printf '%s' "$p" > compose/secrets/vector/loki_password && echo
-   unset p
+   printf 'Loki password: '; stty -echo; IFS= read -r p; stty echo; echo
+   printf '%s' "$p" > compose/secrets/vector/loki_password; unset p
    printf '%s' '<loki user>' > compose/secrets/vector/loki_username
    ```
 

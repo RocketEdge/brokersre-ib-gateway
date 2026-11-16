@@ -85,19 +85,20 @@ try { [IO.File]::WriteAllText("$PWD\compose\secrets\ib-password", [Runtime.Inter
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 ```
 
-Linux, macOS, WSL or Git Bash:
+Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 
 <!-- tested by tests/bats/ci/doc-commands.bats -->
 
-```bash
+```sh
 mkdir -p compose/secrets
-read -r -p 'IBKR username: ' u && printf '%s' "$u" > compose/secrets/ib-username
-read -r -s -p 'IBKR password: ' p && printf '%s' "$p" > compose/secrets/ib-password && echo
-unset u p
+printf 'IBKR username: '; IFS= read -r u; printf '%s' "$u" > compose/secrets/ib-username
+printf 'IBKR password: '; stty -echo; IFS= read -r p; stty echo; echo
+printf '%s' "$p" > compose/secrets/ib-password; unset u p
 ```
 
 You should see two files, `compose/secrets/ib-username` and `compose/secrets/ib-password`, and
-the password never appeared on screen.
+the password never appeared on screen. The files hold exactly what you typed, blanks at either
+end and backslashes included.
 
 ### 2. Start the gateway
 
