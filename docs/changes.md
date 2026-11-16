@@ -41,7 +41,11 @@ Next step.
   warning, and a test pins that memory mode logs neither; the README's channel check
   commands name their compose files (copied as written they stopped with "no
   configuration file provided", seen 2026-11-16) and the README says what
-  `docker compose ...` stands for, kept so by a test over the README and the runbooks. Also an end-to-end
+  `docker compose ...` stands for, kept so by a test over the README and the runbooks. A
+  fifth round: a test message links the runbook index (its link `<base>/test` led to a
+  page that does not exist, seen 2026-11-17 through a local ntfy server), and a final
+  save at the stop that fails like the write before it logs `notifier_state_unsaved`
+  (it logged nothing). Also an end-to-end
   check that raced (it read the phase once right after `docker stop`) now waits for
   `stopped`.
 - **Result:** the tests added for defect 1, as first committed, measured against the 0.2.1
@@ -64,7 +68,7 @@ Next step.
   fourth review's 9, the 7 that still apply are killed; the one that swallows the stop's
   cancellation hangs the whole suite (an earlier test waits for a stop that never ends)
   and fails `test_notifier_service.py` run on its own. Sidecar
-  suite 879 to 968 passed (2 skipped). Against a real paper login (2026-11-16, 06:32 to
+  suite 879 to 986 passed (2 skipped). Against a real paper login (2026-11-16, 06:32 to
   06:34 UTC, a local build of this branch at `773d21f`, the stable gateway `7773ff7`,
   fresh volumes, Teams unreachable, a local webhook): a graceful stop and start of the
   gateway queued `firing` at 06:32:51.083 and `resolved` at 06:32:53.100 while Teams

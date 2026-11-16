@@ -213,10 +213,10 @@ Four rules about what counts:
   restart (below). The state is written before the messages of an evaluation are queued,
   so a message a channel can accept is normally on disk as in flight. Not when the write
   fails, does not return within 5 s, or is not started (an earlier write still runs, or
-  one failed less than 30 s ago): the messages then go out anyway and
+  a failed one started less than 30 s ago): the messages then go out anyway and
   `notify_queued_unsaved` (warning) says so. Not when the stop interrupts the write
   either: `notify_queued_at_stop` (information), and the save after the stop flush
-  records them. In memory mode (no writable state file, reported once at the start)
+  records them, or `notifier_state_unsaved` (warning) says it could not. In memory mode (no writable state file, reported once at the start)
   nothing is on disk at all, and no message is logged for it.
 - **Whoever is told it is over is told once.** A condition that clears while a message
   about it is still out ends at once, and the late result decides: a channel accepted it,

@@ -124,10 +124,10 @@ container must be created again: `docker compose ... down` (the volumes stay) an
 above or sidecar 0.2.1 or later.
 
 Check a configuration and test the channels without starting the gateway (`--no-deps`:
-without it compose starts the gateway first, which logs in):
+without it compose starts the gateway first, which logs in). In `compose/`, as in the quick
+start:
 
 ```bash
-cd compose
 docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar check-config
 docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar notify test
 ```
@@ -417,21 +417,26 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
 - The state is written before an evaluation's messages are queued, so that a message a
   channel may accept is on disk as in flight when the sidecar is killed. A stalled disk
   therefore delays an alert by up to 5 seconds, once per stalled write; while that write
-  hangs, or for 30 seconds after a failed one, messages go out without waiting, and
-  `notify_queued_unsaved` (a warning) says they were queued before their state was
-  written. A stop that interrupts the write logs `notify_queued_at_stop` instead (no
-  warning: the save after the stop flush records them).
+  hangs, or within 30 seconds of the start of a failed one, messages go out without
+  waiting, and `notify_queued_unsaved` (a warning) says they were queued before their
+  state was written. A stop that interrupts the write logs `notify_queued_at_stop`
+  instead (no warning: the save after the stop flush records them, and
+  `notifier_state_unsaved` says when it cannot). In memory mode (no writable state
+  directory at the start, reported once then) nothing is written and neither is logged.
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
   `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write), and written once
   more when the sidecar stops, after the queued messages were flushed (if an earlier
-  write is still hanging then, the log says `notifier_state_unsaved`). After a restart a
+  write is still hanging then, or that last write fails, the log says
+  `notifier_state_unsaved`). After a restart a
   delivered alert is not repeated and an undelivered one is announced, not forgotten. A
   message the file shows in flight is sent again while its condition lasts, and if the
   condition has cleared it gets its `resolved`: the file is written once per evaluation,
   so after a hard kill it cannot tell a message no channel had taken from one a channel
   accepted a moment before; an open incident is worse than a `resolved` nobody needed.
-  When the file cannot be written the state is kept in memory, `/status` says so, and the
-  write is tried again every 30 seconds. Its format is
+  When the file cannot be written the state is kept in memory and `/status` says so. A
+  write that failed or overran is tried again 30 seconds after it started; a state
+  directory that was not writable at the start is not tried again until the sidecar
+  restarts. Its format is
   `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read (a
   message it shows not delivered counts as possibly received: up to 0.2.1 the sidecar did
   not save after its stop flush). A sidecar older than 0.2.2 ignores a v3 file: after a
