@@ -18,7 +18,7 @@ from brokersre_sidecar.notify.ladder import LadderEngine, Moment, Outbound
 from brokersre_sidecar.notify.message import MessageFactory
 from brokersre_sidecar.notify.rules import RuleEngine
 from brokersre_sidecar.notify.store import NotifierStore
-from brokersre_sidecar.vocab import UNKNOWN_PHASE, MessageKind, ProbeStatus
+from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, MessageKind, ProbeStatus
 from brokersre_sidecar.worker import SerialWorker
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ class Notifier:
         self._save_timeout_s = save_timeout_s
         self._saver = SerialWorker("sidecar-state")
         self._write: asyncio.Future[None] | None = None  # the latest write started
+        self._waiting: frozenset[tuple[AlertClass, datetime]] = frozenset()
         self._can_save = False
         self._unsaved = False
         self._save_retry_at: float | None = None
@@ -156,8 +157,38 @@ class Notifier:
                 channels=list(due.channels),
                 attempt=due.attempt,
             )
+        self._log_waiting()
         if self._ladder.dirty or self._unsaved:
             await self._save()
+
+    def _log_waiting(self) -> None:
+        """Log when a cleared alert starts and stops waiting for its announcement's result.
+
+        While it waits, nothing new is sent for its class; without these two events that
+        hold would be invisible. ``decided`` does not say which way: the ``notify_queued``
+        of its ``resolved`` follows if a channel had accepted the announcement.
+        """
+        now_waiting = self._ladder.waiting()
+        for alert, since in sorted(now_waiting - self._waiting, key=_by_class):
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_resolution_waiting",
+                "the condition cleared while a message about it was being sent; its "
+                "resolution waits for that result, and the class sends nothing new until then",
+                alert_class=alert.value,
+                since=format_utc(since),
+            )
+        for alert, since in sorted(self._waiting - now_waiting, key=_by_class):
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_resolution_decided",
+                "the result is in: the resolution is sent if a channel had accepted",
+                alert_class=alert.value,
+                since=format_utc(since),
+            )
+        self._waiting = now_waiting
 
     def _delivered(self, due: Outbound, accepted: bool) -> None:
         """Tell the ladder whether a notification reached at least one channel.
@@ -254,6 +285,11 @@ class Notifier:
             state_persistence=self._persistence,
             state_persistence_reason=self._persistence_reason,
         )
+
+
+def _by_class(item: tuple[AlertClass, datetime]) -> tuple[str, datetime]:
+    """Sort key: class name, then episode start (stable log order)."""
+    return item[0].value, item[1]
 
 
 def _late_resolution(cleared_at: datetime, active_again_since: datetime | None) -> str:

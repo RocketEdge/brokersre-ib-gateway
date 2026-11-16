@@ -380,9 +380,16 @@ def test_a_late_resolution_keeps_its_facts_across_a_restart() -> None:
 def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
     engine = ladder()
     stray = Outbound(MessageKind.FIRING, AlertClass.DISK_LOW, PRIMARY, since=at(0))
-    engine.record_result(stray, delivered=True, now=at(0))  # a class it never saw
+    engine.record_started(stray)  # a class it never saw
+    engine.record_result(stray, delivered=True, now=at(0))
     (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
     engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))
+    engine.record_started(first)
+    engine.record_started(first)  # a second start of the same message marks nothing new
+    assert engine.dirty is True
+    engine.export_state()
+    engine.record_started(first)
+    assert engine.dirty is False
     never_sent = Outbound(
         MessageKind.ESCALATION,
         AlertClass.LOGIN_FAILED,
@@ -390,6 +397,7 @@ def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
         escalation_step=1,
         since=at(0),
     )
+    engine.record_started(never_sent)
     engine.record_result(never_sent, delivered=True, now=at(6))
     assert engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(7)) == []  # still waiting
     engine.record_result(first, delivered=False, now=at(8))
@@ -403,6 +411,9 @@ def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
         escalation_step=2,
         since=again.since,
     )
+    engine.record_started(other_step)
+    engine.record_started(again)
+    engine.record_started(again)
     engine.record_result(other_step, delivered=True, now=at(21))
     assert engine.active()[0].notified is False
 

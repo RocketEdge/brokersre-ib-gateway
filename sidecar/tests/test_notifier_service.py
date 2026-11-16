@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import threading
 from collections.abc import Callable
@@ -524,6 +525,52 @@ async def test_a_late_resolution_tells_its_own_facts_and_the_new_episode_follows
         "active again since 2026-11-12T15:00:05.000Z"
     )
     assert [a.alert_class for a in world.notifier.snapshot().active_alerts] == ["gateway_stopped"]
+
+
+def events(caplog: pytest.LogCaptureFixture, name: str) -> list[dict[str, object]]:
+    """The fields of every structured log record of event ``name``."""
+    return [
+        dict(record.__dict__["sidecar_fields"])
+        for record in caplog.records
+        if record.__dict__.get("sidecar_event") == name
+    ]
+
+
+async def test_a_resolution_that_waits_for_a_result_is_logged_and_so_is_its_end(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Review of #32 (P4): while a cleared alert waits for its announcement's result,
+    # nothing new is sent for that class, and nothing said so.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    world = World(tmp_path)
+    teams = LateAccept()
+    world.dispatcher = Dispatcher({"teams": teams}, world.clock, RecordingSleep(world.clock))
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    worker = asyncio.ensure_future(world.dispatcher.run_channel("teams"))
+    try:
+        world.gateway = {"phase": "stopped"}
+        await world.notifier.tick()
+        await until(lambda: teams.taken == 1)
+        world.gateway = {"phase": "logged-in"}
+        world.clock.advance(3)
+        await world.notifier.tick()
+        assert events(caplog, "notify_resolution_waiting") == [
+            {"alert_class": "gateway_stopped", "since": "2026-11-12T15:00:00.000Z"}
+        ]
+        assert events(caplog, "notify_resolution_decided") == []
+        teams.gate.set()
+        await until(lambda: len(teams.sent) == 1)
+        world.clock.advance(1)
+        await world.notifier.tick()
+        await world.dispatcher.drain()
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    assert events(caplog, "notify_resolution_decided") == [
+        {"alert_class": "gateway_stopped", "since": "2026-11-12T15:00:00.000Z"}
+    ]
+    assert len(events(caplog, "notify_resolution_waiting")) == 1
 
 
 async def test_the_heartbeat_says_what_it_cannot_vouch_for(tmp_path: Path) -> None:

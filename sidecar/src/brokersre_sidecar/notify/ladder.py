@@ -643,6 +643,21 @@ class LadderEngine:
             )
         return tuple(listed)
 
+    def waiting(self) -> frozenset[tuple[AlertClass, datetime]]:
+        """Return the ended episodes whose resolution still waits for a delivery result.
+
+        While one of a class is listed, nothing new is sent for that class (see the
+        module rules); each message it waits for holds a channel for at most the
+        dispatcher's bound (four tries of 10 s plus back-off, 48.4 s with the defaults)
+        times its place in that channel's queue.
+        """
+        return frozenset(
+            (alert, closing.since)
+            for alert, state in self._state.classes.items()
+            for closing in state.closing
+            if closing.waiting
+        )
+
     def export_state(self) -> dict[str, Any]:
         """Return the state as a JSON-serialisable mapping and clear ``dirty``."""
         classes: dict[str, dict[str, Any]] = {}
