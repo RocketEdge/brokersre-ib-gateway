@@ -81,16 +81,20 @@ Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 <!-- tested by tests/bats/ci/doc-commands.bats -->
 
 ```sh
-for instance in live paper; do
-  mkdir -p "compose/secrets/${instance}"
-  printf 'IBKR username for %s: ' "${instance}"; IFS= read -r u; printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
-  printf 'IBKR password for %s: ' "${instance}"; stty -echo; IFS= read -r p; stty echo; echo
-  printf '%s' "$p" > "compose/secrets/${instance}/ib-password"
-done
-unset u p
+(
+  trap 'stty echo; exit 130' INT
+  for instance in live paper; do
+    mkdir -p "compose/secrets/${instance}"
+    printf 'IBKR username for %s: ' "${instance}"; IFS= read -r u; printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
+    printf 'IBKR password for %s: ' "${instance}"; stty -echo; IFS= read -r p; stty echo; echo
+    printf '%s' "$p" > "compose/secrets/${instance}/ib-password"
+  done
+)
 ```
 
-You should see four files, and no password appeared on screen. Then run the username check
+You should see four files, and no password appeared on screen. The parentheses keep a paste
+working in every shell and Ctrl-C safe
+([quick start](../README.md#1-store-the-two-secrets-as-files)). Then run the username check
 from the section above.
 
 ### 2. Start

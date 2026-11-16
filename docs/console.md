@@ -56,8 +56,11 @@ Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 <!-- tested by tests/bats/ci/doc-commands.bats -->
 
 ```sh
-printf 'VNC password: '; stty -echo; IFS= read -r p; stty echo; echo
-printf '%s' "$p" > compose/secrets/vnc-password; unset p
+(
+  trap 'stty echo; exit 130' INT
+  printf 'VNC password: '; stty -echo; IFS= read -r p; stty echo; echo
+  printf '%s' "$p" > compose/secrets/vnc-password
+)
 ```
 
 Windows (PowerShell 5.1 or 7):

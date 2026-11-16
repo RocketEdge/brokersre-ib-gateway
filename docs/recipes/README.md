@@ -58,10 +58,13 @@ From the repository folder, next to a gateway started from `compose/docker-compo
    <!-- tested by tests/bats/ci/doc-commands.bats -->
 
    ```sh
-   mkdir -p compose/secrets/vector
-   printf 'Loki password: '; stty -echo; IFS= read -r p; stty echo; echo
-   printf '%s' "$p" > compose/secrets/vector/loki_password; unset p
-   printf '%s' '<loki user>' > compose/secrets/vector/loki_username
+   (
+     trap 'stty echo; exit 130' INT
+     mkdir -p compose/secrets/vector
+     printf 'Loki password: '; stty -echo; IFS= read -r p; stty echo; echo
+     printf '%s' "$p" > compose/secrets/vector/loki_password
+     printf '%s' '<loki user>' > compose/secrets/vector/loki_username
+   )
    ```
 
    Check: the folder holds exactly the files the recipe names. On Windows write them as in

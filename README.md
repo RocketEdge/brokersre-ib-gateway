@@ -90,15 +90,20 @@ Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 <!-- tested by tests/bats/ci/doc-commands.bats -->
 
 ```sh
-mkdir -p compose/secrets
-printf 'IBKR username: '; IFS= read -r u; printf '%s' "$u" > compose/secrets/ib-username
-printf 'IBKR password: '; stty -echo; IFS= read -r p; stty echo; echo
-printf '%s' "$p" > compose/secrets/ib-password; unset u p
+(
+  trap 'stty echo; exit 130' INT
+  mkdir -p compose/secrets
+  printf 'IBKR username: '; IFS= read -r u; printf '%s' "$u" > compose/secrets/ib-username
+  printf 'IBKR password: '; stty -echo; IFS= read -r p; stty echo; echo
+  printf '%s' "$p" > compose/secrets/ib-password
+)
 ```
 
 You should see two files, `compose/secrets/ib-username` and `compose/secrets/ib-password`, and
 the password never appeared on screen. The files hold exactly what you typed, blanks at either
-end and backslashes included.
+end and backslashes included. The parentheses make the shell read the whole block before it
+asks anything, so it also works when pasted into a shell without bracketed paste; Ctrl-C at a
+prompt stops it, turns echo back on and writes no password file.
 
 ### 2. Start the gateway
 
