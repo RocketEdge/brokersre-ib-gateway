@@ -340,8 +340,12 @@ pricing pages). Retention beyond the included days is extra.
   plus one observed paper id, not a specification. An id written without its prefix, with
   more than two letters after the prefix, or directly after an upper-case letter or a digit
   (`XDU1234567`, `ACCTDUR123456`), is not recognised; neither is one directly followed by a
-  letter (`DUR123456x`, `U1234567F`). The price of the shape: a word that has it is
-  rewritten although it is no id (`id12345`, `USD100000`).
+  letter (`DUR123456x`, `U1234567F`), nor one in lower case glued to a lower-case word
+  (`acctdur123456`). Word boundaries are ASCII, so an id next to a letter of another script
+  is recognised (`口座DU1234567`, `DU1234567の`, `éDU1234567`). Only string values are
+  rewritten, never object keys: a key that is an id (`{"DU1234567": ...}`) is shipped as it
+  is. The price of the shape: a word that has it is rewritten although it is no id
+  (`id12345`, `USD100000`).
 
 ## Security
 

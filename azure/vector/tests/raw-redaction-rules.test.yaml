@@ -98,6 +98,24 @@ tests:
             source: |
               assert_eq!(.RawData, "a [ACCT:…567] b [ACCT:…567] c [ACCT:…345] d [ACCT:…456] e [ACCT:…321] f acct[ACCT:…567] g acct_[ACCT:…678]_x h " + "\\" + "n[ACCT:…789] i " + "\\" + "t[ACCT:…789] j =[ACCT:…765]; k ([ACCT:…456]) l [ACCT:…321].")
 
+  # Word boundaries are ASCII: a letter of another script (Japanese text puts particles
+  # directly after a token; the IBKR Japan pages are a source of the shape) or an accented
+  # letter next to an id must not hide it. With Unicode boundaries all three stayed whole.
+  - name: redaction - an id glued to Japanese text or to an accented letter is caught
+    inputs:
+      - insert_at: raw_gate
+        type: vrl
+        source: |
+          .message = "a \u{53E3}\u{5EA7}DU1234567 b DUR234567\u{306E} c \u{E9}I3456789 d \u{E9}t\u{E9} 2026"
+          .file = "/var/log/ibgateway/ibc/ibc.log"
+          .timestamp = now()
+    outputs:
+      - extract_from: raw_out
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.RawData, "a \u{53E3}\u{5EA7}[ACCT:…567] b [ACCT:…567]\u{306E} c \u{E9}[ACCT:…789] d \u{E9}t\u{E9} 2026")
+
   # First letter not D, U, F or I; an id behind another capital letter; ten digits; a third
   # further letter; four digits; a four-letter word; an id followed by letters.
   - name: redaction - a word that differs from the shape of an id in one respect is left alone
