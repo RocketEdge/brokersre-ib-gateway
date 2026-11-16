@@ -365,6 +365,22 @@ def test_a_late_resolution_while_the_verdict_is_unknown_still_lets_the_next_thro
     assert (second.kind, second.since) == (MessageKind.FIRING, at(2))
 
 
+def test_owed_resolutions_go_out_oldest_first() -> None:
+    # Two owed resolutions of one class can only come from a saved state (while one waits,
+    # the class sends nothing); whatever the file's order, the older episode goes first.
+    newer = {"since": "2026-11-12T15:01:00.000Z", "waiting": [], "heard": True}
+    older = {"since": "2026-11-12T15:00:00.000Z", "waiting": [], "heard": True}
+    engine = ladder()
+    engine.import_state(
+        {
+            "schema": "brokersre.sidecar.notifier-state.v3",
+            "classes": {"login_failed": {"active": False, "closing": [newer, older]}},
+        }
+    )
+    first, second = engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(120))
+    assert (first.since, second.since) == (at(0), at(60))
+
+
 def test_a_late_resolution_keeps_its_facts_across_a_restart() -> None:
     before = ladder()
     (first,) = before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
@@ -743,6 +759,7 @@ def test_no_heartbeat_while_an_alert_is_active_but_it_follows_once_things_clear(
 def test_no_heartbeat_while_a_cleared_alert_waits_for_its_result_unless_its_class_is_off() -> None:
     engine = ladder(heartbeat_time=time(0, 0))
     (firing,) = engine.step({AlertClass.CLOCK_SKEW: ACTIVE}, at(0))
+    engine.record_started(firing)  # so the saved state owes a resolution after a restart
     engine.step({AlertClass.CLOCK_SKEW: INACTIVE}, at(1))
     assert engine.step({}, at(2)) == []  # its resolution is still undecided
     saved = json.loads(json.dumps(engine.export_state()))
