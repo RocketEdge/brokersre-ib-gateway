@@ -106,6 +106,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# A leftover of a killed run with the same process id would make the next volume not fresh.
+leftover="$(
+  docker ps -aq --filter "name=${PROJECT}"
+  docker volume ls -q --filter "name=${PROJECT}"
+  docker network ls -q --filter "name=${PROJECT}"
+)"
+if [ -n "${leftover}" ]; then
+  echo "FAIL  leftover: containers, volumes or networks named ${PROJECT}* exist already; remove them and run again"
+  exit 1
+fi
+
 # volume_owner <volume>: "uid:gid mode" of the volume's top directory. It is read through a
 # mount point that does not exist in the image, so the probe itself changes nothing.
 volume_owner() {
@@ -152,16 +163,39 @@ for override in docker-compose.sidecar.yml docker-compose.sidecar-shared.yml; do
     fail "${override} config" "$(tail -3 "${work}/config.err" | tr '\n' ' ')"
     continue
   fi
-  # Nothing starts unless the configuration cannot log in and cannot reach anything.
-  if ! py '
+  # Nothing starts unless the configuration cannot log in and cannot reach anything: every
+  # service that runs the gateway image has IBC_LAUNCH=no, every network is internal, every
+  # service is on those networks or in another service's namespace, and no port is published.
+  # Exit 2 means the check itself could not run (for example the image is missing).
+  py '
 import json, sys
-d = json.load(sys.stdin)
-gateway = d["services"]["ib-gateway"]
+try:
+    d = json.load(sys.stdin)
+    services = d["services"]
+except Exception:
+    sys.exit(2)
 networks = d.get("networks", {})
-ok = gateway["environment"].get("IBC_LAUNCH") == "no" and networks and all(n.get("internal") is True for n in networks.values())
-sys.exit(0 if ok else 1)
-' <"${work}/config.json"; then
-    fail "${override} safety" "the resolved configuration does not have IBC_LAUNCH=no and an internal network; nothing was started"
+problems = []
+if not networks or not all(n.get("internal") is True for n in networks.values()):
+    problems.append("a network that is not internal")
+for name, s in services.items():
+    image = str(s.get("image", ""))
+    if "brokersre-ib-gateway" in image and "sidecar" not in image and s.get("environment", {}).get("IBC_LAUNCH") != "no":
+        problems.append(name + " without IBC_LAUNCH=no")
+    mode = s.get("network_mode")
+    if mode is not None and not str(mode).startswith("service:"):
+        problems.append(name + " with network_mode " + str(mode))
+    if s.get("ports"):
+        problems.append(name + " publishes ports")
+print("; ".join(problems))
+sys.exit(1 if problems else 0)
+' <"${work}/config.json" >"${work}/safety.txt"
+  safety=$?
+  if [ "${safety}" -eq 2 ]; then
+    fail "${override} safety" "the resolved configuration could not be evaluated; nothing was started"
+    continue
+  elif [ "${safety}" -ne 0 ]; then
+    fail "${override} safety" "$(cat "${work}/safety.txt"); nothing was started"
     continue
   fi
   # The mount as compose understands it: read-only, and nocopy so that the owner of a sidecar
