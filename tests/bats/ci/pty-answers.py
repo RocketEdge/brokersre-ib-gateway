@@ -225,6 +225,12 @@ def interactive_shell(
             lines.append("unset zle_bracketed_paste")
         rc = os.path.join(home, ".zshrc")
         env["ZDOTDIR"] = home
+        # .zshenv is read before /etc/zsh/zshrc: without GLOBAL_RCS no host start-up file
+        # runs. Ubuntu's runs compinit, which on the GitHub runner stopped at "Ignore
+        # insecure directories and continue [y] or abort compinit [n]?" (a writable fpath
+        # directory), so the test's prompt never came.
+        with open(os.path.join(home, ".zshenv"), "w", encoding="utf-8") as zshenv:
+            zshenv.write("unsetopt GLOBAL_RCS\n")
         argv = [shell, "-i"]
     else:
         rc = os.path.join(home, "shrc")
