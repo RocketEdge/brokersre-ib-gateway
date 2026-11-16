@@ -7,8 +7,12 @@ exponential back-off and jitter; a full outbox drops its oldest message (the new
 matters most). Every outcome is counted and visible in ``/status`` and ``/metrics``.
 
 The caller can ask to be told the outcome of a message across all its channels: the
-``on_done`` callback receives True when at least one channel accepted it. That is what lets
-the ladder treat an alert as notified only when somebody could actually have received it.
+``on_done`` callback receives True as soon as the first channel accepted it, without
+waiting for the others, and False once every channel failed or dropped it. That is what
+lets the ladder treat an alert as notified only when somebody could actually have received
+it, and know it while the condition is still there: a slow or dead channel (Teams retrying
+an unreachable host for eight seconds) must not hold back the news that another channel
+already told a person.
 """
 
 from __future__ import annotations
@@ -31,23 +35,30 @@ from brokersre_sidecar.notify.message import Message
 _LOGGER = logging.getLogger(__name__)
 
 OnDone = Callable[[bool], None]
-"""Called once per message with True when at least one channel accepted it."""
+"""Called once per message: True at the first acceptance, False when no channel accepted."""
 
 
 @dataclass(slots=True)
 class _Delivery:
-    """Outcome of one message across the channels it was queued for."""
+    """Outcome of one message across the channels it was queued for.
+
+    Invariant: ``on_done`` is called exactly once, with True at the first channel that
+    accepts (the other channels may still be working on the message), or with False after
+    the last channel gave up or dropped it, when none accepted.
+    """
 
     remaining: int
     on_done: OnDone | None
-    accepted: bool = False
+    reported: bool = False
 
     def settle(self, accepted: bool) -> None:
-        """Record the final outcome of one channel; report when every channel is done."""
-        self.accepted = self.accepted or accepted
+        """Record the final outcome of one channel; report the first acceptance at once."""
         self.remaining -= 1
-        if self.remaining == 0 and self.on_done is not None:
-            self.on_done(self.accepted)
+        if self.reported or self.on_done is None:
+            return
+        if accepted or self.remaining == 0:
+            self.reported = True
+            self.on_done(accepted)
 
 
 @dataclass(slots=True)
@@ -123,8 +134,9 @@ class Dispatcher:
         Args:
             message: The message.
             channels: Channel names; unknown names are ignored.
-            on_done: Called once with True when at least one channel accepted the message,
-                with False when every channel failed, dropped it or none was eligible.
+            on_done: Called once: with True as soon as one channel accepted the message
+                (the others may still be sending it), with False when every channel
+                failed, dropped it or none was eligible.
         """
         targets = [
             name

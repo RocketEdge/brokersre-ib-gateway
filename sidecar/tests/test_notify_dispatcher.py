@@ -232,6 +232,26 @@ async def test_the_caller_learns_that_at_least_one_channel_accepted_the_message(
     assert outcome.reported == [True]  # once, although two channels were involved
 
 
+async def test_the_first_acceptance_is_reported_without_waiting_for_a_slow_channel() -> None:
+    # Observed 2026-11-16: the webhook accepted at once, Teams failed 8 s later, and the
+    # ladder heard "delivered" only then, after the condition had already cleared.
+    slow = ScriptedChannel("teams", DeliveryError("connect", retryable=False))
+    fast = ScriptedChannel("webhook")
+    slow.gate = asyncio.Event()
+    dispatcher, _ = dispatcher_for(slow, fast)
+    outcome = Outcomes()
+    async with running(dispatcher):
+        dispatcher.enqueue(make_message(), ["webhook", "teams"], outcome)
+        async with asyncio.timeout(2):
+            while not outcome.reported:  # noqa: ASYNC110
+                await asyncio.sleep(0)
+        assert outcome.reported == [True]
+        assert slow.sent == []
+        slow.gate.set()
+        await dispatcher.drain()
+    assert outcome.reported == [True]  # once: the later failure of Teams changes nothing
+
+
 async def test_the_caller_learns_that_no_channel_accepted_the_message() -> None:
     first = ScriptedChannel("teams", *[DeliveryError("connect", retryable=True)] * 4)
     second = ScriptedChannel("slack", DeliveryError("http_404", retryable=False))

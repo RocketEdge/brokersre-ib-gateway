@@ -5,6 +5,146 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — A "resolved" is no longer lost when an alert clears while it is being sent (sidecar 0.2.2)
+
+- **What changed:** in the first session of the published sidecar 0.2.1 next to a logged-in
+  paper gateway (two channels: a webhook to a local receiver, Teams with an unreachable
+  URL) the gateway container was stopped and started. `gateway_stopped` was queued for both
+  at 01:56:51.842 UTC and the webhook received it at once; the phase was `starting` at
+  01:56:54; Teams gave up after 4 attempts at 01:57:00.123; `logged-in` at 01:57:04. No
+  "resolved" was ever queued, although a person had been told. Now the dispatcher reports
+  a message as delivered at the first channel that accepts it; the ladder keeps an episode
+  that clears while one of its messages is out and decides its resolution when the result
+  arrives (sent if any message of it was accepted, also when a new episode of the class
+  began meanwhile); while such a result is outstanding nothing new is sent for that class;
+  an escalation still out when the condition clears now gets its resolution on the
+  escalation channels too. Notifier state `brokersre.sidecar.notifier-state.v3` (in-flight
+  marks, closing episodes); a v2 file is read. Released as sidecar 0.2.2. The `clock_skew`
+  false alert reported the same day was checked and does not exist (point 5); the rule is
+  unchanged, its detection band is now pinned by tests and documented. Two rounds of
+  independent review added, each test-first: a late "resolved" carries the phase, API
+  status and time of its clearing (it was rendered with the next episode's facts), says
+  whether a result came back or a restart lost it, and says "active again since" when the
+  class is back; if it was the announcement that was accepted late, the new episode is
+  announced right after it instead of 15 minutes later, at most once per window and class
+  (a late escalation result moves no window); the state is saved once more after the
+  flush at a stop, that final save waits for a write still running, logs
+  `notifier_state_unsaved` when it cannot, and collects the error of an interrupted write;
+  the log shows a resolution that waits for a result (`notify_resolution_waiting`, then
+  `notify_resolution_decided` before the "resolved" is queued). A rule of the first round
+  was reverted in the second, see (7). A third round added: the state of an evaluation is
+  written before its messages are queued (bounded by the save timeout; queued anyway, and
+  logged as `notify_queued_unsaved`, when the write fails or the stop interrupts it); a
+  message a v2 file of 0.2.1 shows not delivered counts as possibly received; both
+  sidecar compose files give the sidecar `stop_grace_period: 20s`. A fourth round: a stop
+  that interrupts that write logs `notify_queued_at_stop` (information) instead of the
+  warning, and a test pins that memory mode logs neither; the README's channel check
+  commands name their compose files (copied as written they stopped with "no
+  configuration file provided", seen 2026-11-16) and the README says what
+  `docker compose ...` stands for, kept so by a test over the README and the runbooks. A
+  fifth round: a test message links the runbook index (its link `<base>/test` led to a
+  page that does not exist, seen 2026-11-17 through a local ntfy server), and a final
+  save at the stop that fails like the write before it logs `notifier_state_unsaved`
+  (it logged nothing). Also an end-to-end
+  check that raced (it read the phase once right after `docker stop`) now waits for
+  `stopped`.
+- **Result:** the tests added for defect 1, as first committed, measured against the 0.2.1
+  source: 15 fail (13 new tests, and 2 existing ones whose state schema string changed),
+  56 pass. End to end, 0.2.1 gave the webhook `firing` only and PagerDuty `trigger` only,
+  now `firing` + `resolved` and `trigger` + `resolve` under one `dedup_key`. A property
+  test (400 examples) feeds results late, out of order and across restarts, each restart
+  resuming from the state saved after the last evaluation (results that came back after
+  it are lost, as with a hard kill): every episode someone heard of is resolved once, none
+  other is, the messages of a class never go out of episode order, and inside the
+  de-duplication window only an episode a late resolution found active is announced, at
+  most one per window. Of the first review's 34 mutants, 33 are killed by the suite (M13,
+  M14, L3, M22 and the older M21 by new tests; M10 and M11 by tests made sharper after a
+  first run left them alive; M7 once a redundant second guard was removed), and M12
+  mutated that guard, which no longer exists. Of the second review's 21, all 15 that still
+  apply are killed (R3, R5 and R11 by new tests); the other 6 mutated the reverted
+  "begun" machinery. Of the third review's 15, 14 are killed by the suite; the 15th
+  dropped a log call that writing the state before queueing had made redundant, and that
+  call is gone. The 6 mutants of the third round's own changes are each killed. Of the
+  fourth review's 9, the 7 that still apply are killed; the one that swallows the stop's
+  cancellation hangs the whole suite (an earlier test waits for a stop that never ends)
+  and fails `test_notifier_service.py` run on its own. Sidecar
+  suite 879 to 986 passed (2 skipped). Against a real paper login (2026-11-16, 06:32 to
+  06:34 UTC, a local build of this branch at `773d21f`, the stable gateway `7773ff7`,
+  fresh volumes, Teams unreachable, a local webhook): a graceful stop and start of the
+  gateway queued `firing` at 06:32:51.083 and `resolved` at 06:32:53.100 while Teams
+  still retried (it gave up at 06:32:58.120), and the webhook got both; with the sidecar
+  killed (SIGKILL) 0.5 s after the webhook got `firing` and the gateway restarted, the
+  restarted sidecar queued `resolved` at 06:33:55.550 to the webhook and Teams, and the
+  webhook got it. Neither run put a username or an account-shaped value in any output.
+  Clock skew: the reported case (host 0.3 s ahead of a correct IBKR clock, truncated
+  readings in (−1.3, −0.3]) and the session's readings (−0.92, −1.77, 0.124 s) never
+  alert; with the comparison the report assumed (`|reading| > 1 s + RTT/2`) eight of the
+  new tests fail.
+- **What did NOT work / root cause:** (1) *A message's outcome was its slowest channel's.*
+  `_Delivery.settle` called back once every channel had finished, so the webhook's
+  acceptance reached the ladder when Teams gave up, about 6 s after the condition had
+  cleared. With 0.2.0 and an outage of about 25 s the result came first, which is why the
+  resolution arrived then. (2) *The ladder dropped the late result.* `record_result`
+  ignored a result for an ended episode, and `_on_inactive` cleared an episode without a
+  known delivery silently, the rule meant for "nobody heard". Either fix alone covers the
+  observed run; only the ladder fix covers a condition that clears before even the fastest
+  channel answers. (3) *A late resolution can be worse than none.* PagerDuty keys an
+  incident by instance and class, not by episode: a resolve of the first episode queued
+  after the trigger of the second would close the second incident. Hence the per-class
+  hold. (4) The property test first failed on its own model: the state file keeps episode
+  starts to the millisecond, so a restarted ladder names the same episode a few
+  microseconds earlier; the test now names episodes as the file does. (5) *Clock skew:* the
+  report read `_clock_skew` as comparing the reading with 1 s + RTT/2. It never did:
+  `skew_exceeds` (there since the rules were first written, `93bbc25`) counts a reading
+  only when it is beyond the limit whether IBKR truncates or rounds, which IBKR does not
+  document: above +1.5 s or below −2 s, plus RTT/2. A true offset within ±1 s never alerts,
+  one of 2.5 s plus the RTT or more in either direction always does (at the second probe),
+  in between it depends on the probes' place in the second (truncation: never from −1 to
+  +1.5 s; rounding: never from −1.5 to +1 s). Committing to truncation, as suggested, would
+  gain 0.5 s on one side and could alert below 1 s if IBKR rounds; not done. What misled
+  was the reading (`clock_skew_s` is uncorrected: a correct clock reads about −1 to +0.5 s)
+  and the runbook's "more than one second" without "provably"; both are documented now.
+  (6) *From the review:* the late result's facts were not kept, so the resolution showed
+  the gateway of the moment it was sent; the late acceptance restarted the de-duplication
+  window for an episode that was already active; the stop flushed the outboxes and never
+  saved again. The first fix of the last point was itself flaky (4 of 6 runs): the stop
+  cancels the evaluation that awaits a save, the write goes on, and the final save found
+  the state thread busy and skipped; it now waits for that write. The hold stays: while an
+  ended episode waits (at most 48.4 s per message and channel with the defaults, times its
+  place in that channel's queue), the class sends nothing, escalations included. (7) *A
+  fix that made it worse, reverted.* The first round found that "in flight" is saved when
+  the ladder emits, before any channel has the message, so a sidecar killed then resolves
+  an alert nobody received; round 2 therefore counted only a message a channel had begun
+  to send. But that mark reached the file only with the next evaluation's save, so a
+  message a receiver accepted in the second before a hard kill (OOM, SIGKILL) read as
+  never begun: its resolution was lost (the second review's B1), and an escalation's left
+  PagerDuty open (B2). The file is saved once per evaluation and cannot tell the two
+  cases apart; a "resolved" nobody needed is the price of never leaving an incident open,
+  so every message in flight at a restart counts as possibly received again. The property
+  test had not seen it because it restarted from a live export of the state, which still
+  held marks no save would have written; it restarts from the last saved snapshot now.
+  (8) *Third review:* the evaluation queued its messages before it saved, so a fast
+  channel could accept an announcement whose in-flight mark was not on disk yet, and a
+  hard kill then lost its resolution; it saves first now. Moving the save first broke
+  delivery at a stop (the stop cancels the evaluation while it waits for the write, and
+  the due messages were never queued); they are queued in any case now. 0.2.1 saved
+  nothing after its stop flush, so its v2 file can show a delivered announcement as not
+  delivered; 0.2.2 read that as never sent. The property test's random search reached
+  "announce, clear while out, accept after the save, kill" only at about 3000 examples;
+  that case is an explicit example now. Stopping takes up to 13 s against Docker's
+  default 10 s.
+- **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check
+  (a rollback to 0.2.1 does not read the v3 state file: it announces the active alerts
+  again and forgets resolutions still owed; the file stays only until 0.2.1 writes its own
+  state under the same name, and a 0.2.2 started before that reads it again, at worst
+  repeating a "resolved"). A millisecond time request exists from TWS API 10.34.01
+  (`reqCurrentTimeInMillis`, IBKR changelog) and would remove the whole-second band;
+  whether the gateway and ib_async offer it is not checked. Open, older than this change
+  and recorded as L34: a `resolved` is sent once and not tracked, so a stop or kill while
+  it is queued, or every attempt failing, loses it (the alert stays open; nothing goes
+  silent); and a class switched off before a restart leaves its announced alert
+  unresolved and holds back the heartbeat. Tracking owed resolutions is planned for 0.2.3.
+
 ### 2026-11-16 — What the first completed paper sessions established
 
 - **What changed:** documentation only, no code. The first completed real paper sessions on

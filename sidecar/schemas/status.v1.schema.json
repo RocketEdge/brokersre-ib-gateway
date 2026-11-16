@@ -584,7 +584,7 @@
           "type": "null"
         }
       ],
-      "description": "IBKR time minus host time, seconds",
+      "description": "IBKR time minus host time, seconds, as read at the last successful probe: IBKR answers in whole seconds, so a correct clock reads between about -1 and +0.5",
       "title": "Clock Skew S"
     },
     "close_wait_sockets": {

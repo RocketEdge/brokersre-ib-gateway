@@ -13,8 +13,11 @@
 # or a ping URL in here.
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.2
     restart: unless-stopped
+    # Stopping takes up to 13 s (flush 3 s, an interrupted state write 5 s, the final save
+    # 5 s); Docker's default of 10 s would kill the final save.
+    stop_grace_period: 20s
     depends_on:
       ib-gateway:
         condition: service_started   # start order only; the sidecar never needs a restart with the gateway
@@ -42,7 +45,8 @@ services:
       # HEALTH_CLIENT_ID: "999"                      # API client id reserved for the probe
       # HEARTBEAT_TIME: "08:30"                      # daily "sidecar alive, nothing active" message
       # A link to the runbook of its alert class in every notification (docs/runbooks). Point
-      # it at a copy in your own wiki to add your contacts: the sidecar appends /<alert class>.
+      # it at a copy in your own wiki to add your contacts: the sidecar appends /<alert class>
+      # (a test message links the base itself, so give the copy an index page there).
       NOTIFY_RUNBOOK_BASE: https://github.com/RocketEdge/brokersre-ib-gateway/tree/main/docs/runbooks
       # One or more channels; each is enabled by its *_FILE variable and a secret below.
       NOTIFY_TEAMS_URL_FILE: /run/secrets/notify-teams-url

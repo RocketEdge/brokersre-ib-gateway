@@ -11,7 +11,8 @@ to do, and when it clears. Set
 in the sidecar's environment and every notification carries the address of its page
 (`runbook: <base>/<alert class>`). To keep the pages in step with the version you run, or to
 add your own names and telephone numbers, copy this folder to your own wiki and point the
-variable there: the sidecar only appends `/<alert class>` to the base.
+variable there: the sidecar only appends `/<alert class>` to the base, and a test message
+(`notify test`) links the base itself, so give your copy an index page there.
 
 ## Table of contents
 
@@ -74,7 +75,10 @@ contain it.
 
 A message of the kind `resolved` closes an alert that was announced. A message that says
 "Superseded" closes it too, but names the alert that took over: nothing recovered, follow
-the page of that alert. When and how alerts are repeated is described under
+the page of that alert. A `resolved` is sent once: a stop of the sidecar at the wrong
+moment or a channel that fails every attempt can lose it, so an alert that stays open
+needs a look at the current phase (`brokersre-sidecar status`) before it is acted on
+([limitations](../limitations.md), L34). When and how alerts are repeated is described under
 [Escalation and de-duplication](../../sidecar/README.md#escalation-and-de-duplication).
 
 ## What these pages are based on

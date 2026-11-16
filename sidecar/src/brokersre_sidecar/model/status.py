@@ -188,7 +188,10 @@ class StatusDocument(_Model):
     connectivity: Literal["ok", "lost", "not_measured"]
     farms: list[Farm]
     last_probe: LastProbe
-    clock_skew_s: float | None = Field(description="IBKR time minus host time, seconds")
+    clock_skew_s: float | None = Field(
+        description="IBKR time minus host time, seconds, as read at the last successful probe: "
+        "IBKR answers in whole seconds, so a correct clock reads between about -1 and +0.5"
+    )
     close_wait_sockets: int | None = Field(description="Half-closed sockets on the API port")
     zombie: bool
     in_reset_window: bool = Field(

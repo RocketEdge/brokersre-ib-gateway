@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from brokersre_sidecar.model import PairState
 from brokersre_sidecar.notify import Condition, RuleConfig, RuleEngine, skew_exceeds
@@ -544,6 +547,110 @@ def test_a_failed_probe_is_not_a_clock_sample() -> None:
     # Leaving the logged-in phase forgets the measurement and the count.
     assert evaluate(engine=engine, probe={"clock_skew_s": None})[AlertClass.CLOCK_SKEW] is UNKNOWN
     assert evaluate(engine=engine, probe=skewed(9, 45.0))[AlertClass.CLOCK_SKEW] is UNKNOWN
+
+
+def probe_reading(
+    offset_s: float, phase_s: float, *, rtt_s: float = 0.05, asymmetry_s: float = 0.0, rounds: bool
+) -> float:
+    """What the probe computes when IBKR's clock is ``offset_s`` ahead of the host's.
+
+    The probe subtracts the host time at the middle of the round trip from IBKR's answer.
+    IBKR reads its clock somewhere in the round trip (``asymmetry_s`` from the middle, at
+    most half the round trip either way) and sends whole seconds: truncated, or rounded
+    when ``rounds`` (IBKR documents neither, so the rule must hold for both).
+
+    Args:
+        offset_s: True IBKR time minus host time (negative: the host clock is ahead).
+        phase_s: Fraction of a second of the host time at the middle of the round trip.
+        rtt_s: The round-trip time the probe measured.
+        asymmetry_s: Where IBKR read its clock, relative to the middle of the round trip.
+        rounds: True if IBKR rounds to the nearest second instead of truncating.
+    """
+    midpoint = 1_800_000_000 + phase_s
+    ibkr = midpoint + asymmetry_s + offset_s
+    whole = math.floor(ibkr + 0.5) if rounds else math.floor(ibkr)
+    return whole - midpoint
+
+
+def alerts(readings: list[float], rtt_s: float = 0.05) -> bool:
+    """Feed consecutive successful probes to a fresh engine; True if clock_skew fired."""
+    engine = RuleEngine(RuleConfig())
+    verdicts = [
+        evaluate(engine=engine, probe=skewed(minute, reading, rtt=rtt_s))[AlertClass.CLOCK_SKEW]
+        for minute, reading in enumerate(readings)
+    ]
+    return ACTIVE in verdicts
+
+
+PHASES = [step / 100 for step in range(100)]
+
+
+def test_a_host_clock_a_third_of_a_second_ahead_never_alerts() -> None:
+    # Reported 2026-11-16: with a correct IBKR clock and the host 0.3 s ahead, a truncated
+    # reading lies in (-1.3, -0.3]; the claim was that two readings below -1.0 in a row
+    # raise a false alert. Every pair of readings, the worst one twice included.
+    readings = [probe_reading(-0.3, phase, rounds=False) for phase in PHASES]
+    assert min(readings) < -1.25  # the readings the report was about do occur
+    assert not alerts(readings)
+    assert not any(alerts([worst, worst]) for worst in readings)
+
+
+def test_the_readings_of_the_first_paper_session_do_not_alert() -> None:
+    # Docker Desktop host, 2026-11-16: -0.92 s and -1.77 s, later 0.124 s.
+    assert not alerts([-0.92, -1.77, -1.77, 0.124, 0.124])
+
+
+@pytest.mark.parametrize("rounds", [False, True])
+@settings(max_examples=300)
+@given(
+    offset=st.floats(min_value=-1.0, max_value=1.0),
+    rtt=st.floats(min_value=0.0, max_value=2.0),
+    probes=st.lists(
+        st.tuples(
+            st.floats(min_value=0.0, max_value=1.0, exclude_max=True),
+            st.floats(min_value=-1.0, max_value=1.0),
+        ),
+        min_size=2,
+        max_size=6,
+    ),
+)
+def test_no_true_offset_within_one_second_can_alert(
+    rounds: bool, offset: float, rtt: float, probes: list[tuple[float, float]]
+) -> None:
+    readings = [
+        probe_reading(offset, phase, rtt_s=rtt, asymmetry_s=lean * rtt / 2, rounds=rounds)
+        for phase, lean in probes
+    ]
+    assert not alerts(readings, rtt_s=rtt)
+
+
+@pytest.mark.parametrize(
+    ("rounds", "never", "always"),
+    [
+        # Truncation: a correct clock reads (-1, 0]; the band is shifted towards the host
+        # being ahead. Rounding: a correct clock reads (-0.5, +0.5].
+        (False, (-1.0, 1.5), (-2.0, 2.5)),
+        (True, (-1.5, 1.0), (-2.5, 2.0)),
+    ],
+)
+def test_the_detection_band_in_both_directions(
+    rounds: bool, never: tuple[float, float], always: tuple[float, float]
+) -> None:
+    rtt = 0.05
+    for phase in PHASES:
+        for lean in (-1.0, 0.0, 1.0):
+            asymmetry = lean * rtt / 2
+
+            def read(offset: float, phase: float = phase, asymmetry: float = asymmetry) -> float:
+                return probe_reading(offset, phase, rtt_s=rtt, asymmetry_s=asymmetry, rounds=rounds)
+
+            # At the edges of "never" (host ahead, host behind) not one pair alerts.
+            for offset in never:
+                assert not alerts([read(offset), read(offset)])
+            # Beyond "always" (plus the round trip) every probe is over the limit, so the
+            # second probe raises the alert, whatever the phase.
+            assert alerts([read(always[0] - rtt - 0.001), read(always[0] - rtt - 0.001)])
+            assert alerts([read(always[1] + rtt + 0.001), read(always[1] + rtt + 0.001)])
 
 
 def test_half_the_round_trip_time_is_added_to_the_tolerance() -> None:

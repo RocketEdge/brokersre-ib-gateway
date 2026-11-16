@@ -239,7 +239,8 @@ class ProbeEngine:
         self._last_error = None
         self._last_rtt_s = rtt
         # Against the local time at the middle of the round trip. IBKR answers in whole
-        # seconds, so a healthy clock reads between -1 and 0 here.
+        # seconds (truncated or rounded, undocumented), so a healthy clock reads between
+        # about -1 and +0.5 here; notify.rules.skew_exceeds allows for both.
         local_midpoint = sent_wall.timestamp() + rtt / 2
         self._clock_skew_s = ibkr_time.timestamp() - local_midpoint
         self._failures = 0
