@@ -6,7 +6,7 @@ import json
 from datetime import datetime, time, timedelta
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from brokersre_sidecar.clock import format_utc, parse_utc
@@ -944,6 +944,18 @@ LATE_STEP = st.tuples(
 
 @settings(max_examples=400)
 @given(ops=st.lists(LATE_STEP, max_size=80), ladder_class=st.booleans())
+# Always run (third review of #32, P5): announced, cleared while the announcement is out,
+# accepted after the save, hard kill. The restart must owe the resolution; random search
+# found that only at about 3000 examples.
+@example(
+    ops=[
+        ("step", 1.0, Condition.ACTIVE, 0, True),
+        ("step", 1.0, Condition.INACTIVE, 0, True),
+        ("answer", 1.0, Condition.ACTIVE, 0, True),
+        ("restart", 1.0, Condition.ACTIVE, 0, True),
+    ],
+    ladder_class=False,
+)
 def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
     ops: list[tuple[str, float, Condition, int, bool]], ladder_class: bool
 ) -> None:
