@@ -645,6 +645,19 @@ async def test_a_resolution_that_waits_for_a_result_is_logged_and_so_is_its_end(
         {"alert_class": "gateway_stopped", "since": "2026-11-12T15:00:00.000Z"}
     ]
     assert len(events(caplog, "notify_resolution_waiting")) == 1
+    # In the order the docstring promises (second review of #32): the wait is decided
+    # first, then the "resolved" it owed is queued.
+    order = [
+        (record.__dict__["sidecar_event"], record.__dict__["sidecar_fields"].get("kind"))
+        for record in caplog.records
+        if str(record.__dict__.get("sidecar_event", "")).startswith("notify_")
+    ]
+    assert order == [
+        ("notify_queued", "firing"),
+        ("notify_resolution_waiting", None),
+        ("notify_resolution_decided", None),
+        ("notify_queued", "resolved"),
+    ]
 
 
 async def test_the_heartbeat_says_what_it_cannot_vouch_for(tmp_path: Path) -> None:
