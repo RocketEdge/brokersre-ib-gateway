@@ -5,6 +5,68 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — What the first completed paper sessions established
+
+- **What changed:** documentation only, no code. The first completed real paper sessions on
+  this image (2026-11-15/16 UTC; IB Gateway 10.50.1g, and 10.52.1d in one qualification) are
+  recorded in `docs/limitations.md` (L02, L03, L04, L11, L12, L13, L15, L16, L20, L27), in the
+  README's statements about the quick start's events, the Gateway log mirror, the sidecar, the
+  qualification and the upgrade check, in `docs/log-contract.md` (the `jts/` mirror), in
+  `docs/evidence.md` (what is not covered) and in `tasks/todo.md`.
+- **Result:** with a real paper account the image works as designed for a fresh login and a
+  stop. It logged in without a second factor 10 to 17 s after the container start (no prompt
+  in 8 logins); it was healthy; the API answered its handshake (server version 178),
+  `examples/wait-for-gateway.sh` succeeded through 127.0.0.1:4002 and the Python example
+  client received IBKR's server time. The relay stayed closed until `login_completed`, opened
+  16 ms after it (`relay_opened`), closed at a stop and opened again after a container restart
+  (`boots_30m` 2, phase back to `logged-in`). A stop ended in `shutdown_complete` after 1 to 4 s.
+  A logged-in Gateway used a working set of 459 to 494 MB and a JVM RSS of 544 to 608 MB, with
+  151 to 156 threads, 72 to 74 open file descriptors and no CLOSE_WAIT socket; the sampler's
+  working set and process count agreed with `docker stats`. `docker diff` shows only Docker's
+  mount point of the secrets (L02); the Gateway's own log is an encrypted
+  `ibgateway.<yyyymmdd>.<hhmmss>.ibgzenc` per start, which the mirror does not copy (L03);
+  `scripts/check-upgrade.sh --container` against this registry answered `up-to-date`, exit 0.
+  The shipped files were started as shipped (`compose/docker-compose.example.yml` and
+  `compose/docker-compose.sidecar.yml` at `e079462`, plus host ports, the sidecar 0.2.1 pinned
+  by digest, a Teams URL that cannot be reached and a local stand-in webhook receiver) on fresh
+  volumes with the published stable gateway `7773ff7`: logged in 12 s after `up -d`, all three
+  containers running with 0 restarts, the log volume owned 1000:1000 with mode 755, no
+  `dirs_not_writable`; the sidecar ready (`/readyz` 200; farms `apachmds`, `hfarm`, `secdefhk`
+  ok; round trip 1.6 ms; `volume_present` true), no alert and no notification while logged in
+  (no false `unknown_window`). `docker compose stop ib-gateway` took 3 s, exit 0; `/readyz`
+  then said 503 `not_measured`, and `gateway_stopped` (info) reached the webhook while the
+  Teams channel failed to connect, as expected. After the start it logged in again. The
+  support bundle of sidecar 0.2.1 held no username and the account id only shortened (`***`
+  and three digits, four times, in window titles). The qualification
+  (`scripts/qualify-paper.sh`, run by hand outside CI):
+
+  | When (UTC) | Image | Result |
+  |---|---|---|
+  | 2026-11-15 20:01 | published stable `55f8894` (10.50.1g) | not qualified: one false `unknown_window`, every other check passed |
+  | 2026-11-15 20:59, 23:08; 2026-11-16 00:53 | local builds: stable 10.50.1g with the scripts of #28 (three revisions) | qualified |
+  | 2026-11-16 01:20 | published stable `7773ff7` (10.50.1g, after #28) | qualified: login 11 s, stop 3 s |
+  | 2026-11-16 01:21 | published latest `cc3a6a9` (10.52.1d, after #28) | qualified: login 13 s, stop 1 s |
+
+- **What did NOT work / root cause:** three defects, each found by these sessions and fixed
+  in its own pull request (each has an entry below): (1) `unknown_window` was raised at every
+  paper login, for the dialog `Warning` that IBC accepts within 0.3 s (and in one login for
+  the start-up step `Authenticating...`), so the published stable image was "not qualified"
+  (#28, `6fac77b`); (2) an account id of the shape `DU`, one more letter, six digits was not
+  redacted, and the sidecar's support bundle carried it in full (#29, `7cb917e`); (3) the
+  shipped gateway and sidecar compose pair looped on fresh volumes (`dirs_not_writable`):
+  the sidecar image's root-owned `/var/log/ibgateway` was copied onto the empty log volume
+  (#30, `e079462`, sidecar 0.2.1). Two things were misleading without being defects: the
+  mirror's `ibgateway.*.log` name came from IB Gateway 10.x documentation, and a completed
+  login never wrote it (L03); the qualification's information check `root_filesystem_writes`
+  reports two paths "changed outside the mounts", which are Docker's mount point of the
+  secrets, not writes by the image (L02). Still open, both fixed in the pull request for
+  sidecar 0.2.2 (branch `fix/sidecar-resolved-and-skew`): no `resolved` message for
+  `gateway_stopped` after the restart, and the whole-second clock-skew reading.
+- **Next step:** approve the waiting run 43789700905 of `qualify-paper.yml` for the published
+  stable digest (it has not run); merge sidecar 0.2.2; observe a daily restart, a
+  second-factor prompt, a weekly re-authentication and a competing session (L01, L09, L12);
+  decide what `tail-gateway-logs.sh` does about a name the Gateway does not write (L03).
+
 ### 2026-11-16 — The sidecar no longer takes the gateway's log volume away from it
 
 - **What changed:** started as shipped on fresh volumes, the reference compose file plus a
