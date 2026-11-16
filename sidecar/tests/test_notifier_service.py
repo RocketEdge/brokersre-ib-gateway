@@ -1004,6 +1004,27 @@ async def test_messages_go_out_after_the_save_timeout_when_the_state_cannot_be_w
         store.release.set()
 
 
+@pytest.mark.parametrize("state_dir", [None, "missing-directory"], ids=["no-store", "read-only"])
+async def test_without_a_state_file_messages_are_queued_without_an_unsaved_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, state_dir: str | None
+) -> None:
+    # Review of round 4 of #32 (S-d): memory mode is reported once at the start; a warning
+    # per message there would be noise about a write nobody configured.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    world = World(None if state_dir is None else tmp_path / state_dir)
+    world.notifier.load_state()
+    world.gateway = {"phase": "stopped"}
+    await world.tick()
+    world.gateway = {"phase": "logged-in"}
+    await world.tick(5)
+    assert [(m.alert_class, m.kind) for m in world.teams.sent] == [
+        ("gateway_stopped", "firing"),
+        ("gateway_stopped", "resolved"),
+    ]
+    assert world.notifier.snapshot().state_persistence == "memory"
+    assert events(caplog, "notify_queued_unsaved") == []
+
+
 async def test_the_final_save_is_tried_even_right_after_a_failed_one(tmp_path: Path) -> None:
     # Second review of #32 (R11): within 30 s of a failed save no save is started, except
     # the one at the stop.
