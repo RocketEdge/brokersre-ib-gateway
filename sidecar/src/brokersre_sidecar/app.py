@@ -631,6 +631,9 @@ class Application:
                 await asyncio.wait_for(
                     asyncio.gather(*pending, return_exceptions=True), _FLUSH_TIMEOUT_S
                 )
+        if self._notifier is not None:
+            # The flush told the ladder outcomes that no evaluation has saved yet.
+            await self._notifier.save_on_stop()
         if self._transport is not None:
             await self._transport.aclose()
         if self._notifier is not None:

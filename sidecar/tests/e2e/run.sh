@@ -187,8 +187,13 @@ if [[ "${closing}" == *'"title":"Superseded: '* && "${closing}" == *'Follow the 
 else
   fail "hand-over" "${closing:0:400}"
 fi
+# The sidecar takes the gateway's last phase from its next read of the volume, so right
+# after the stop it can still show `stopping` (CI run 43786224388): wait for `stopped`,
+# then read the container state, so that a restart during the wait still fails the check.
+phase_stopped=no
+if wait_for 30 status_check 'd["phase"] == "stopped"'; then phase_stopped=yes; fi
 state="$(docker inspect -f '{{.State.Status}} restarts={{.RestartCount}}' "${SC}")"
-if [ "${state}" = "running restarts=0" ] && livez_ok && status_check 'd["phase"] == "stopped"'; then
+if [ "${phase_stopped}" = "yes" ] && [ "${state}" = "running restarts=0" ] && livez_ok; then
   pass "the sidecar keeps running and answering with the gateway gone (phase stopped)"
 else
   fail "sidecar after stop" "${state}; $(get /status | head -c 300)"

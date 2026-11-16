@@ -20,7 +20,9 @@ from brokersre_sidecar.model.health import (
     TaskSnapshot,
 )
 from brokersre_sidecar.notify.catalog import CATALOG
-from brokersre_sidecar.vocab import AlertClass, ChannelName, ProbeStatus
+from brokersre_sidecar.notify.message import MessageFactory
+from brokersre_sidecar.redaction import SecretRegistry
+from brokersre_sidecar.vocab import AlertClass, ChannelName, MessageKind, ProbeStatus
 from testkit import T0, gateway_snapshot, metrics_sample, probe_snapshot
 
 SIDECAR_ROOT = Path(__file__).resolve().parents[1]
@@ -287,6 +289,60 @@ def test_every_container_but_the_gateway_mounts_the_log_volume_read_only_and_wit
         assert volume_options.get("nocopy") is True, f"{service}: {mount}"
 
 
+SIDECAR_STOP_GRACE_S = 20.0
+"""Least time a shipped compose file gives the sidecar to stop. Stopping takes up to 13 s:
+the flush of the outboxes (3 s), a state write the stop interrupted (up to 5 s) and the
+final save after the flush (up to 5 s). Docker's default of 10 s would kill the final save,
+and after a hard kill the next start treats what was in flight as possibly received."""
+
+
+def _sidecar_services(resolved: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
+    """Return every (name, service) of a resolved configuration that runs the sidecar image."""
+    services = resolved["services"]
+    assert isinstance(services, dict)
+    return [
+        (name, service)
+        for name, service in services.items()
+        if "brokersre-ib-gateway-sidecar" in str(service.get("image", ""))
+    ]
+
+
+def _duration_s(text: str) -> float:
+    """Return a Go duration as compose prints it (``20s``, ``1m30s``, ``500ms``) in seconds."""
+    units = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001, "us": 1e-6, "ns": 1e-9}
+    parts = re.findall(r"([0-9]+(?:\.[0-9]+)?)(ms|us|ns|h|m|s)", text)
+    assert parts, text
+    assert "".join(f"{n}{u}" for n, u in parts) == text, text
+    return sum(float(number) * units[unit] for number, unit in parts)
+
+
+@pytest.mark.parametrize(
+    ("files", "profiles"),
+    [(files, profiles) for files, profiles, _ in COMPOSE_CONFIGURATIONS],
+    ids=[
+        " + ".join(files) + "".join(f" --profile {p}" for p in profiles)
+        for files, profiles, _ in COMPOSE_CONFIGURATIONS
+    ],
+)
+def test_every_sidecar_service_has_time_to_save_its_state_when_it_stops(
+    files: tuple[str, ...], profiles: tuple[str, ...]
+) -> None:
+    if not _docker_compose_available():
+        assert not os.environ.get("CI"), "docker compose is needed for this check in CI"
+        pytest.skip("docker compose is not available")
+    sidecars = _sidecar_services(_resolved_compose(files, profiles))
+    if any("sidecar" in name for name in files):
+        assert sidecars, f"{files}: no sidecar service found"
+    for name, service in sidecars:
+        grace = service.get("stop_grace_period")
+        assert isinstance(grace, str), f"{name}: no stop_grace_period"
+        assert _duration_s(grace) >= SIDECAR_STOP_GRACE_S, f"{name}: {grace}"
+
+
+def test_the_readme_example_gives_the_sidecar_time_to_stop() -> None:
+    assert "stop_grace_period: 20s" in _without_comments(README)
+
+
 def test_every_shipped_compose_file_is_in_a_checked_configuration() -> None:
     checked = {name for files, _, _ in COMPOSE_CONFIGURATIONS for name in files}
     shipped = {
@@ -444,12 +500,96 @@ def test_the_runbook_index_lists_every_class_and_carries_the_trademark_sentence(
     assert index.rstrip().endswith(TRADEMARK)
 
 
+# `docker compose` not followed by `-f <file>` or by the placeholder `...`. The repository has
+# no compose file of a default name (`compose.yaml`, `docker-compose.yml`), so such a command
+# copied from these documents stops with "no configuration file provided" (seen 2026-11-16
+# with the sidecar README's `docker compose run --rm --no-deps sidecar check-config`).
+_COMPOSE_WITHOUT_FILES = re.compile(r"docker compose(?!\s+(?:-f\s|\.\.\.))")
+_COMPOSE_PLACEHOLDER = "`docker compose ...` stands for your compose command with its files"
+
+
+def _compose_documents() -> list[Path]:
+    """Return the sidecar README and every runbook page: the documents a person copies from."""
+    runbooks = sorted(RUNBOOKS.rglob("*.md")) if RUNBOOKS.is_dir() else []
+    return [SIDECAR_ROOT / "README.md", *runbooks]
+
+
+@pytest.mark.parametrize(
+    "document",
+    _compose_documents(),
+    ids=[path.relative_to(REPOSITORY_ROOT).as_posix() for path in _compose_documents()],
+)
+def test_every_compose_command_names_its_files_or_the_placeholder(document: Path) -> None:
+    text = document.read_text(encoding="utf-8")
+    bare = [
+        f"line {number}: {line.strip()}"
+        for number, line in enumerate(text.splitlines(), start=1)
+        if _COMPOSE_WITHOUT_FILES.search(line)
+    ]
+    assert bare == [], f"{document.name}: compose commands without their files: {bare}"
+
+
+def test_every_document_that_uses_the_compose_placeholder_says_what_it_stands_for() -> None:
+    # The runbook pages share the index's definition; the README is read on its own. Blanks
+    # and line breaks are folded, so a rewrapped paragraph still counts.
+    index = " ".join((RUNBOOKS / "README.md").read_text(encoding="utf-8").split())
+    readme = " ".join(README.split())
+    assert _COMPOSE_PLACEHOLDER in index
+    assert "docker compose ..." in readme
+    assert _COMPOSE_PLACEHOLDER in readme
+
+
 def test_the_readme_and_the_compose_file_name_the_runbook_base_of_this_repository() -> None:
     compose = (REPOSITORY_ROOT / "compose" / "docker-compose.sidecar.yml").read_text(
         encoding="utf-8"
     )
     assert RUNBOOK_BASE in README
     assert RUNBOOK_BASE in compose
+
+
+def _runbook_links_of_messages() -> list[tuple[str, str | None]]:
+    """Return (source, runbook link) of every kind of message the notifier can send.
+
+    Built with the base the documents recommend: one firing message per alert class (every
+    kind of a class carries the same link) and the message of `notify test`.
+    """
+    factory = MessageFactory("desk-1", "Etc/UTC", RUNBOOK_BASE, SecretRegistry())
+    links: list[tuple[str, str | None]] = [
+        (
+            alert.value,
+            factory.build(
+                MessageKind.FIRING,
+                alert,
+                detail="",
+                escalation_step=0,
+                since=None,
+                phase=None,
+                api_status="not_measured",
+                now=T0,
+            ).runbook,
+        )
+        for alert in sorted(AlertClass, key=str)
+    ]
+    test_message = factory.build_test(phase=None, api_status="not_measured", now=T0)
+    links.append(("notify test", test_message.runbook))
+    return links
+
+
+@pytest.mark.parametrize(
+    ("source", "link"),
+    _runbook_links_of_messages(),
+    ids=[source for source, _ in _runbook_links_of_messages()],
+)
+def test_every_runbook_link_a_message_carries_leads_to_a_page(
+    source: str, link: str | None
+) -> None:
+    # A person taps the link in the notification. `notify test` is the first message most
+    # people see, and its link led to docs/runbooks/test, which does not exist (GitHub 404,
+    # seen 2026-11-17 with sidecar 0.2.1 and a local ntfy server).
+    assert link is not None
+    assert link == RUNBOOK_BASE or link.startswith(f"{RUNBOOK_BASE}/"), link
+    page = RUNBOOKS / link.removeprefix(RUNBOOK_BASE).strip("/") / "README.md"
+    assert page.is_file(), f"{source}: {link} leads to no page"
 
 
 def test_the_sidecar_accepts_the_runbook_base_the_documents_recommend() -> None:

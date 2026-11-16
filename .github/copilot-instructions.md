@@ -407,6 +407,34 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   --force-recreate`); `up -d` alone re-creates the sidecar only.
 - `docker compose run --rm sidecar <command>` starts the gateway first (`depends_on`), and
   the gateway logs in: always `--no-deps` for a sidecar command.
+- Sidecar notifier: a delivery result can arrive after its condition cleared. The dispatcher
+  reports a message at its FIRST acceptance (`_Delivery.settle`), and the ladder keeps an
+  episode that cleared with a message still out as `_Closing` until the result is in; while
+  one waits, nothing new is sent for that class. Keep both: 0.2.1 lost the "resolved" when a
+  failing Teams channel held back the webhook's acceptance (2026-11-16), and PagerDuty keys
+  an incident by instance and class (`dedup_key`), so a resolve queued after the next
+  trigger closes the new incident. A late resolution is rendered from the `Moment` its
+  closing kept (the tick that sends it may see the next episode); only a late acceptance
+  of the announcement (`announced_late`) lets the episode active by then through the
+  15-minute hold, once per window. After a restart everything the file shows in flight
+  counts as possibly received: the file is saved once per evaluation, so a mark set
+  between saves ("a channel has begun") is lost by a hard kill, and a rule built on it
+  dropped the resolution of a message accepted just before the kill (second review of
+  #32, reverted). Test restarts from the snapshot saved after the last step, never from a
+  live `export_state()`. `Notifier.tick` writes the state before it queues the step's
+  messages (a channel may accept a message the moment it is queued); keep that order. Only
+  the stop cancels an evaluation: a stop during the write logs `notify_queued_at_stop`
+  (info), a failed or overdue write `notify_queued_unsaved` (warning). The
+  state is saved again after the shutdown flush (`Notifier.save_on_stop`; compose gives
+  the sidecar `stop_grace_period: 20s`). A `resolved` is sent once and not tracked: a
+  stop or kill while it is queued, or every attempt failing, loses it (L34, planned for
+  0.2.3). A change to the ladder state bumps `notifier-state.vN` and keeps reading the
+  previous version.
+- Sidecar `clock_skew`: IBKR's time request is whole seconds and IBKR documents neither
+  truncation nor rounding. `skew_exceeds` counts a reading only when it is beyond the limit
+  under both (above +1.5 s, below −2 s, plus RTT/2); do not tighten a side without evidence
+  of which IBKR does (`tests/test_notify_rules.py` models both). `clock_skew_s` is the raw
+  reading: a correct clock reads about −1 to +0.5 s.
 - Documented commands are tested (`tests/bats/ci/doc-commands.bats`, lint job). A block in
   which a person types a secret into a POSIX shell is marked with the HTML comment that names
   that file and runs under bash, zsh (the macOS default) and sh through a pty

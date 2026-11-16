@@ -72,13 +72,18 @@ docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml up -d
 curl -s http://127.0.0.1:9810/status
 ```
 
+In the rest of this README, `docker compose ...` stands for your compose command with its
+files; for the quick start (in `compose/`) that is
+`docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml`.
+
 The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-compose.sidecar.yml):
 
 ```yaml
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1   # pin by digest in production
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.2   # pin by digest in production
     restart: unless-stopped
+    stop_grace_period: 20s   # stopping takes up to 13 s; Docker's default is 10 s
     read_only: true
     user: "1000:1000"
     cap_drop: [ALL]
@@ -119,11 +124,12 @@ container must be created again: `docker compose ... down` (the volumes stay) an
 above or sidecar 0.2.1 or later.
 
 Check a configuration and test the channels without starting the gateway (`--no-deps`:
-without it compose starts the gateway first, which logs in):
+without it compose starts the gateway first, which logs in). In `compose/`, as in the quick
+start:
 
 ```bash
-docker compose run --rm --no-deps sidecar check-config
-docker compose run --rm --no-deps sidecar notify test
+docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar check-config
+docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar notify test
 ```
 
 With the shared network namespace (`docker-compose.sidecar-shared.yml`) the sidecar has no
@@ -241,7 +247,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
-| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. The pages of this repository: see [Alert classes](#alert-classes). |
+| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification (a test message links `<base>`, the index). Visible ASCII (percent-encode anything else); no credentials or query string. The pages of this repository: see [Alert classes](#alert-classes). |
 | `NOTIFY_ALLOW_HTTP` | `no` | `yes`, `no` | Allows `http://` channel URLs. Only for a receiver on a private network, such as a local ntfy. |
 | `NOTIFY_CHANNELS` | all configured | list of channel names | Channels for first notifications, resolutions and heartbeats. |
 | `NOTIFY_ESCALATION_CHANNELS` | all configured | list of channel names | Channels for escalations. |
@@ -311,7 +317,7 @@ in `ibgw_notify_failures_total`.
 | `restart_storm` | error | 3 or more gateway starts within 30 minutes. | Stop the restart loop and read the first error. |
 | `resource_alert` | error | The gateway reports `memory_high` (until `memory_ok`), or an `oom_kill` in the last 15 minutes. | Raise the memory limit or lower the Java heap. |
 | `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
-| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time (IBKR answers in whole seconds, so up to 1.5 s of the reading is rounding). One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
+| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time. IBKR answers in whole seconds and does not document whether it truncates or rounds, so a reading counts only when it is beyond the limit either way: IBKR time minus host time above +1.5 s or below −2 s, plus half the round-trip time. A true difference of up to 1 s never alerts; from 2.5 s (plus the round-trip time) in either direction every probe is beyond the limit. One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
 | `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped: the gateway was killed or hangs. | Check that the gateway container runs and the volume is mounted. |
 | `volume_missing` | error | For 5 minutes the sidecar could not read a known phase: the log volume is not mounted, `state/phase` is missing or unreadable, or it holds a token this sidecar does not know. Nothing else can alert in that state. | Mount the gateway's log volume read-only at `GATEWAY_LOG_DIR`; check that the gateway writes `state/phase`. |
 | `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while the gateway's phase is known and no alert is active. It names what is not measured (an API that is not probed, a gateway without feeds). | Nothing. A missing heartbeat means the sidecar is down, cannot see the gateway, or an alert is active. |
@@ -330,7 +336,8 @@ to do, what not to do and when it clears. With
 
 every notification links the page of its class (the compose override sets this). Copy the
 folder to your own wiki and point the variable there to add your contacts; the sidecar only
-appends `/<alert class>` to the base.
+appends `/<alert class>` to the base, and a test message links the base itself (give your
+copy an index page there).
 
 For a stalled login, low disk space and memory pressure the gateway is the single source of
 truth: it reports each as a pair of events (`login_stalled`/`login_resumed`,
@@ -382,12 +389,61 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   then it is sent again (after 30 s, doubling to every 5 minutes) for as long as the
   condition lasts; `/status` shows `notified: false` and the number of failed attempts.
 - When a notified condition clears, a `resolved` message goes to every channel that heard
-  about it. A condition nobody was told about clears silently.
+  about it (`NOTIFY_CHANNELS`, and the escalation channels once an escalation was
+  accepted). It is sent once and not tracked: a stop or a kill of the sidecar while it is
+  still queued, or a failure of every attempt on every channel, loses it, and the
+  incident stays open (it fails safe: nothing goes silent; see
+  [Limitations](#limitations)). A condition nobody was told about clears silently, except
+  after a restart: what the state file shows in flight then counts as possibly received.
+- The first channel that accepts a message is enough to count it as delivered; a slow or
+  unreachable channel does not hold that back. A condition that clears while a message
+  about it is still being sent waits for that result: if a channel accepted the message,
+  the `resolved` follows, if none did, nothing does. Until the result is in, nothing new is
+  sent for that class, escalations included, so the messages of one class arrive in order
+  (PagerDuty keys an incident by instance and class and never gets an older resolve after a
+  newer trigger). The wait is bounded by the channels: one message holds a channel for at
+  most four tries of 10 s plus back-off (48.4 s), times its place in that channel's queue.
+  The log says when such a wait begins and ends (`notify_resolution_waiting`,
+  `notify_resolution_decided`).
+- Such a late `resolved` shows the phase and API status of the moment the condition
+  cleared (in the webhook payload: `phase` and `api_status` are the clearing's, `time_utc`
+  is when the message was sent), and its detail says when it cleared and why it is late:
+  a result came back after the clearing, or a restart of the sidecar lost it. If the
+  condition is active again by the time it goes out, the detail says since when. When it
+  was the announcement that was accepted late, that acceptance restarted the 15-minute
+  window, so the new alert is announced right after the `resolved` instead of waiting
+  for the window: once per 15 minutes per class at most, so a condition that flaps
+  faster than its channels answer still sends no more than one extra announcement. A
+  late escalation result moves no window and lets nothing through.
+- The state is written before an evaluation's messages are queued, so that a message a
+  channel may accept is on disk as in flight when the sidecar is killed. A stalled disk
+  therefore delays an alert by up to 5 seconds, once per stalled write; while that write
+  hangs, or within 30 seconds of the start of a failed one, messages go out without
+  waiting, and `notify_queued_unsaved` (a warning) says they were queued before their
+  state was written. A stop that interrupts the write logs `notify_queued_at_stop`
+  instead (no warning: the save after the stop flush records them, and
+  `notifier_state_unsaved` says when it cannot). In memory mode (no writable state
+  directory at the start, reported once then) nothing is written and neither is logged.
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
-  `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write). After a restart a
-  delivered alert is not repeated and an undelivered one is announced, not forgotten. When
-  the file cannot be written the state is kept in memory, `/status` says so, and the write
-  is tried again every 30 seconds.
+  `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write), and written once
+  more when the sidecar stops, after the queued messages were flushed (if an earlier
+  write is still hanging then, or that last write fails, the log says
+  `notifier_state_unsaved`). After a restart a
+  delivered alert is not repeated and an undelivered one is announced, not forgotten. A
+  message the file shows in flight is sent again while its condition lasts, and if the
+  condition has cleared it gets its `resolved`: the file is written once per evaluation,
+  so after a hard kill it cannot tell a message no channel had taken from one a channel
+  accepted a moment before; an open incident is worse than a `resolved` nobody needed.
+  When the file cannot be written the state is kept in memory and `/status` says so. A
+  write that failed or overran is tried again 30 seconds after it started; a state
+  directory that was not writable at the start is not tried again until the sidecar
+  restarts. Its format is
+  `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read (a
+  message it shows not delivered counts as possibly received: up to 0.2.1 the sidecar did
+  not save after its stop flush). A sidecar older than 0.2.2 ignores a v3 file: after a
+  downgrade it announces the active alerts again and forgets resolutions that were still
+  owed. The v3 file stays only until the older sidecar writes its own state under the same
+  name; a 0.2.2 started before that reads it again, at worst repeating a `resolved`.
 
 ## Dead-man ping (recommended)
 
@@ -436,7 +492,7 @@ Metric names are frozen. A value that was not measured is **omitted**, never exp
 | `ibgw_phase{phase}` | gauge | 1 for the current gateway phase. |
 | `ibgw_api_ready` | gauge | 1 when `ready`, 0 when `degraded`, `down` or `client_id_in_use`; absent when `not_measured`. |
 | `ibgw_api_rtt_seconds` | gauge | Round-trip time of the last successful time request. |
-| `ibgw_clock_offset_seconds` | gauge | IBKR time minus host time (IBKR reports whole seconds). |
+| `ibgw_clock_offset_seconds` | gauge | IBKR time minus host time as read (IBKR reports whole seconds: a correct clock reads between about −1 and +0.5 s; see `clock_skew`). |
 | `ibgw_api_close_wait_sockets` | gauge | Half-closed sockets on the gateway's API port: the gateway's own sample (default), or the shared socket table in the shared-namespace mode. |
 | `ibgw_boots_30m` | gauge | Gateway container starts in the last 30 minutes. |
 | `ibgw_memory_working_set_bytes`, `ibgw_memory_limit_bytes` | gauge | Gateway container memory (re-exported from the gateway's sampler). |
@@ -537,17 +593,35 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
   gateway's `events/` and `metrics/` feeds. With a gateway that writes only `state/phase`
   those values are reported as not measured, their alerts stay silent and the heartbeat says
   so.
-- **Clock skew resolution.** IBKR answers the time request in whole seconds, so
-  `clock_skew` fires only when the difference is provably above one second (in practice
-  from about 1.5 to 2 seconds), and only after two consecutive probes.
-- **Not verified against a logged-in gateway.** The probe is tested against an in-process
-  server that speaks the IB API wire protocol and against a scriptable fake; the end-to-end
-  check runs the real gateway image on a network without a route out, so it never logs in.
-  Still to be confirmed with a paper login: the handshake through the relay port, the 20
-  second grace against the relay's real start-up time, the notices 1100/1101/1102 and the
-  farm codes as the Gateway really sends them, the second-factor timeline with a real
-  prompt, and error 326 for a client id that is in use. Channel payloads are tested against
-  local receivers, not against the real services.
+- **Clock skew resolution.** IBKR answers the time request in whole seconds and does not
+  say whether it truncates or rounds, so `clock_skew` fires only when the difference is
+  provably above one second under both, and only after two consecutive probes. A true
+  difference (IBKR time minus host time) of up to 1 s never alerts; from 2.5 s in either
+  direction every probe is beyond the limit; in between it depends on where in the second
+  each probe falls (never from −1 to +1.5 s if IBKR truncates, never from −1.5 to +1 s if
+  it rounds). The 2.5 s bound widens by the round-trip time. `clock_skew_s` and
+  `ibgw_clock_offset_seconds` are the uncorrected reading: the true difference lies between
+  the reading minus 0.5 s and the reading plus 1 s, each widened by half the round-trip
+  time (a reading of −1.77 s: the host is 0.77 to 2.27 s ahead).
+- **Verified against a logged-in gateway only in part.** The tests use an in-process
+  server that speaks the IB API wire protocol, a scriptable fake, and the real gateway
+  image on a network without a route out (it never logs in). On 2026-11-15 and 16 the
+  sidecar (0.2.0, then 0.2.1) also ran next to a logged-in paper Gateway 10.50.1g: the
+  handshake and the time request through the relay port, the relay opening well inside the
+  20 second grace, the farm codes as the Gateway sends them, `/readyz` while logged in and
+  while stopped, and a `gateway_stopped` alert to a local webhook receiver all behaved as
+  described here (`docs/limitations.md` L20). Still to be confirmed: the notices
+  1100/1101/1102, the second-factor timeline with a real prompt, error 326 for a client id
+  that is in use, and the clock offset against IBKR's answer. Channel payloads are tested
+  against local receivers, not against the real services.
+- **A resolution is sent once.** A `resolved` is queued once and not tracked: a stop or a
+  kill of the sidecar while it is still queued, or a failure of every attempt on every
+  channel, loses it. The alert then stays open where it was announced (a PagerDuty
+  incident, for example) until a person closes it. Tracking owed resolutions until a
+  channel accepts them is planned (`docs/limitations.md` L34).
+- **A class switched off loses its resolution.** A class added to `NOTIFY_DISABLE_CLASSES`
+  while one of its alerts was announced is never resolved after the restart, and its
+  open episode holds back the daily heartbeat (L34).
 - **One gateway per sidecar.**
 
 ## Development

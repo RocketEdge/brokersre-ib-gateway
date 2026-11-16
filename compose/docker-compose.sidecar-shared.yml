@@ -22,10 +22,13 @@ services:
       - "${SIDECAR_PUBLISH_IP:-127.0.0.1}:9810:9810"
 
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.2
     # Required: after a restart of the gateway CONTAINER the sidecar exits (code 75) so that
     # this policy starts it again inside the gateway's new network namespace.
     restart: unless-stopped
+    # Stopping takes up to 13 s (flush 3 s, an interrupted state write 5 s, the final save
+    # 5 s); Docker's default of 10 s would kill the final save.
+    stop_grace_period: 20s
     network_mode: "service:ib-gateway"
     depends_on:
       ib-gateway:

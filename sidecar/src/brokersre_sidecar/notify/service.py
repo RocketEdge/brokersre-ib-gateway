@@ -6,18 +6,19 @@ import asyncio
 import functools
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Literal
 
-from brokersre_sidecar.clock import Clock
+from brokersre_sidecar.clock import Clock, format_utc
 from brokersre_sidecar.logsetup import log_event
 from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot
 from brokersre_sidecar.model.state import GatewaySnapshot
 from brokersre_sidecar.notify.dispatcher import Dispatcher
-from brokersre_sidecar.notify.ladder import LadderEngine, Outbound
+from brokersre_sidecar.notify.ladder import LadderEngine, Moment, Outbound
 from brokersre_sidecar.notify.message import MessageFactory
 from brokersre_sidecar.notify.rules import RuleEngine
 from brokersre_sidecar.notify.store import NotifierStore
-from brokersre_sidecar.vocab import UNKNOWN_PHASE, MessageKind, ProbeStatus
+from brokersre_sidecar.vocab import UNKNOWN_PHASE, AlertClass, MessageKind, ProbeStatus
 from brokersre_sidecar.worker import SerialWorker
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,7 +33,9 @@ class Notifier:
     """One evaluation step per call of ``tick`` (about once a second).
 
     ``tick`` does no network I/O: it only queues messages on the dispatcher, whose workers
-    deliver them and report back whether a channel accepted each one. The state file is
+    deliver them and report back whether a channel accepted each announcement and
+    escalation. A resolution or heartbeat is queued once and not tracked: a stop or kill
+    while it is queued, or a failure on every channel, loses it. The state file is
     written only when the ladder state changed, on a thread of its own, with a time
     bound: a save that hangs or fails neither stalls the alerts nor is repeated behind
     itself; the state is then kept in memory (``/status`` says so) and the save is tried
@@ -80,6 +83,8 @@ class Notifier:
         self._ready = ready
         self._save_timeout_s = save_timeout_s
         self._saver = SerialWorker("sidecar-state")
+        self._write: asyncio.Future[None] | None = None  # the latest write started
+        self._waiting: frozenset[tuple[AlertClass, datetime]] = frozenset()
         self._can_save = False
         self._unsaved = False
         self._save_retry_at: float | None = None
@@ -108,7 +113,18 @@ class Notifier:
             log_event(_LOGGER, logging.WARNING, "notifier_state_memory", self._persistence_reason)
 
     async def tick(self) -> None:
-        """Evaluate once: queue due notifications and persist a changed state."""
+        """Evaluate once: persist a changed state, then queue the due notifications.
+
+        The order matters. A channel may accept a message the moment it is queued, and
+        after a hard kill only a message the state file shows in flight gets its
+        resolution; so the step's state (with its in-flight marks) is written first and the
+        messages are queued after the write returned. The wait is bounded by
+        ``save_timeout_s``: a write that fails or does not return in time delays nothing
+        further, the messages are queued anyway, and ``notify_queued_unsaved`` (a warning)
+        says so. When the sidecar stops during the wait (the evaluation is cancelled), the
+        messages are still queued, so the flush at the stop delivers them and the save
+        after it records the outcomes; ``notify_queued_at_stop`` (information) says so.
+        """
         if not self._ready():
             return
         now = self._clock.now()
@@ -116,24 +132,101 @@ class Notifier:
         probe = self._probe()
         evaluations = self._rules.evaluate(gateway, probe, now=now, mono=self._clock.monotonic())
         can_see = gateway.phase is not None and gateway.phase != UNKNOWN_PHASE
-        for due in self._ladder.step(evaluations, now, can_see=can_see):
+        current = Moment(phase=gateway.phase, api_status=probe.status.value)
+        due_now = self._ladder.step(evaluations, now, can_see=can_see, moment=current)
+        # Waits decided since the last tick and waits begun in this step are logged here,
+        # before anything of this step is queued: "decided" precedes the "resolved" it owes.
+        self._log_waiting()
+        stopping = False
+        try:
+            if self._ladder.dirty or self._unsaved:
+                await self._save()
+        except asyncio.CancelledError:
+            # Only the stop cancels an evaluation (the supervisor then cancels every task).
+            stopping = True
+            raise
+        finally:
+            # Only ``_save`` sets ``_unsaved``, and only with a writable state file: memory
+            # mode (reported once at the start) never logs here.
+            if due_now and self._unsaved:
+                self._log_queued_unsaved(len(due_now), stopping=stopping)
+            self._queue(due_now, gateway, probe, current, now)
+
+    def _log_queued_unsaved(self, count: int, *, stopping: bool) -> None:
+        """Say that messages were queued before the state that holds them was written.
+
+        At a stop (the evaluation was cancelled while it waited for the write) that is the
+        expected course, so it is information: the write goes on, the flush delivers the
+        messages and the save after it records the outcomes (``notifier_state_unsaved``
+        says when it cannot). Otherwise the write failed, did not return within
+        ``save_timeout_s``, or was not started (an earlier one still runs, or one failed
+        less than ``_SAVE_RETRY_S`` ago): a hard kill now would leave these messages
+        counted as never sent, so it is a warning.
+
+        Args:
+            count: Number of messages queued.
+            stopping: True when the stop interrupted the wait for the write.
+        """
+        if stopping:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_queued_at_stop",
+                "queued while the sidecar stops, before the state write returned; the save "
+                "after the stop flush records them",
+                count=count,
+            )
+            return
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "notify_queued_unsaved",
+            "queued although the state with these messages could not be written first: "
+            "after a hard kill now they would count as never sent",
+            count=count,
+        )
+
+    def _queue(
+        self,
+        due_now: list[Outbound],
+        gateway: GatewaySnapshot,
+        probe: ProbeSnapshot,
+        current: Moment,
+        now: datetime,
+    ) -> None:
+        """Render the due notifications and hand them to the dispatcher (never blocks).
+
+        Args:
+            due_now: What the ladder's step returned.
+            gateway: The gateway snapshot of this evaluation.
+            probe: The probe snapshot of this evaluation.
+            current: Phase and API status of this evaluation.
+            now: Time of this evaluation (UTC).
+        """
+        for due in due_now:
+            if due.kind is MessageKind.HEARTBEAT:
+                detail = _not_measured(gateway, probe)
+            elif due.cleared_at is not None:
+                detail = _late_resolution(due, due.cleared_at)
+            else:
+                detail = due.detail
+            # A late resolution shows the gateway as it was when the condition cleared:
+            # by now the facts may belong to the next episode of the class.
+            shown = due.moment if due.moment is not None else current
             message = self._factory.build(
                 due.kind,
                 due.alert_class,
-                detail=(
-                    _not_measured(gateway, probe)
-                    if due.kind is MessageKind.HEARTBEAT
-                    else due.detail
-                ),
+                detail=detail,
                 escalation_step=due.escalation_step,
                 since=due.since,
-                phase=gateway.phase,
-                api_status=probe.status.value,
+                phase=shown.phase,
+                api_status=shown.api_status,
                 now=now,
                 superseded_by=due.superseded_by,
             )
             # Announcements and escalations report back: the alert counts as notified only
-            # when a channel accepted the message.
+            # when a channel accepted the message. A resolution does not (docs/limitations.md
+            # L34): it is sent once.
             on_done = functools.partial(self._delivered, due) if due.kind in _TRACKED else None
             self._dispatcher.enqueue(message, due.channels, on_done)
             log_event(
@@ -146,21 +239,93 @@ class Notifier:
                 channels=list(due.channels),
                 attempt=due.attempt,
             )
-        if self._ladder.dirty or self._unsaved:
-            await self._save()
+
+    def _log_waiting(self) -> None:
+        """Log when a cleared alert starts and stops waiting for a message's result.
+
+        While it waits, nothing new is sent for its class; without these two events that
+        hold would be invisible. Called once per evaluation, after the step and before its
+        messages are queued (``tick`` saves first): ``decided`` is therefore logged before
+        the ``notify_queued`` of the ``resolved`` it owes, which follows only if a channel
+        had accepted a message about the alert (``decided`` does not say which way), and
+        ``waiting`` in the evaluation in which the wait began.
+        """
+        now_waiting = self._ladder.waiting()
+        for alert, since in sorted(now_waiting - self._waiting, key=_by_class):
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_resolution_waiting",
+                "the condition cleared while a message about it was being sent; its "
+                "resolution waits for that result, and the class sends nothing new until then",
+                alert_class=alert.value,
+                since=format_utc(since),
+            )
+        for alert, since in sorted(self._waiting - now_waiting, key=_by_class):
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_resolution_decided",
+                "the result is in: the resolution is sent if a channel had accepted",
+                alert_class=alert.value,
+                since=format_utc(since),
+            )
+        self._waiting = now_waiting
 
     def _delivered(self, due: Outbound, accepted: bool) -> None:
-        """Tell the ladder whether a notification reached at least one channel."""
+        """Tell the ladder whether a notification reached at least one channel.
+
+        Called by the dispatcher at the first acceptance, or when every channel failed;
+        possibly after the condition has cleared, which the ladder handles.
+        """
         self._ladder.record_result(due, delivered=accepted, now=self._clock.now())
         if not accepted:
             log_event(
                 _LOGGER,
                 logging.WARNING,
                 "notify_undelivered",
-                "no channel accepted the notification; it will be sent again",
+                "no channel accepted the notification; it is sent again while the condition lasts",
                 alert_class=due.alert_class.value,
                 kind=due.kind.value,
                 attempt=due.attempt,
+            )
+
+    async def save_on_stop(self) -> None:
+        """Write the state once more, after the outboxes were flushed at shutdown.
+
+        The flush reports delivery outcomes to the ladder after the last evaluation; without
+        this write they are lost, and the next start resends a delivered announcement or
+        resolves one that no channel accepted. A save that failed a moment ago is tried
+        anyway: this is the last chance. A write still running (the stop cancelled the
+        evaluation that awaited it) is waited for first, else this one would be skipped.
+        Each wait is bounded by ``save_timeout_s``; if that write has still not returned,
+        the final save is skipped, and if the final save fails or overruns, the state is
+        not written: either way ``notifier_state_unsaved`` says so (the next start then
+        sends again or resolves what the file shows in flight).
+        """
+        if not (self._ladder.dirty or self._unsaved):
+            return
+        if self._saver.busy and self._write is not None:
+            await asyncio.wait({self._write}, timeout=self._save_timeout_s)
+        if self._saver.busy:
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "notifier_state_unsaved",
+                "the state could not be written at stop: an earlier write has not returned "
+                f"within {self._save_timeout_s:g} s",
+            )
+            return
+        self._save_retry_at = None
+        await self._save()
+        if self._unsaved:
+            # `_save_failed` logs a reason only when it differs from the last one; at the
+            # stop the operator must learn it either way, because nothing writes later.
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "notifier_state_unsaved",
+                f"the state could not be written at stop: {self._persistence_reason}",
             )
 
     def close(self) -> None:
@@ -184,10 +349,13 @@ class Notifier:
         if self._save_retry_at is not None and mono < self._save_retry_at:
             return
         write = self._saver.start(functools.partial(self._store.save, self._ladder.export_state()))
+        # Collect every outcome, also one nobody awaits any more (a stop cancelled this
+        # evaluation, or the wait below timed out), so a late error is not reported as
+        # "Future exception was never retrieved".
+        write.add_done_callback(lambda finished: finished.exception())
+        self._write = write
         done, _ = await asyncio.wait({write}, timeout=self._save_timeout_s)
         if not done:
-            # Collect the late outcome so that a late error is not reported as "never retrieved".
-            write.add_done_callback(lambda finished: finished.exception())
             self._save_failed(
                 f"saving the state did not finish within {self._save_timeout_s:g} s", mono
             )
@@ -222,6 +390,38 @@ class Notifier:
             state_persistence=self._persistence,
             state_persistence_reason=self._persistence_reason,
         )
+
+
+def _by_class(item: tuple[AlertClass, datetime]) -> tuple[str, datetime]:
+    """Sort key: class name, then episode start (stable log order)."""
+    return item[0].value, item[1]
+
+
+def _late_resolution(due: Outbound, cleared_at: datetime) -> str:
+    """Say when a late resolution's condition cleared, why it is late, and whether it is back.
+
+    Fixed words and timestamps only (the message text rules). Every clause must be true of
+    this resolution: the phase and API status shown are the clearing's only when they were
+    kept (``due.moment``), else the current ones, and it is late either because the
+    delivery result of an earlier message (announcement or escalation) came back after the
+    clearing, or because a restart of the sidecar lost that result.
+
+    Args:
+        due: The late ``RESOLVED``.
+        cleared_at: When its condition cleared (``due.cleared_at``, not None).
+    """
+    facts = "as at that time" if due.moment is not None else "as at sending"
+    detail = f"cleared at {format_utc(cleared_at)} (phase and API status {facts}); "
+    if due.result_lost:
+        detail += (
+            "sent after a restart of the sidecar, which lost the delivery result of an "
+            "earlier message about it"
+        )
+    else:
+        detail += "sent once the delivery result of an earlier message about it was known"
+    if due.active_again_since is not None:
+        detail += f"; active again since {format_utc(due.active_again_since)}"
+    return detail
 
 
 def _not_measured(gateway: GatewaySnapshot, probe: ProbeSnapshot) -> str:
