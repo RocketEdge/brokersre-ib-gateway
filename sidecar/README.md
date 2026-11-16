@@ -77,7 +77,7 @@ The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-c
 ```yaml
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.0   # pin by digest in production
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1   # pin by digest in production
     restart: unless-stopped
     read_only: true
     user: "1000:1000"
@@ -94,16 +94,44 @@ services:
       DEADMAN_PING_URL_FILE: /run/secrets/deadman-ping-url   # recommended, see below
     secrets: [notify-teams-url, deadman-ping-url]
     volumes:
-      - ibgw-logs:/var/log/ibgateway:ro    # the gateway's log volume, read-only
+      - type: volume                       # the gateway's log volume, read-only
+        source: ibgw-logs
+        target: /var/log/ibgateway
+        read_only: true
+        volume:
+          nocopy: true                     # leave the owner of a fresh volume to the gateway
       - sidecar-state:/var/lib/sidecar     # de-duplication state across restarts
 ```
 
-Check a configuration without starting anything, and test the channels:
+Keep `nocopy` when you write your own compose file. Docker gives an empty named volume the
+owner of its mount point in the image of a container created on it (engine behaviour, seen
+with Docker Engine 29; Docker's documentation describes the copying of content, not the
+owner), and compose creates the sidecar after the gateway. Sidecar images up to 0.2.0 have
+that directory, root-owned: without `nocopy` the gateway (uid 1000) cannot write its log
+volume on a first start, fails its preflight with `dirs_not_writable` and is restarted in a
+loop. From 0.2.1 the image has no such directory, so a plain `ibgw-logs:/var/log/ibgateway:ro`
+is safe too.
+
+A stack that is already in that loop is not repaired by `docker compose ... up -d` alone: it
+re-creates the sidecar, not the gateway, and the empty volume stays root-owned. The gateway
+container must be created again: `docker compose ... down` (the volumes stay) and then
+`docker compose ... up -d`, or `docker compose ... up -d --force-recreate`, with the mount
+above or sidecar 0.2.1 or later.
+
+Check a configuration and test the channels without starting the gateway (`--no-deps`:
+without it compose starts the gateway first, which logs in):
 
 ```bash
-docker compose run --rm sidecar check-config
-docker compose run --rm sidecar notify test
+docker compose run --rm --no-deps sidecar check-config
+docker compose run --rm --no-deps sidecar notify test
 ```
+
+With the shared network namespace (`docker-compose.sidecar-shared.yml`) the sidecar has no
+network of its own: while the gateway container does not exist, these commands stop with
+"cannot share network namespace with service ib-gateway". Do not drop `--no-deps` then
+(compose would start the gateway, and it would log in): run the check with the default
+override (`-f docker-compose.example.yml -f docker-compose.sidecar.yml`), which reads the
+same settings, or wait until the gateway runs.
 
 ## Network modes
 

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -127,12 +131,210 @@ def test_the_default_compose_file_adds_nothing_to_the_gateway_service() -> None:
     assert "network_mode" not in code
     assert "\n  ib-gateway:\n" not in code  # no override of the gateway service
     assert ":9810:9810" in code  # the sidecar publishes its own port
-    assert "ibgw-logs:/var/log/ibgateway:ro" in code
     shared = (REPOSITORY_ROOT / "compose/docker-compose.sidecar-shared.yml").read_text(
         encoding="utf-8"
     )
     assert 'network_mode: "service:ib-gateway"' in shared
     assert "GATEWAY_HOST: 127.0.0.1" in shared
+
+
+LOG_VOLUME_MOUNT = (
+    "- type: volume\n"
+    "source: ibgw-logs\n"
+    "target: /var/log/ibgateway\n"
+    "read_only: true\n"
+    "volume:\n"
+    "nocopy: true\n"
+)
+"""How every container other than the gateway mounts the gateway's log volume (lines without
+their indentation): read-only, and without the copy-up that would hand an EMPTY volume the
+owner of that container image's mount point. compose creates such a container after the
+gateway; sidecar/tests/e2e/fresh-volumes.sh starts the sidecar files for real."""
+
+COMPOSE_CONFIGURATIONS: tuple[tuple[tuple[str, ...], tuple[str, ...], int], ...] = (
+    (("compose/docker-compose.example.yml", "compose/docker-compose.sidecar.yml"), (), 1),
+    (("compose/docker-compose.example.yml", "compose/docker-compose.sidecar-shared.yml"), (), 1),
+    (("compose/docker-compose.example.yml", "compose/docker-compose.azure.yml"), ("azure",), 2),
+    (
+        ("compose/docker-compose.example.yml", "compose/docker-compose.azure.yml"),
+        ("azure-cert",),
+        2,
+    ),
+    (("compose/docker-compose.example.yml", "compose/docker-compose.console.yml"), (), 0),
+    (("compose/docker-compose.multi.yml",), (), 0),
+    (("docs/recipes/docker-compose.vector.yml",), (), 1),
+    (("examples/compose-with-client.yml",), (), 0),
+    (("windows/templates/compose.yaml.tmpl",), (), 0),
+)
+"""Every shipped compose file, in the combinations users start: the files, the profiles, and
+how many mounts of a gateway log volume by another container the resolved configuration has.
+The count keeps the check from passing on a configuration where nothing was found."""
+
+
+GATEWAY_IMAGE_PLACEHOLDERS = frozenset({"__IMAGE_REF__"})
+"""Image placeholders that stand for the gateway image (the Windows kit fills in its digest)."""
+
+
+def _is_gateway(service: dict[str, object]) -> bool:
+    """Return whether a resolved compose service runs the gateway image (not the sidecar)."""
+    image = str(service.get("image", ""))
+    if image in GATEWAY_IMAGE_PLACEHOLDERS:
+        return True
+    return "brokersre-ib-gateway" in image and "brokersre-ib-gateway-sidecar" not in image
+
+
+def _without_comments(text: str) -> str:
+    """Return ``text`` without comments, blank lines and indentation, one line per line.
+
+    Args:
+        text: A YAML file (or a Markdown file with YAML examples).
+
+    Returns:
+        The remaining lines, each stripped of its indentation and of a trailing ``# ...``
+        comment, joined with newlines and ending in one. Indentation is dropped so that the
+        same mount is recognised at any nesting depth.
+    """
+    lines = (re.sub(r"\s+#.*$", "", line).strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line and not line.startswith("#")) + "\n"
+
+
+def _resolved_compose(files: tuple[str, ...], profiles: tuple[str, ...]) -> dict[str, object]:
+    """Return ``docker compose config`` of the files as JSON, without interpolation.
+
+    Compose itself turns the short and the long volume syntax, key order and a trailing slash
+    into one form, so the check below sees what Docker will mount, not how a file spells it.
+    Without interpolation no variable needs a value.
+    """
+    docker = shutil.which("docker")
+    assert docker is not None
+    command = [docker, "compose", "-p", "log-volume-policy"]
+    for name in files:
+        command += ["-f", str(REPOSITORY_ROOT / name)]
+    for profile in profiles:
+        command += ["--profile", profile]
+    command += ["config", "--no-interpolate", "--format", "json"]
+    # The command is built from constants and the repository's own file names.
+    done = subprocess.run(  # noqa: S603
+        command, capture_output=True, text=True, check=False, timeout=120
+    )
+    assert done.returncode == 0, f"{files}: {done.stderr[-500:]}"
+    resolved: dict[str, object] = json.loads(done.stdout)
+    return resolved
+
+
+def _log_volume_readers(resolved: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
+    """Return every (service, mount) by which a container other than a gateway mounts a log volume.
+
+    A log volume is a named volume that a gateway service mounts at ``/var/log/ibgateway``; a
+    mount of any volume at that path by another service counts too (the Vector recipe names an
+    external volume and has no gateway service).
+    """
+    services = resolved["services"]
+    assert isinstance(services, dict)
+    log_sources = {
+        mount.get("source")
+        for service in services.values()
+        if _is_gateway(service)
+        for mount in service.get("volumes", [])
+        if mount.get("type") == "volume"
+        and str(mount.get("target", "")).rstrip("/") == "/var/log/ibgateway"
+    }
+    readers = []
+    for name, service in services.items():
+        if _is_gateway(service):
+            continue
+        for mount in service.get("volumes", []):
+            if mount.get("type") != "volume":
+                continue
+            target = str(mount.get("target", "")).rstrip("/")
+            if target == "/var/log/ibgateway" or mount.get("source") in log_sources:
+                readers.append((name, mount))
+    return readers
+
+
+def _docker_compose_available() -> bool:
+    """Return whether ``docker compose`` can be run here."""
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+    done = subprocess.run(  # noqa: S603
+        [docker, "compose", "version"], capture_output=True, check=False, timeout=60
+    )
+    return done.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("files", "profiles", "expected"),
+    COMPOSE_CONFIGURATIONS,
+    ids=[
+        " + ".join(files) + "".join(f" --profile {p}" for p in profiles)
+        for files, profiles, _ in COMPOSE_CONFIGURATIONS
+    ],
+)
+def test_every_container_but_the_gateway_mounts_the_log_volume_read_only_and_without_copy_up(
+    files: tuple[str, ...], profiles: tuple[str, ...], expected: int
+) -> None:
+    if not _docker_compose_available():
+        # CI has Docker: there the check must run, never skip.
+        assert not os.environ.get("CI"), "docker compose is needed for this check in CI"
+        pytest.skip("docker compose is not available")
+    readers = _log_volume_readers(_resolved_compose(files, profiles))
+    assert len(readers) == expected, readers
+    for service, mount in readers:
+        assert mount.get("read_only") is True, f"{service}: {mount}"
+        volume_options = mount.get("volume")
+        assert isinstance(volume_options, dict), f"{service}: {mount}"
+        assert volume_options.get("nocopy") is True, f"{service}: {mount}"
+
+
+def test_every_shipped_compose_file_is_in_a_checked_configuration() -> None:
+    checked = {name for files, _, _ in COMPOSE_CONFIGURATIONS for name in files}
+    shipped = {
+        path.relative_to(REPOSITORY_ROOT).as_posix()
+        for pattern in (
+            "compose/*.yml",
+            "compose/*.yaml",
+            "docs/recipes/*.yml",
+            "examples/*.yml",
+            "examples/*.yaml",
+            "windows/templates/*.tmpl",
+        )
+        for path in REPOSITORY_ROOT.glob(pattern)
+        if "services:" in path.read_text(encoding="utf-8")
+    }
+    assert shipped == checked, sorted(shipped ^ checked)
+
+
+def test_the_readme_example_mounts_the_log_volume_the_same_way_and_says_why() -> None:
+    assert LOG_VOLUME_MOUNT in _without_comments(README)
+    assert "Keep `nocopy` when you write your own compose file." in README
+
+
+def test_the_package_version_is_the_version_the_publish_workflow_tags() -> None:
+    # sidecar-publish.yml tags the image with the version in pyproject.toml; the CLI, the
+    # metrics and the compose tags use __version__.
+    import tomllib
+
+    from brokersre_sidecar import __version__
+
+    project = tomllib.loads((SIDECAR_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["version"] == __version__
+
+
+def test_the_compose_files_and_the_readme_name_the_version_of_the_package() -> None:
+    from brokersre_sidecar import __version__
+
+    tag = f"ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:{__version__}"
+    for name in (
+        "compose/docker-compose.sidecar.yml",
+        "compose/docker-compose.sidecar-shared.yml",
+        "sidecar/README.md",
+    ):
+        text = (REPOSITORY_ROOT / name).read_text(encoding="utf-8")
+        tags = set(
+            re.findall(r"ghcr\.io/rocketedge/brokersre-ib-gateway-sidecar:[0-9][^\s\"']*", text)
+        )
+        assert tags == {tag}, f"{name}: {sorted(tags)}"
 
 
 def test_the_readme_says_plainly_that_a_dead_host_is_silent_without_the_dead_man_ping() -> None:

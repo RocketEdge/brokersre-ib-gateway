@@ -30,7 +30,13 @@ as "the gateway is down".
    `docker compose ... up -d --force-recreate sidecar`. The gateway is not touched.
 2. **`state/phase` is missing.** The gateway has never started with this volume, or the
    volume is not writable for it (event `dirs_not_writable` in the gateway's log). Fix the
-   mount options of the gateway (`uid=1000,gid=1000` in the reference compose file).
+   mount options of the gateway (`uid=1000,gid=1000` in the reference compose file). On a
+   first start the cause can be this sidecar's own mount: a sidecar image up to 0.2.0
+   mounted without `nocopy` hands the empty log volume to root. Mount the volume as
+   `compose/docker-compose.sidecar.yml` does or use sidecar 0.2.1 or later, then create the
+   gateway container again: `docker compose ... down` (the volumes stay) and `up -d`, or
+   `up -d --force-recreate`. `up -d` alone re-creates only the sidecar, and the volume
+   stays root-owned.
 3. **Unknown phase.** The gateway image is newer than the sidecar: update the sidecar to the
    version that belongs to the gateway image.
 

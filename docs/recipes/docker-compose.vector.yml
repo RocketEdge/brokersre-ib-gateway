@@ -34,8 +34,14 @@ services:
       # folder of its own: the shipper must never see the gateway's IBKR credentials, so do
       # not point this at compose/secrets itself.
       - ${VECTOR_SECRETS_DIR:-../../compose/secrets/vector}:/run/secrets:ro
-      # The gateway's log volume, read-only.
-      - ibgw-logs:/var/log/ibgateway:ro
+      # The gateway's log volume, read-only. nocopy: Docker must never give a fresh, empty log
+      # volume the owner of this container's mount point (the gateway writes it as uid 1000).
+      - type: volume
+        source: ibgw-logs
+        target: /var/log/ibgateway
+        read_only: true
+        volume:
+          nocopy: true
       # Vector's data directory (the recipes' data_dir): the checkpoints. Without this volume
       # every new container reads the files from the start. A new volume takes owner and mode
       # from the directory it is mounted over; /var/tmp is the one a non-root user can write.

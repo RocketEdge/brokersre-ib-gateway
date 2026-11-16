@@ -26,6 +26,7 @@ bash azure/tests/run.sh [group...]                                              
 docker build -t brokersre-ib-gateway-sidecar:dev sidecar
 IMAGE=brokersre-ib-gateway-sidecar:dev sidecar/tests/container/run.sh                    # sidecar smoke suite (SMOKE_TIMEOUT_SCALE=5 for an emulated arm64 image)
 sidecar/tests/e2e/run.sh <gateway image> brokersre-ib-gateway-sidecar:dev                # gateway + sidecar on an internal network; never contacts IBKR
+sidecar/tests/e2e/fresh-volumes.sh <gateway image> brokersre-ib-gateway-sidecar:dev      # both images created together on fresh volumes; the shipped compose files started without a login
 pwsh -NoProfile -Command "Invoke-Pester windows/tests" ; powershell -NoProfile -Command "Invoke-Pester windows/tests"   # Windows kit, Pester 6.2.0, under BOTH PowerShell 7 and Windows PowerShell 5.1
 pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path windows -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # PSScriptAnalyzer 1.25.0, 0 findings
 scripts/readme-versions.sh --check                                                       # README version table matches versions.json (drop --check to regenerate)
@@ -385,3 +386,23 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   is in `tests/fixtures/ibc-real-paper-login.log` (real, scrubbed, 2026-11-15 UTC).
 - A bare `wait` in a bats test never returns (bats keeps jobs of its own in the test's
   shell): `wait "${pid}"`.
+- Docker gives an EMPTY named volume the owner and mode of its mount point in the image of
+  a container created on it, when that image has the directory and the mount does not say
+  `nocopy` (engine behaviour, seen on Engine 29; not documented). `docker compose up`
+  creates every container before it starts any, the sidecar after the gateway. A sidecar
+  image with a root-owned `/var/log/ibgateway` made the gateway's log volume unwritable
+  for the gateway (`dirs_not_writable`, restart loop; first real session, 2026-11-16).
+  Two protections, keep both: no image other than the gateway's has `/var/log/ibgateway`
+  (the sidecar since 0.2.1; the Vector image never had it), and every shipped compose
+  file mounts the log volume into another container read-only with `volume.nocopy`, in
+  the long syntax. `sidecar/tests/test_docs.py` resolves every shipped compose file with
+  `docker compose config --no-interpolate` (so spelling, key order and a trailing slash
+  do not matter) and fails when a service other than the gateway mounts a gateway log
+  volume, or any volume at `/var/log/ibgateway`, without `read_only` and `nocopy`, and when
+  a compose file is not in its list. Containers started one after the other with
+  `docker run` never show this: test with `docker compose up` or `docker create` on fresh
+  volumes (`sidecar/tests/e2e/fresh-volumes.sh`). A stack already in the loop is repaired
+  only by creating the gateway container again (`down` then `up -d`, or `up -d
+  --force-recreate`); `up -d` alone re-creates the sidecar only.
+- `docker compose run --rm sidecar <command>` starts the gateway first (`depends_on`), and
+  the gateway logs in: always `--no-deps` for a sidecar command.

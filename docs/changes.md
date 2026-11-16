@@ -5,6 +5,54 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — The sidecar no longer takes the gateway's log volume away from it
+
+- **What changed:** started as shipped on fresh volumes, the reference compose file plus a
+  sidecar override did not come up: the gateway failed its preflight with
+  `dirs_not_writable` (`/var/log/ibgateway` owned 0:0) and its restart policy started it
+  again and again; no login was attempted. Two changes, each sufficient alone on fresh
+  volumes: the sidecar image no longer has `/var/log/ibgateway` at all (sidecar 0.2.1), and
+  every shipped compose file that mounts the log volume into another container (both
+  sidecar overrides, the Azure profile, the Vector recipe) mounts it read-only with
+  `nocopy`. `sidecar/README.md` shows the same mount, how to get a looping stack out of the
+  loop, and `--no-deps` for sidecar commands. New test `sidecar/tests/e2e/fresh-volumes.sh`
+  (internal network, `IBC_LAUNCH=no` checked before anything starts), run by the sidecar
+  workflow's end-to-end job, which now also runs on changes to the gateway image and to the
+  other compose files; a policy test lists every reader of the log volume.
+- **Result:** against the published images and the previous compose files the new test fails
+  14 of 16 checks and shows the loop (`restarting`, 10 to 11 restarts within the test). With
+  this change 16 of 16 pass, for both overrides. With the published sidecar 0.2.0 and the new
+  compose files 15 pass (only the image's own check fails): `nocopy` protects an older image.
+  Without the directory the sidecar also reports a missing mount as `volume_present: false`;
+  with an empty directory in the image it could not (the runbook's case "not mounted" was
+  never reported).
+- **What did NOT work / root cause:** (1) *An empty named volume is not neutral.* Docker
+  gives it the owner and mode of its mount point in the image of a container created on it,
+  when the image has the directory and the mount does not say `nocopy`. This is engine
+  behaviour (the copy-up of an empty volume), seen on Docker Engine 29; Docker's
+  documentation describes the copying of content, not the owner. The sidecar image had
+  `/var/log/ibgateway` root-owned, and compose creates the sidecar after the gateway
+  (`depends_on`), so the gateway's volume became root-owned before the gateway wrote to
+  it. (2) *No test created the two together.* `sidecar/tests/e2e/run.sh` starts the gateway
+  with `docker run` and the sidecar after it, when the volume is no longer empty; the
+  compose files were only rendered (`config -q`), never started together. The first real
+  session did what the README tells a user to do and hit it at once. (3) *The first fix gave
+  the directory the gateway's owner (1000:1000) instead of removing it.* The independent
+  review found the better design: a path that is not in the image copies nothing, ties the
+  sidecar to no owner of the gateway, and lets a missing mount be seen. (4) *`up -d` does
+  not repair a stack that is already looping:* it re-creates the sidecar only, and with
+  `nocopy` nothing touches the empty root-owned volume any more; the gateway container must
+  be created again (`down` then `up -d`, or `up -d --force-recreate`), checked by the review.
+  (5) The Vector image of the Azure pack has no such directory, so it never caused the
+  fault (checked by experiment); its mount got `nocopy` so that a later Vector image cannot.
+  (6) A failed preflight under `restart: unless-stopped` is started again without limit;
+  that is how a mount error became a loop (L33). Nothing is sent to IBKR in that state (the
+  preflight runs before IBC). (7) The README told users to check the sidecar's
+  configuration with `docker compose run --rm sidecar check-config`, which starts the
+  gateway (and its login) through `depends_on`; it says `--no-deps` now.
+- **Next step:** the sidecar 0.2.1 publish, watched to its signature check; the stack as
+  shipped with a real paper login.
+
 ### 2026-11-16 — An account id with a third letter is redacted
 
 - **What changed:** the shape by which an IBKR account id is recognised is now an optional

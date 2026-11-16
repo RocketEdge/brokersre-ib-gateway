@@ -38,3 +38,17 @@ and container suites were green locally; the first Linux run failed with "Permis
 **Rule:** add scripts with `git add --chmod=+x`; `scripts/check-file-modes.sh` reads the index
 (`git ls-files -s`) and fails on a tracked `*.sh` without the bit, in the lint job and before a
 push. Check the index, never the file system, for anything the host presents differently.
+
+## 2026-11-16 — Containers created together are not containers started one after the other
+
+**Pattern:** the gateway and the sidecar share a named volume. Every test started them with
+`docker run`, one after the other, so the gateway had written to the volume before the sidecar
+existed. `docker compose up` creates both first: the empty volume then took the owner of the
+sidecar image's root-owned mount point, and the gateway could not write its own logs. The
+compose files were only rendered in CI, never started together; the first real session found
+it in a minute by doing what the README says.
+
+**Rule:** a file users copy is tested the way users run it: `docker compose up` on fresh
+volumes, both containers created before either starts. An image never carries a directory at
+a path where another image's volume is mounted, and a reader of a shared volume mounts it with
+`nocopy`.
