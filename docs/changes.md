@@ -21,30 +21,34 @@ Next step.
   escalation channels too. Notifier state `brokersre.sidecar.notifier-state.v3` (in-flight
   marks, closing episodes); a v2 file is read. Released as sidecar 0.2.2. The `clock_skew`
   false alert reported the same day was checked and does not exist (point 5); the rule is
-  unchanged, its detection band is now pinned by tests and documented. An independent
-  review of the pull request added, each test-first: a late "resolved" carries the phase,
-  API status and time of its clearing (it was rendered with the next episode's facts) and
-  says "active again since" when the class is back; that new episode is then announced
-  right after it instead of 15 minutes later, at most once per window and class; only a
-  message a channel had begun to send counts as possibly received after a restart (one
-  merely queued before a kill used to bring a "resolved" no channel had attempted); the
-  state is saved once more after the flush at a stop, and that final save waits for a
-  write still running; the log shows a resolution that waits for a result
-  (`notify_resolution_waiting`, `notify_resolution_decided`). Also an end-to-end check
-  that raced (it read the phase once right after `docker stop`) now waits for `stopped`.
+  unchanged, its detection band is now pinned by tests and documented. Two rounds of
+  independent review added, each test-first: a late "resolved" carries the phase, API
+  status and time of its clearing (it was rendered with the next episode's facts), says
+  whether a result came back or a restart lost it, and says "active again since" when the
+  class is back; if it was the announcement that was accepted late, the new episode is
+  announced right after it instead of 15 minutes later, at most once per window and class
+  (a late escalation result moves no window); the state is saved once more after the
+  flush at a stop, that final save waits for a write still running, logs
+  `notifier_state_unsaved` when it cannot, and collects the error of an interrupted write;
+  the log shows a resolution that waits for a result (`notify_resolution_waiting`, then
+  `notify_resolution_decided` before the "resolved" is queued). A rule of the first round
+  was reverted in the second, see (7). Also an end-to-end check that raced (it read the
+  phase once right after `docker stop`) now waits for `stopped`.
 - **Result:** the tests added for defect 1, as first committed, measured against the 0.2.1
   source: 15 fail (13 new tests, and 2 existing ones whose state schema string changed),
   56 pass. End to end, 0.2.1 gave the webhook `firing` only and PagerDuty `trigger` only,
   now `firing` + `resolved` and `trigger` + `resolve` under one `dedup_key`. A property
-  test (400 examples) feeds results late, out of order, begun or not, and across restarts:
-  every episode someone heard of is resolved once, none other is, the messages of a class
-  never go out of episode order, and inside the de-duplication window only an episode a
-  late resolution found active is announced, at most one per window. Of the review's 34
-  mutants, 33 are killed by the suite now (M13, M14, L3, M22 and the older M21 by new tests;
-  M10 and M11 by tests made sharper after a first run left them alive; M7 once a redundant
-  second guard was removed), and M12 mutated that guard, which no longer exists. Ten
-  mutants of the review fixes are each killed too. Sidecar suite 879 to 922 passed (2
-  skipped).
+  test (400 examples) feeds results late, out of order and across restarts, each restart
+  resuming from the state saved after the last evaluation (results that came back after
+  it are lost, as with a hard kill): every episode someone heard of is resolved once, none
+  other is, the messages of a class never go out of episode order, and inside the
+  de-duplication window only an episode a late resolution found active is announced, at
+  most one per window. Of the first review's 34 mutants, 33 are killed by the suite (M13,
+  M14, L3, M22 and the older M21 by new tests; M10 and M11 by tests made sharper after a
+  first run left them alive; M7 once a redundant second guard was removed), and M12
+  mutated that guard, which no longer exists. Of the second review's 21, all 15 that still
+  apply are killed (R3, R5 and R11 by new tests); the other 6 mutated the reverted
+  "begun" machinery. Sidecar suite 879 to 928 passed (2 skipped).
   Clock skew: the reported case (host 0.3 s ahead of a correct IBKR clock, truncated
   readings in (−1.3, −0.3]) and the session's readings (−0.92, −1.77, 0.124 s) never
   alert; with the comparison the report assumed (`|reading| > 1 s + RTT/2`) eight of the
@@ -75,19 +79,29 @@ Next step.
   and the runbook's "more than one second" without "provably"; both are documented now.
   (6) *From the review:* the late result's facts were not kept, so the resolution showed
   the gateway of the moment it was sent; the late acceptance restarted the de-duplication
-  window for an episode that was already active; "in flight" was set when the ladder
-  emitted, before any channel had the message, and the same evaluation saved it; the stop
-  flushed the outboxes and never saved again. The first fix of the last point was itself
-  flaky (4 of 6 runs): the stop cancels the evaluation that awaits a save, the write goes
-  on, and the final save found the state thread busy and skipped; it now waits for that
-  write. The hold stays: while an ended episode waits (at most 48.4 s per message and
-  channel with the defaults, times its place in that channel's queue), the class sends
-  nothing, escalations included.
+  window for an episode that was already active; the stop flushed the outboxes and never
+  saved again. The first fix of the last point was itself flaky (4 of 6 runs): the stop
+  cancels the evaluation that awaits a save, the write goes on, and the final save found
+  the state thread busy and skipped; it now waits for that write. The hold stays: while an
+  ended episode waits (at most 48.4 s per message and channel with the defaults, times its
+  place in that channel's queue), the class sends nothing, escalations included. (7) *A
+  fix that made it worse, reverted.* The first round found that "in flight" is saved when
+  the ladder emits, before any channel has the message, so a sidecar killed then resolves
+  an alert nobody received; round 2 therefore counted only a message a channel had begun
+  to send. But that mark reached the file only with the next evaluation's save, so a
+  message a receiver accepted in the second before a hard kill (OOM, SIGKILL) read as
+  never begun: its resolution was lost (the second review's B1), and an escalation's left
+  PagerDuty open (B2). The file is saved once per evaluation and cannot tell the two
+  cases apart; a "resolved" nobody needed is the price of never leaving an incident open,
+  so every message in flight at a restart counts as possibly received again. The property
+  test had not seen it because it restarted from a live export of the state, which still
+  held marks no save would have written; it restarts from the last saved snapshot now.
 - **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check
   (a rollback to 0.2.1 does not read the v3 state file: it announces the active alerts
-  again and forgets resolutions still owed);
-  repeat the stop and start with one failing channel against a paper login and confirm the
-  resolution on every channel that heard. A millisecond time request exists from TWS API
+  again and forgets resolutions still owed; the file stays on the volume, and a later
+  0.2.2 reads it again, at worst repeating a "resolved"); repeat the stop and start with
+  one failing channel under 0.2.2 against a paper login and confirm the resolution on
+  every channel that heard. A millisecond time request exists from TWS API
   10.34.01 (`reqCurrentTimeInMillis`, IBKR changelog) and would remove the whole-second
   band; whether the gateway and ib_async offer it is not checked. Open from the review,
   older than this change: a `resolved` whose own delivery fails is not sent again, and a

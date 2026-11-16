@@ -395,24 +395,30 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   The log says when such a wait begins and ends (`notify_resolution_waiting`,
   `notify_resolution_decided`).
 - Such a late `resolved` shows the phase and API status of the moment the condition
-  cleared, and its detail says when that was. If the condition is active again by the time
-  it goes out, the detail says since when, and the new alert is announced right after it,
-  without the 15-minute hold (once per 15 minutes per class at most, so a condition that
-  flaps faster than its channels answer still sends no more than one extra announcement).
+  cleared (in the webhook payload: `phase` and `api_status` are the clearing's, `time_utc`
+  is when the message was sent), and its detail says when it cleared and why it is late:
+  a result came back after the clearing, or a restart of the sidecar lost it. If the
+  condition is active again by the time it goes out, the detail says since when. When it
+  was the announcement that was accepted late, that acceptance restarted the 15-minute
+  window, so the new alert is announced right after the `resolved` instead of waiting
+  for the window: once per 15 minutes per class at most, so a condition that flaps
+  faster than its channels answer still sends no more than one extra announcement. A
+  late escalation result moves no window and lets nothing through.
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
   `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write), and written once
-  more when the sidecar stops, after the queued messages were flushed. After a restart a
+  more when the sidecar stops, after the queued messages were flushed (if an earlier
+  write is still hanging then, the log says `notifier_state_unsaved`). After a restart a
   delivered alert is not repeated and an undelivered one is announced, not forgotten. A
-  message that a channel had begun to send when the sidecar stopped is sent again while
-  its condition lasts, and if the condition has cleared it gets its `resolved`: whether it
-  had reached anyone is not known, and an open incident is worse than a `resolved` nobody
-  needed. A message that no channel had taken yet cannot have reached anyone and clears
-  silently (one begun within about the last second before a kill counts as not taken).
+  message the file shows in flight is sent again while its condition lasts, and if the
+  condition has cleared it gets its `resolved`: the file is written once per evaluation,
+  so after a hard kill it cannot tell a message no channel had taken from one a channel
+  accepted a moment before; an open incident is worse than a `resolved` nobody needed.
   When the file cannot be written the state is kept in memory, `/status` says so, and the
   write is tried again every 30 seconds. Its format is
   `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read. A
   sidecar older than 0.2.2 ignores a v3 file: after a downgrade it announces the active
-  alerts again and forgets resolutions that were still owed.
+  alerts again and forgets resolutions that were still owed. The v3 file stays on the
+  volume, so a later 0.2.2 reads it again; at worst that repeats a `resolved`.
 
 ## Dead-man ping (recommended)
 
