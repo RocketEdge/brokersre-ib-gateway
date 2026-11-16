@@ -55,8 +55,11 @@ class ProbeSnapshot:
         last_rtt_s: Duration of the last successful time round trip in seconds, or None.
         last_error: Why the last attempt failed, or None.
         consecutive_failures: Failed attempts since the last success.
-        clock_skew_s: IBKR time minus local time in seconds at the last success (IBKR
-            reports whole seconds), or None.
+        clock_skew_s: IBKR time minus local time in seconds at the last success, or None.
+            Uncorrected: IBKR reports whole seconds (truncated or rounded, undocumented),
+            so a correct clock reads between about -1 and +0.5 and the true difference
+            lies between the reading - 0.5 and the reading + 1, each widened by half the
+            round-trip time. ``notify.rules.skew_exceeds`` decides on that basis.
         close_wait_sockets: Sockets in CLOSE_WAIT on the API port, or None when not
             measurable.
         zombie: True when half-closed API sockets have persisted and the API does not answer.

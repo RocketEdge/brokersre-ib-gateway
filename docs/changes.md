@@ -5,6 +5,66 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — A "resolved" is no longer lost when an alert clears while it is being sent (sidecar 0.2.2)
+
+- **What changed:** in the first session of the published sidecar 0.2.1 next to a logged-in
+  paper gateway (two channels: a webhook to a local receiver, Teams with an unreachable
+  URL) the gateway container was stopped and started. `gateway_stopped` was queued for both
+  at 01:56:51.842 UTC and the webhook received it at once; the phase was `starting` at
+  01:56:54; Teams gave up after 4 attempts at 01:57:00.123; `logged-in` at 01:57:04. No
+  "resolved" was ever queued, although a person had been told. Now the dispatcher reports
+  a message as delivered at the first channel that accepts it; the ladder keeps an episode
+  that clears while one of its messages is out and decides its resolution when the result
+  arrives (sent if any message of it was accepted, also when a new episode of the class
+  began meanwhile); while such a result is outstanding nothing new is sent for that class;
+  an escalation still out when the condition clears now gets its resolution on the
+  escalation channels too. Notifier state `brokersre.sidecar.notifier-state.v3` (in-flight
+  marks, closing episodes); a v2 file is read. A message whose result a restart lost counts
+  as possibly received: its clearing is told. Released as sidecar 0.2.2. The `clock_skew`
+  false alert reported the same day was checked and does not exist (point 5); the rule is
+  unchanged, its detection band is now pinned by tests and documented.
+- **Result:** 11 new tests (ladder, dispatcher, and the notifier end to end with a webhook,
+  the real PagerDuty channel over a mock transport and a Teams channel that fails late)
+  failed on 0.2.1 for the expected reasons and pass now; end to end, 0.2.1 gave the
+  webhook `firing` only and PagerDuty `trigger` only, now `firing` + `resolved` and
+  `trigger` + `resolve` under one `dedup_key`. A property test (400 examples) feeds results
+  late, out of order and across restarts and checks that every episode someone heard of is
+  resolved once, none other is, and the messages of a class never go out of episode order.
+  Sidecar suite 879 to 901 passed (2 skipped), coverage 96.9 %. Clock skew: the reported
+  case (host 0.3 s ahead of a correct IBKR clock, truncated readings in (−1.3, −0.3]) and
+  the session's readings (−0.92, −1.77, 0.124 s) never alert; with the comparison the
+  report assumed (`|reading| > 1 s + RTT/2`) eight of the new tests fail.
+- **What did NOT work / root cause:** (1) *A message's outcome was its slowest channel's.*
+  `_Delivery.settle` called back once every channel had finished, so the webhook's
+  acceptance reached the ladder when Teams gave up, about 6 s after the condition had
+  cleared. With 0.2.0 and an outage of about 25 s the result came first, which is why the
+  resolution arrived then. (2) *The ladder dropped the late result.* `record_result`
+  ignored a result for an ended episode, and `_on_inactive` cleared an episode without a
+  known delivery silently, the rule meant for "nobody heard". Either fix alone covers the
+  observed run; only the ladder fix covers a condition that clears before even the fastest
+  channel answers. (3) *A late resolution can be worse than none.* PagerDuty keys an
+  incident by instance and class, not by episode: a resolve of the first episode queued
+  after the trigger of the second would close the second incident. Hence the per-class
+  hold. (4) The property test first failed on its own model: the state file keeps episode
+  starts to the millisecond, so a restarted ladder names the same episode a few
+  microseconds earlier; the test now names episodes as the file does. (5) *Clock skew:* the
+  report read `_clock_skew` as comparing the reading with 1 s + RTT/2. It never did:
+  `skew_exceeds` (there since the rules were first written, `93bbc25`) counts a reading
+  only when it is beyond the limit whether IBKR truncates or rounds, which IBKR does not
+  document: above +1.5 s or below −2 s, plus RTT/2. A true offset within ±1 s never alerts,
+  one of 2.5 s plus the RTT or more in either direction always does (at the second probe),
+  in between it depends on the probes' place in the second (truncation: never from −1 to
+  +1.5 s; rounding: never from −1.5 to +1 s). Committing to truncation, as suggested, would
+  gain 0.5 s on one side and could alert below 1 s if IBKR rounds; not done. What misled
+  was the reading (`clock_skew_s` is uncorrected: a correct clock reads about −1 to +0.5 s)
+  and the runbook's "more than one second" without "provably"; both are documented now.
+- **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check;
+  repeat the stop and start with one failing channel against a paper login and confirm the
+  resolution on every channel that heard. `docs/limitations.md` L20 still says the sidecar
+  never ran next to a logged-in gateway; update it from that session. A millisecond time
+  request exists from TWS API 10.34.01 (`reqCurrentTimeInMillis`, IBKR changelog) and would
+  remove the whole-second band; whether the gateway and ib_async offer it is not checked.
+
 ### 2026-11-16 — The sidecar no longer takes the gateway's log volume away from it
 
 - **What changed:** started as shipped on fresh volumes, the reference compose file plus a

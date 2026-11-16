@@ -311,7 +311,7 @@ in `ibgw_notify_failures_total`.
 | `restart_storm` | error | 3 or more gateway starts within 30 minutes. | Stop the restart loop and read the first error. |
 | `resource_alert` | error | The gateway reports `memory_high` (until `memory_ok`), or an `oom_kill` in the last 15 minutes. | Raise the memory limit or lower the Java heap. |
 | `disk_low` | warning | The gateway reports `disk_low` and has not reported `disk_ok`. | Free space on the log or settings volume. |
-| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time (IBKR answers in whole seconds, so up to 1.5 s of the reading is rounding). One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
+| `clock_skew` | warning | Two consecutive probes show that the host clock differs from IBKR's time by provably more than 1 second plus half the probe's round-trip time. IBKR answers in whole seconds and does not document whether it truncates or rounds, so a reading counts only when it is beyond the limit either way: IBKR time minus host time above +1.5 s or below −2 s, plus half the round-trip time. A true difference of up to 1 s never alerts; from 2.5 s (plus the round-trip time) in either direction every probe is beyond the limit. One probe within the limit clears it. | Fix time synchronisation on the host (chrony, systemd-timesyncd). |
 | `gateway_silent` | error | No event and no metrics sample for 5 minutes while the volume is mounted and the gateway is not stopped: the gateway was killed or hangs. | Check that the gateway container runs and the volume is mounted. |
 | `volume_missing` | error | For 5 minutes the sidecar could not read a known phase: the log volume is not mounted, `state/phase` is missing or unreadable, or it holds a token this sidecar does not know. Nothing else can alert in that state. | Mount the gateway's log volume read-only at `GATEWAY_LOG_DIR`; check that the gateway writes `state/phase`. |
 | `heartbeat` | info | Once a day at `HEARTBEAT_TIME` while the gateway's phase is known and no alert is active. It names what is not measured (an API that is not probed, a gateway without feeds). | Nothing. A missing heartbeat means the sidecar is down, cannot see the gateway, or an alert is active. |
@@ -382,12 +382,23 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   then it is sent again (after 30 s, doubling to every 5 minutes) for as long as the
   condition lasts; `/status` shows `notified: false` and the number of failed attempts.
 - When a notified condition clears, a `resolved` message goes to every channel that heard
-  about it. A condition nobody was told about clears silently.
+  about it (`NOTIFY_CHANNELS`, and the escalation channels once an escalation was
+  accepted). A condition nobody was told about clears silently.
+- The first channel that accepts a message is enough to count it as delivered; a slow or
+  unreachable channel does not hold that back. A condition that clears while a message
+  about it is still being sent waits for that result: if a channel accepted the message,
+  the `resolved` follows, if none did, nothing does. Until the result is in, nothing new is
+  sent for that class, so the messages of one class arrive in order (PagerDuty keys an
+  incident by instance and class and never gets an older resolve after a newer trigger).
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
   `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write). After a restart a
-  delivered alert is not repeated and an undelivered one is announced, not forgotten. When
+  delivered alert is not repeated and an undelivered one is announced, not forgotten. A
+  message that was being sent when the sidecar stopped is sent again while its condition
+  lasts, and if the condition has cleared it gets its `resolved`: whether it had reached
+  anyone is not known, and an open incident is worse than a `resolved` nobody needed. When
   the file cannot be written the state is kept in memory, `/status` says so, and the write
-  is tried again every 30 seconds.
+  is tried again every 30 seconds. Its format is `brokersre.sidecar.notifier-state.v3`; the
+  v2 file of an earlier sidecar is read.
 
 ## Dead-man ping (recommended)
 
@@ -436,7 +447,7 @@ Metric names are frozen. A value that was not measured is **omitted**, never exp
 | `ibgw_phase{phase}` | gauge | 1 for the current gateway phase. |
 | `ibgw_api_ready` | gauge | 1 when `ready`, 0 when `degraded`, `down` or `client_id_in_use`; absent when `not_measured`. |
 | `ibgw_api_rtt_seconds` | gauge | Round-trip time of the last successful time request. |
-| `ibgw_clock_offset_seconds` | gauge | IBKR time minus host time (IBKR reports whole seconds). |
+| `ibgw_clock_offset_seconds` | gauge | IBKR time minus host time as read (IBKR reports whole seconds: a correct clock reads between about −1 and +0.5 s; see `clock_skew`). |
 | `ibgw_api_close_wait_sockets` | gauge | Half-closed sockets on the gateway's API port: the gateway's own sample (default), or the shared socket table in the shared-namespace mode. |
 | `ibgw_boots_30m` | gauge | Gateway container starts in the last 30 minutes. |
 | `ibgw_memory_working_set_bytes`, `ibgw_memory_limit_bytes` | gauge | Gateway container memory (re-exported from the gateway's sampler). |
@@ -537,9 +548,16 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
   gateway's `events/` and `metrics/` feeds. With a gateway that writes only `state/phase`
   those values are reported as not measured, their alerts stay silent and the heartbeat says
   so.
-- **Clock skew resolution.** IBKR answers the time request in whole seconds, so
-  `clock_skew` fires only when the difference is provably above one second (in practice
-  from about 1.5 to 2 seconds), and only after two consecutive probes.
+- **Clock skew resolution.** IBKR answers the time request in whole seconds and does not
+  say whether it truncates or rounds, so `clock_skew` fires only when the difference is
+  provably above one second under both, and only after two consecutive probes. A true
+  difference (IBKR time minus host time) of up to 1 s never alerts; from 2.5 s in either
+  direction every probe is beyond the limit; in between it depends on where in the second
+  each probe falls (never from −1 to +1.5 s if IBKR truncates, never from −1.5 to +1 s if
+  it rounds). The 2.5 s bound widens by the round-trip time. `clock_skew_s` and
+  `ibgw_clock_offset_seconds` are the uncorrected reading: the true difference lies between
+  the reading minus 0.5 s and the reading plus 1 s, each widened by half the round-trip
+  time (a reading of −1.77 s: the host is 0.77 to 2.27 s ahead).
 - **Not verified against a logged-in gateway.** The probe is tested against an in-process
   server that speaks the IB API wire protocol and against a scriptable fake; the end-to-end
   check runs the real gateway image on a network without a route out, so it never logs in.

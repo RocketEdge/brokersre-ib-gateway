@@ -53,7 +53,7 @@ from brokersre_sidecar.notify.rules import Condition, Evaluation
 from brokersre_sidecar.vocab import AlertClass, MessageKind
 
 STATE_SCHEMA = "brokersre.sidecar.notifier-state.v3"
-# Written by sidecar 0.2.0 and 0.2.1: no in-flight marks and no closing episodes. Still read.
+# Written by the sidecar up to 0.2.1: no in-flight marks and no closing episodes. Still read.
 _PREVIOUS_SCHEMA = "brokersre.sidecar.notifier-state.v2"
 _FIRING_STEP = 0
 _LAST_STEP = 2
