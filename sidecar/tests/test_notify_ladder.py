@@ -353,6 +353,43 @@ def test_a_late_resolution_lets_the_next_episode_through_at_most_once_per_window
     assert (third.kind, third.since) == (MessageKind.FIRING, at(6))
 
 
+def test_a_late_escalation_alone_does_not_let_the_next_episode_through() -> None:
+    # Second review of #32 (B3): the announcement was accepted at 0, only the escalation's
+    # result was late. Nothing moved the window, so the next episode waits for its end at
+    # 900 s, as it does when every result is prompt.
+    engine = ladder()
+    run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
+    (escalation,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    assert engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(605)) == []
+    engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(608))
+    engine.record_result(escalation, delivered=True, now=at(609))
+    (resolved,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(610))
+    assert (resolved.kind, resolved.active_again_since) == (MessageKind.RESOLVED, at(608))
+    assert run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 899) == []
+    (again,) = run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 900)
+    assert (again.kind, again.since) == (MessageKind.FIRING, at(608))
+
+
+def test_a_late_announcement_still_lets_the_next_episode_through_after_a_restart() -> None:
+    # The announcement was accepted late while an escalation of the same episode was still
+    # out; the state is saved, the sidecar restarts, the escalation's result is lost.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(0))
+    engine.record_result(first, delivered=False, now=at(1))
+    retry, _escalation = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(601))
+    engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(602))
+    engine.record_result(retry, delivered=True, now=at(603))  # late: moves the window
+    after = ladder()
+    after.import_state(json.loads(json.dumps(engine.export_state())))
+    resolved, second = after.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(604))
+    assert (resolved.kind, second.kind, second.since) == (
+        MessageKind.RESOLVED,
+        MessageKind.FIRING,
+        at(602),
+    )
+
+
 def test_the_once_per_window_pass_is_not_granted_again_after_a_restart() -> None:
     # Second review of #32 (R3): without exempted_at read back, a restart would allow a
     # second pass inside the same window.

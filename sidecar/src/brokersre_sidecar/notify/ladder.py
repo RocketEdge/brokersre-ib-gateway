@@ -178,6 +178,9 @@ class _Closing:
         superseded_by: The hand-over class of the verdict that ended it, if any.
         cleared_at: When the condition cleared (the resolution says so).
         moment: Phase and API status at the clearing, or None when not given.
+        announced_late: Its announcement was accepted after the clearing, which restarted
+            the de-duplication window then; only that lets the episode active when the
+            resolution goes out through the hold (``_exempt``).
     """
 
     since: datetime
@@ -187,6 +190,7 @@ class _Closing:
     superseded_by: AlertClass | None
     cleared_at: datetime | None = None
     moment: Moment | None = None
+    announced_late: bool = False
 
 
 @dataclass(slots=True)
@@ -279,14 +283,16 @@ class LadderEngine:
             if alert.value in self._config.disabled_classes:
                 continue
             state = self._state.classes.get(alert)
-            owed = self._owed_resolutions(alert, state) if state and state.closing else []
+            owed, moved = (
+                self._owed_resolutions(alert, state) if state and state.closing else ([], False)
+            )
             evaluation = evaluations.get(alert)
             current: list[Outbound] = []
             if evaluation is not None and evaluation.state is Condition.ACTIVE:
-                current = self._on_active(alert, evaluation, now, after_late=bool(owed))
+                current = self._on_active(alert, evaluation, now, after_late=moved)
             elif evaluation is not None and evaluation.state is Condition.INACTIVE:
                 current = self._on_inactive(alert, evaluation, now, moment)
-            elif owed and state is not None and state.active:
+            elif moved and state is not None and state.active:
                 self._exempt(state, now)  # undecidable now, but the episode is still open
             due += self._active_again(alert, owed) + current
         if not due and can_see and self._heartbeat_due(now):
@@ -325,6 +331,7 @@ class LadderEngine:
                 if step == _FIRING_STEP:
                     # A delivered announcement starts the de-duplication window, late or not.
                     state.last_announced = now
+                    closing.announced_late = True
                 else:
                     closing.escalated = True
             self.dirty = True
@@ -396,8 +403,9 @@ class LadderEngine:
             alert: The class.
             evaluation: Its active verdict (the detail goes into the messages).
             now: Current time (UTC).
-            after_late: A late resolution of an earlier episode goes out in this step; this
-                episode is then announced without the de-duplication hold (``_exempt``).
+            after_late: A late resolution of an earlier episode whose announcement was
+                accepted late goes out in this step; this episode is then announced without
+                the de-duplication hold (``_exempt``).
         """
         state = self._state.classes.setdefault(alert, _AlertState())
         config = self._config
@@ -455,11 +463,13 @@ class LadderEngine:
         """Let the open episode through the de-duplication hold, once per window.
 
         Called when a late resolution of an earlier episode goes out while this one is
-        active. The late acceptance of the earlier announcement restarted the window, so
-        without this the new episode would wait up to 15 minutes behind a "resolved" that
-        is already untrue (and PagerDuty would hold no open incident). At most one episode
-        per window is let through: a class that flaps faster than its channels answer
-        still sends no more than one extra announcement per window.
+        active and that episode's announcement was accepted late, after the clearing: that
+        acceptance restarted the window, so without this the new episode would wait up to
+        15 minutes behind a "resolved" that is already untrue (and PagerDuty would hold no
+        open incident). A late escalation result alone moves no window and lets nothing
+        through. At most one episode per window is let through: a class that flaps faster
+        than its channels answer still sends no more than one extra announcement per
+        window.
         """
         if state.unheld or not state.active:
             return
@@ -512,17 +522,26 @@ class LadderEngine:
         self.dirty = True
         return due
 
-    def _owed_resolutions(self, alert: AlertClass, state: _AlertState) -> list[Outbound]:
-        """Return the resolutions of ended episodes whose results are all in, oldest first."""
+    def _owed_resolutions(
+        self, alert: AlertClass, state: _AlertState
+    ) -> tuple[list[Outbound], bool]:
+        """Settle the ended episodes whose results are all in.
+
+        Returns:
+            Their resolutions, oldest first (none for an episode nobody heard), and whether
+            one of them had its announcement accepted late, which restarted the
+            de-duplication window after the clearing.
+        """
         settled = sorted(
             (closing for closing in state.closing if not closing.waiting),
             key=lambda closing: closing.since,
         )
         if not settled:
-            return []
+            return [], False
         state.closing = [closing for closing in state.closing if closing.waiting]
         self.dirty = True
-        return [
+        heard = [closing for closing in settled if closing.heard]
+        resolutions = [
             self._resolution(
                 alert,
                 closing.since,
@@ -531,9 +550,9 @@ class LadderEngine:
                 cleared_at=closing.cleared_at,
                 moment=closing.moment,
             )
-            for closing in settled
-            if closing.heard
+            for closing in heard
         ]
+        return resolutions, any(closing.announced_late for closing in heard)
 
     def _resolution(
         self,
@@ -652,6 +671,7 @@ class LadderEngine:
                         "since": format_utc(closing.since),
                         "waiting": sorted(closing.waiting),
                         "heard": closing.heard,
+                        "announced_late": closing.announced_late,
                         "escalated": closing.escalated,
                         "superseded_by": (
                             closing.superseded_by.value if closing.superseded_by else None
@@ -766,6 +786,7 @@ def _load_closing(raw: object) -> list[_Closing]:
             superseded_by=classes.get(successor) if isinstance(successor, str) else None,
             cleared_at=parse_utc(entry.get("cleared_at")),
             moment=_load_moment(entry.get("moment")),
+            announced_late=entry.get("announced_late") is True,
         )
         if closing.heard:
             loaded.append(closing)
