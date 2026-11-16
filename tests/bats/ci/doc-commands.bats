@@ -92,6 +92,14 @@ markdown_files() {
     -o -name bin -o -name obj -o -name '.*_cache' \) -prune -o -type f -name '*.md' -print
 }
 
+# exec_path_docs: the Markdown files whose exec commands must use the Git Bash-safe path.
+# Left out: docs/changes.md and tasks/ (history, quoting commands as they were) and
+# docs/evidence.md (commands recorded as run on 2026-11-12; it tells Git Bash users to export
+# MSYS_NO_PATHCONV=1 instead, asserted below).
+exec_path_docs() {
+  markdown_files | grep -v -E '/(docs/changes\.md|docs/evidence\.md|tasks/[^/]*\.md)$'
+}
+
 quick_start() {
   run_block README.md "$1" \
     --answer 'IBKR username: ' shown "${USERNAME}" \
@@ -196,4 +204,52 @@ loki_password() {
 
 @test "docs/recipes/README.md Loki password block in sh: exact bytes, password never shown" {
   loki_password sh
+}
+
+@test "doc-exec-paths.awk tells the form Git Bash rewrites from the form it passes" {
+  printf '%s\n' \
+    'docker compose -f x.yml exec ib-gateway cat /var/log/ibgateway/state/phase' \
+    'docker compose -f x.yml exec ib-gateway cat //var/log/ibgateway/state/phase' \
+    '- Which volume: `docker compose ... exec ib-gateway df -h //var/log/ibgateway /home/ibgateway/Jts/settings`.' \
+    'docker exec -e LOG_DIR=/tmp/x c true' \
+    'docker exec c cat //var/log/x | grep y > /tmp/out' \
+    '`docker compose ... logs ib-gateway` reads /var/log/ibgateway on the host' \
+    '```powershell' \
+    'docker exec c cat /var/log/ibgateway/state/phase' \
+    '```' >"${WORK}/doc.md"
+  run awk -f "${EXEC_PATHS}" "${WORK}/doc.md"
+  [ "${status}" -eq 0 ]
+  [ "${output}" == "$(printf '%s\n' \
+    "${WORK}/doc.md:1:bad:/var/log/ibgateway/state/phase" \
+    "${WORK}/doc.md:2:ok://var/log/ibgateway/state/phase" \
+    "${WORK}/doc.md:3:ok://var/log/ibgateway" \
+    "${WORK}/doc.md:3:bad:/home/ibgateway/Jts/settings" \
+    "${WORK}/doc.md:4:bad:LOG_DIR=/tmp/x" \
+    "${WORK}/doc.md:5:ok://var/log/x")" ]
+}
+
+@test "the README's exec commands, step 3 included, pass container paths that Git Bash leaves alone" {
+  run awk -f "${EXEC_PATHS}" "${ROOT}/README.md"
+  [ "${status}" -eq 0 ]
+  echo "${output}"
+  [[ "${output}" != *":bad:"* ]]
+  [[ "${output}" == *"README.md:"*":ok://var/log/ibgateway/state/phase"* ]]
+}
+
+@test "no documented exec command passes a container path that Git Bash would rewrite" {
+  local files
+  mapfile -t files < <(exec_path_docs)
+  [ "${#files[@]}" -gt 20 ]
+  run awk -f "${EXEC_PATHS}" "${files[@]}"
+  [ "${status}" -eq 0 ]
+  run grep ':bad:' <<<"${output}"
+  if [ "${status}" -eq 0 ]; then
+    echo "Write these container paths with a leading // (Git Bash rewrites a leading /):"
+    echo "${output}"
+    false
+  fi
+}
+
+@test "docs/evidence.md, whose commands are kept as run, tells Git Bash users to turn the rewriting off" {
+  grep -F -- 'export MSYS_NO_PATHCONV=1' "${ROOT}/docs/evidence.md"
 }
