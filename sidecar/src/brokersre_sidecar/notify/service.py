@@ -131,10 +131,9 @@ class Notifier:
         evaluations = self._rules.evaluate(gateway, probe, now=now, mono=self._clock.monotonic())
         can_see = gateway.phase is not None and gateway.phase != UNKNOWN_PHASE
         current = Moment(phase=gateway.phase, api_status=probe.status.value)
-        # Results that came back since the last tick decided waits: say so before the
-        # "resolved" they owe is queued; waits that begin in this step are logged after it.
-        self._log_waiting()
         due_now = self._ladder.step(evaluations, now, can_see=can_see, moment=current)
+        # Waits decided since the last tick and waits begun in this step are logged here,
+        # before anything of this step is queued: "decided" precedes the "resolved" it owes.
         self._log_waiting()
         try:
             if self._ladder.dirty or self._unsaved:
@@ -208,10 +207,11 @@ class Notifier:
         """Log when a cleared alert starts and stops waiting for a message's result.
 
         While it waits, nothing new is sent for its class; without these two events that
-        hold would be invisible. Called before and after each step: ``decided`` is logged
-        before the ``notify_queued`` of the ``resolved`` it owes, which follows only if a
-        channel had accepted a message about the alert (``decided`` does not say which
-        way); ``waiting`` is logged after the step in which the wait began.
+        hold would be invisible. Called once per evaluation, after the step and before its
+        messages are queued (``tick`` saves first): ``decided`` is therefore logged before
+        the ``notify_queued`` of the ``resolved`` it owes, which follows only if a channel
+        had accepted a message about the alert (``decided`` does not say which way), and
+        ``waiting`` in the evaluation in which the wait began.
         """
         now_waiting = self._ladder.waiting()
         for alert, since in sorted(now_waiting - self._waiting, key=_by_class):
