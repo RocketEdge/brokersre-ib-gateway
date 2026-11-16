@@ -11,6 +11,14 @@
 #    bytes, and a password must never appear on the terminal. Found on 2026-11-16 with a real
 #    paper login: `read -r` without `IFS=` dropped the blanks of a password, and
 #    `read -r -s -p` failed in zsh (`read: -p: no coprocess`) without writing a file.
+#    Each block also runs the way a reader uses it: pasted in one write into an interactive
+#    bash and zsh with bracketed paste off and on, and into an interactive sh (no bracketed
+#    paste at all, like dash, busybox sh and macOS's bash 3.2); then the history must not hold
+#    a password either. Found in the review of #37: without bracketed paste the first `read`
+#    took the next pasted line, and the typed password ran as a command (on the screen and in
+#    the history), unless the shell has read the whole block before it runs (a subshell
+#    `( ... )` around it). And Ctrl-C at a password prompt must leave echo on and write no
+#    password file (the subshell's `trap 'stty echo; exit 130' INT`).
 # 2. Container paths. Git Bash, which the README names for Windows, rewrites an argument that
 #    starts with one `/` into a Windows path, so `docker compose ... exec ib-gateway cat
 #    /var/log/...` failed there; the documented form is `//var/log/...` (doc-exec-paths.awk).
@@ -60,16 +68,27 @@ require_command() {
   skip "$1 is not installed here; the lint job of ci.yml runs this test"
 }
 
-# run_block DOC SHELL [--answer PROMPT shown|hidden VALUE]...: extract the marked block of
-# DOC (relative to the repository root) and run it under SHELL in ${WORK}/cwd through a pty,
-# typing the answers in order. Fails, printing the driver's findings, when a check fails.
+# fresh_cwd: empty ${WORK}/cwd (where a block runs) and ${WORK}/home (an interactive shell's
+# start-up file and history), so a test can run a block several times.
+fresh_cwd() {
+  rm -rf "${WORK}/cwd" "${WORK}/home"
+  mkdir -p "${WORK}/cwd"
+}
+
+# run_block DOC SHELL MODE BRACKETED_PASTE [--answer PROMPT KIND VALUE]...: extract the marked
+# block of DOC (relative to the repository root) and run it under SHELL in ${WORK}/cwd through
+# a pty, answering the prompts in order. MODE `script` runs `SHELL block.sh`; MODE `paste`
+# pastes the block in one write into an interactive SHELL whose bracketed paste is
+# BRACKETED_PASTE (`on` or `off`; dash has none), as a reader copying it from the page does.
+# Fails, printing the driver's findings, when a check fails.
 run_block() {
-  local doc="$1" shell="$2"
-  shift 2
+  local doc="$1" shell="$2" mode="$3" bracketed="$4"
+  shift 4
   require_command python3
   require_command "${shell}"
   awk -v marker="${MARKER}" -f "${EXTRACT}" "${ROOT}/${doc}" >"${WORK}/block.sh"
-  run python3 "${DRIVER}" --shell "${shell}" --script "${WORK}/block.sh" --cwd "${WORK}/cwd" "$@"
+  run python3 "${DRIVER}" --shell "${shell}" --mode "${mode}" --bracketed-paste "${bracketed}" \
+    --home "${WORK}/home" --script "${WORK}/block.sh" --cwd "${WORK}/cwd" "$@"
   echo "${output}"
   [ "${status}" -eq 0 ]
 }
@@ -100,16 +119,31 @@ exec_path_docs() {
   markdown_files | grep -v -E '/(docs/changes\.md|docs/evidence\.md|tasks/[^/]*\.md)$'
 }
 
+# The four blocks. Each function takes SHELL [MODE [BRACKETED_PASTE]] (default: script) and
+# checks the written files byte for byte; each *_interrupt function pastes the block into an
+# interactive SHELL with bracketed paste on, presses Ctrl-C at the first password prompt, and
+# checks that no password file was written (the driver checks that echo is on again).
+
 quick_start() {
-  run_block README.md "$1" \
+  fresh_cwd
+  run_block README.md "$1" "${2:-script}" "${3:-off}" \
     --answer 'IBKR username: ' shown "${USERNAME}" \
     --answer 'IBKR password: ' hidden "${PASSWORD}"
   assert_file_bytes compose/secrets/ib-username "${USERNAME}"
   assert_file_bytes compose/secrets/ib-password "${PASSWORD}"
 }
 
+quick_start_interrupt() {
+  fresh_cwd
+  run_block README.md "$1" paste on \
+    --answer 'IBKR username: ' shown "${USERNAME}" \
+    --answer 'IBKR password: ' interrupt -
+  [ ! -e "${WORK}/cwd/compose/secrets/ib-password" ]
+}
+
 several_gateways() {
-  run_block compose/README.md "$1" \
+  fresh_cwd
+  run_block compose/README.md "$1" "${2:-script}" "${3:-off}" \
     --answer 'IBKR username for live: ' shown "${LIVE_USERNAME}" \
     --answer 'IBKR password for live: ' hidden "${LIVE_PASSWORD}" \
     --answer 'IBKR username for paper: ' shown "${PAPER_USERNAME}" \
@@ -120,16 +154,42 @@ several_gateways() {
   assert_file_bytes compose/secrets/paper/ib-password "${PAPER_PASSWORD}"
 }
 
+several_gateways_interrupt() {
+  fresh_cwd
+  run_block compose/README.md "$1" paste on \
+    --answer 'IBKR username for live: ' shown "${LIVE_USERNAME}" \
+    --answer 'IBKR password for live: ' interrupt -
+  [ ! -e "${WORK}/cwd/compose/secrets/live/ib-password" ]
+  [ ! -e "${WORK}/cwd/compose/secrets/paper" ]
+}
+
 console_password() {
+  fresh_cwd
   # The console page follows the quick start, which created compose/secrets.
   mkdir -p "${WORK}/cwd/compose/secrets"
-  run_block docs/console.md "$1" --answer 'VNC password: ' hidden "${VNC_PASSWORD}"
+  run_block docs/console.md "$1" "${2:-script}" "${3:-off}" \
+    --answer 'VNC password: ' hidden "${VNC_PASSWORD}"
   assert_file_bytes compose/secrets/vnc-password "${VNC_PASSWORD}"
 }
 
+console_password_interrupt() {
+  fresh_cwd
+  mkdir -p "${WORK}/cwd/compose/secrets"
+  run_block docs/console.md "$1" paste on --answer 'VNC password: ' interrupt -
+  [ ! -e "${WORK}/cwd/compose/secrets/vnc-password" ]
+}
+
 loki_password() {
-  run_block docs/recipes/README.md "$1" --answer 'Loki password: ' hidden "${LOKI_PASSWORD}"
+  fresh_cwd
+  run_block docs/recipes/README.md "$1" "${2:-script}" "${3:-off}" \
+    --answer 'Loki password: ' hidden "${LOKI_PASSWORD}"
   assert_file_bytes compose/secrets/vector/loki_password "${LOKI_PASSWORD}"
+}
+
+loki_password_interrupt() {
+  fresh_cwd
+  run_block docs/recipes/README.md "$1" paste on --answer 'Loki password: ' interrupt -
+  [ ! -e "${WORK}/cwd/compose/secrets/vector/loki_password" ]
 }
 
 @test "each document with a secret block marks exactly one, and no other document has one" {
@@ -204,6 +264,102 @@ loki_password() {
 
 @test "docs/recipes/README.md Loki password block in sh: exact bytes, password never shown" {
   loki_password sh
+}
+
+@test "README quick start block pasted into interactive bash without bracketed paste: exact bytes" {
+  quick_start bash paste off
+}
+
+@test "README quick start block pasted into interactive zsh without bracketed paste: exact bytes" {
+  quick_start zsh paste off
+}
+
+@test "README quick start block pasted into interactive sh: exact bytes, password never shown" {
+  quick_start sh paste off
+}
+
+@test "README quick start block pasted with bracketed paste on (bash, zsh): exact bytes" {
+  quick_start bash paste on
+  quick_start zsh paste on
+}
+
+@test "README quick start block: Ctrl-C at the password prompt writes nothing, echo back on" {
+  local shell
+  for shell in bash zsh sh; do
+    quick_start_interrupt "${shell}"
+  done
+}
+
+@test "compose/README.md block pasted into interactive bash without bracketed paste: exact bytes" {
+  several_gateways bash paste off
+}
+
+@test "compose/README.md block pasted into interactive zsh without bracketed paste: exact bytes" {
+  several_gateways zsh paste off
+}
+
+@test "compose/README.md block pasted into interactive sh: exact bytes, passwords never shown" {
+  several_gateways sh paste off
+}
+
+@test "compose/README.md block pasted with bracketed paste on (bash, zsh): exact bytes" {
+  several_gateways bash paste on
+  several_gateways zsh paste on
+}
+
+@test "compose/README.md block: Ctrl-C at the first password prompt writes nothing, echo back on" {
+  local shell
+  for shell in bash zsh sh; do
+    several_gateways_interrupt "${shell}"
+  done
+}
+
+@test "docs/console.md block pasted into interactive bash without bracketed paste: exact bytes" {
+  console_password bash paste off
+}
+
+@test "docs/console.md block pasted into interactive zsh without bracketed paste: exact bytes" {
+  console_password zsh paste off
+}
+
+@test "docs/console.md block pasted into interactive sh: exact bytes, password never shown" {
+  console_password sh paste off
+}
+
+@test "docs/console.md block pasted with bracketed paste on (bash, zsh): exact bytes" {
+  console_password bash paste on
+  console_password zsh paste on
+}
+
+@test "docs/console.md block: Ctrl-C at the password prompt writes nothing, echo back on" {
+  local shell
+  for shell in bash zsh sh; do
+    console_password_interrupt "${shell}"
+  done
+}
+
+@test "docs/recipes/README.md block pasted into interactive bash without bracketed paste: exact bytes" {
+  loki_password bash paste off
+}
+
+@test "docs/recipes/README.md block pasted into interactive zsh without bracketed paste: exact bytes" {
+  loki_password zsh paste off
+}
+
+@test "docs/recipes/README.md block pasted into interactive sh: exact bytes, password never shown" {
+  loki_password sh paste off
+}
+
+@test "docs/recipes/README.md block pasted with bracketed paste on (bash, zsh): exact bytes" {
+  loki_password bash paste on
+  loki_password zsh paste on
+}
+
+@test "docs/recipes/README.md block: Ctrl-C at the password prompt writes nothing, echo back on" {
+  local shell
+  for shell in bash zsh sh; do
+    loki_password_interrupt "${shell}"
+  done
 }
 
 @test "doc-exec-paths.awk tells the form Git Bash rewrites from the form it passes" {
