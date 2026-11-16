@@ -37,34 +37,19 @@ _LOGGER = logging.getLogger(__name__)
 OnDone = Callable[[bool], None]
 """Called once per message: True at the first acceptance, False when no channel accepted."""
 
-OnStart = Callable[[], None]
-"""Called at most once per message, when the first channel begins to send it."""
-
 
 @dataclass(slots=True)
 class _Delivery:
     """Outcome of one message across the channels it was queued for.
 
-    Invariants: ``on_done`` is called exactly once, with True at the first channel that
+    Invariant: ``on_done`` is called exactly once, with True at the first channel that
     accepts (the other channels may still be working on the message), or with False after
-    the last channel gave up or dropped it, when none accepted. ``on_start`` is called at
-    most once, before any channel sends anything of the message; a message that is
-    dropped or refused before any channel took it is never reported as begun.
+    the last channel gave up or dropped it, when none accepted.
     """
 
     remaining: int
     on_done: OnDone | None
-    on_start: OnStart | None = None
     reported: bool = False
-    begun: bool = False
-
-    def begin(self) -> None:
-        """Record that a channel takes the message to send it; report the first time."""
-        if self.begun:
-            return
-        self.begun = True
-        if self.on_start is not None:
-            self.on_start()
 
     def settle(self, accepted: bool) -> None:
         """Record the final outcome of one channel; report the first acceptance at once."""
@@ -139,11 +124,7 @@ class Dispatcher:
         return tuple(self._channels)
 
     def enqueue(
-        self,
-        message: Message,
-        channels: Iterable[str],
-        on_done: OnDone | None = None,
-        on_start: OnStart | None = None,
+        self, message: Message, channels: Iterable[str], on_done: OnDone | None = None
     ) -> None:
         """Queue ``message`` for each named channel that is configured and wants it.
 
@@ -156,8 +137,6 @@ class Dispatcher:
             on_done: Called once: with True as soon as one channel accepted the message
                 (the others may still be sending it), with False when every channel
                 failed, dropped it or none was eligible.
-            on_start: Called once, when the first channel takes the message to send it
-                (not when it is queued): from then on someone may receive it.
         """
         targets = [
             name
@@ -168,7 +147,7 @@ class Dispatcher:
             if on_done is not None:
                 on_done(False)
             return
-        delivery = _Delivery(len(targets), on_done, on_start)
+        delivery = _Delivery(len(targets), on_done)
         for name in targets:
             box = self._boxes[name]
             if len(box.items) >= self._outbox_size:
@@ -199,7 +178,6 @@ class Dispatcher:
         channel = self._channels[name]
         while box.items:
             message, delivery = box.items.popleft()
-            delivery.begin()
             box.busy = True
             try:
                 accepted = await self._deliver(channel, box, message)

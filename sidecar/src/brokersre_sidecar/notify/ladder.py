@@ -29,11 +29,11 @@ Rules of the ladder:
   (a new episode is held, as by the de-duplication window), so the messages of one class
   never overtake each other: a receiver that keys by class (PagerDuty's ``dedup_key`` is
   instance and class) never gets an older "resolved" after a newer trigger.
-* What was in flight when the sidecar stopped is sent again while the condition lasts. If a
-  channel had begun to send it (``record_started``), it counts as possibly received: should
-  the condition clear first, its resolution is sent. A "resolved" that nobody needed is
-  harmless; an incident that is never closed is not. A message that no channel had taken
-  cannot have reached anyone and clears silently.
+* What was in flight when the sidecar stopped is sent again while the condition lasts, and
+  counts as possibly received: should the condition clear first, its resolution is sent.
+  The state file is written once per evaluation, so after a hard kill it cannot tell a
+  message no channel had taken from one a channel accepted a moment before the kill; a
+  "resolved" that nobody needed is harmless, an incident that is never closed is not.
 * An ``UNKNOWN`` verdict changes nothing (a resolution that is already owed is still sent).
 * The optional heartbeat is sent once per local day at or after ``heartbeat_time`` when the
   sidecar can see the gateway, no alert is active and nothing else is being sent.
@@ -147,10 +147,8 @@ class _Notice:
     Attributes:
         delivered: A channel accepted it.
         in_flight: Sent; no result yet. Never sent again while set.
-        started: A channel has begun to send the attempt that is in flight (reset at each
-            attempt). Only then can that attempt have reached anyone.
-        uncertain: A started attempt's result was lost because the sidecar stopped while
-            it was out; it may have reached someone. Does not stop a resend, but makes the
+        uncertain: An attempt's result was lost because the sidecar stopped while it was
+            out; it may have reached someone. Does not stop a resend, but makes the
             episode's clearing worth a resolution.
         failed_attempts: Attempts that no channel accepted.
         retry_at: Earliest time of the next attempt after a failure.
@@ -158,7 +156,6 @@ class _Notice:
 
     delivered: bool = False
     in_flight: bool = False
-    started: bool = False
     uncertain: bool = False
     failed_attempts: int = 0
     retry_at: datetime | None = None
@@ -179,8 +176,6 @@ class _Closing:
         escalated: An escalation of it was accepted (or possibly was): the resolution goes
             to the escalation channels too.
         superseded_by: The hand-over class of the verdict that ended it, if any.
-        started: The steps of ``waiting`` that a channel has begun to send; only these can
-            have reached anyone if the sidecar stops before their result is known.
         cleared_at: When the condition cleared (the resolution says so).
         moment: Phase and API status at the clearing, or None when not given.
     """
@@ -190,7 +185,6 @@ class _Closing:
     heard: bool
     escalated: bool
     superseded_by: AlertClass | None
-    started: set[int] = field(default_factory=set)
     cleared_at: datetime | None = None
     moment: Moment | None = None
 
@@ -326,7 +320,6 @@ class LadderEngine:
             if closing.since != outbound.since or step not in closing.waiting:
                 continue
             closing.waiting.discard(step)
-            closing.started.discard(step)
             if delivered:
                 closing.heard = True
                 if step == _FIRING_STEP:
@@ -338,36 +331,6 @@ class LadderEngine:
             return
         if state.active and state.since == outbound.since:
             self._record_current(state, outbound, delivered=delivered, now=now)
-
-    def record_started(self, outbound: Outbound) -> None:
-        """Record that a channel has begun to send a ``FIRING`` or ``ESCALATION``.
-
-        From then on the message may reach someone. Only such a message counts as possibly
-        received when the sidecar stops before its result is known; one that no channel
-        had taken (queued, then the process died) cannot have reached anyone and is
-        treated as never sent. The mark reaches the state file with the next save, about
-        one evaluation later: a message begun within that last second before a kill is
-        treated as never sent (the flush at a normal stop saves it, see
-        ``Notifier.save_on_stop``).
-
-        Args:
-            outbound: The notification returned by ``step``.
-        """
-        state = self._state.classes.get(outbound.alert_class)
-        if state is None:
-            return
-        step = outbound.escalation_step
-        for closing in state.closing:
-            if closing.since == outbound.since and step in closing.waiting:
-                if step not in closing.started:
-                    closing.started.add(step)
-                    self.dirty = True
-                return
-        if state.active and state.since == outbound.since:
-            notice = state.notices.get(step)
-            if notice is not None and notice.in_flight and not notice.started:
-                notice.started = True
-                self.dirty = True
 
     def _record_current(
         self, state: _AlertState, outbound: Outbound, *, delivered: bool, now: datetime
@@ -411,7 +374,6 @@ class LadderEngine:
         if notice.retry_at is not None and now < notice.retry_at:
             return []
         notice.in_flight = True
-        notice.started = False  # this attempt: no channel has it yet
         self.dirty = True
         return [
             Outbound(
@@ -533,7 +495,6 @@ class LadderEngine:
         waiting = {step for step, notice in state.notices.items() if notice.in_flight}
         due: list[Outbound] = []
         if waiting:
-            begun = {step for step in waiting if state.notices[step].started}
             state.closing.append(
                 _Closing(
                     state.since,
@@ -541,7 +502,6 @@ class LadderEngine:
                     heard,
                     escalated,
                     evaluation.superseded_by,
-                    begun,
                     cleared_at=now,
                     moment=moment,
                 )
@@ -683,7 +643,6 @@ class LadderEngine:
                         "delivered": notice.delivered,
                         "failed_attempts": notice.failed_attempts,
                         "in_flight": notice.in_flight,
-                        "started": notice.started,
                         "uncertain": notice.uncertain,
                     }
                     for step, notice in state.notices.items()
@@ -692,7 +651,6 @@ class LadderEngine:
                     {
                         "since": format_utc(closing.since),
                         "waiting": sorted(closing.waiting),
-                        "started": sorted(closing.started),
                         "heard": closing.heard,
                         "escalated": closing.escalated,
                         "superseded_by": (
@@ -727,9 +685,8 @@ class LadderEngine:
         an entry of an unknown class is ignored (entry by entry) rather than raised. The
         worst outcome of ignoring state is one repeated notification. What was in flight
         when the sidecar stopped never reports back: it is treated as not delivered (it is
-        sent again while the condition lasts), and, if a channel had begun to send it, as
-        possibly received (its clearing is told). A v2 file carries no in-flight marks, so
-        nothing in it is possibly received.
+        sent again while the condition lasts) and as possibly received (its clearing is
+        told). A v2 file carries no in-flight marks, so nothing in it is possibly received.
         """
         if not isinstance(data, dict) or data.get("schema") not in (STATE_SCHEMA, _PREVIOUS_SCHEMA):
             return
@@ -762,9 +719,8 @@ class LadderEngine:
 def _load_notices(raw: object) -> dict[int, _Notice]:
     """Read the saved per-step delivery state; anything malformed is dropped.
 
-    A notice saved while in flight is loaded as not in flight: its result went with the
-    stopped process. It is uncertain (possibly received) only if a channel had begun to
-    send it.
+    A notice saved while in flight is loaded as not in flight and uncertain: its result
+    went with the stopped process, and it may have reached someone.
     """
     notices: dict[int, _Notice] = {}
     if not isinstance(raw, dict):
@@ -773,10 +729,9 @@ def _load_notices(raw: object) -> dict[int, _Notice]:
         if key not in ("0", "1", "2") or not isinstance(value, dict):
             continue
         attempts = value.get("failed_attempts")
-        begun_at_stop = value.get("in_flight") is True and value.get("started") is True
         notices[int(key)] = _Notice(
             delivered=value.get("delivered") is True,
-            uncertain=value.get("uncertain") is True or begun_at_stop,
+            uncertain=value.get("uncertain") is True or value.get("in_flight") is True,
             failed_attempts=(
                 attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
             ),
@@ -787,9 +742,8 @@ def _load_notices(raw: object) -> dict[int, _Notice]:
 def _load_closing(raw: object) -> list[_Closing]:
     """Read the saved ended-but-unsettled episodes; anything malformed is dropped.
 
-    A step that was still waiting when the sidecar stopped never reports back. If a channel
-    had begun to send it, it counts as possibly received and the episode's resolution is
-    owed (it goes out at the next step); if not, nobody can have received it.
+    A step that was still waiting when the sidecar stopped never reports back: it counts as
+    possibly received, so the episode's resolution is owed and goes out at the next step.
     """
     loaded: list[_Closing] = []
     if not isinstance(raw, list):
@@ -802,7 +756,7 @@ def _load_closing(raw: object) -> list[_Closing]:
         waiting = entry.get("waiting")
         if since is None or not isinstance(waiting, list):
             continue
-        lost = _steps(waiting) & _steps(entry.get("started"))
+        lost = _steps(waiting)
         successor = entry.get("superseded_by")
         closing = _Closing(
             since=since,

@@ -419,11 +419,30 @@ async def test_a_resolution_is_not_lost_when_a_slow_channel_holds_back_the_resul
     assert world.notifier.snapshot().active_alerts == ()
 
 
-async def test_an_announcement_no_channel_took_before_a_crash_is_not_resolved_after_it(
+async def test_an_announcement_accepted_just_before_a_hard_kill_is_resolved_after_it(
     tmp_path: Path,
 ) -> None:
-    # Review of #32 (P1): queued and saved as in flight by the same evaluation, then the
-    # process died before a channel worker took it. Nobody can have received it.
+    # Review of #32, round 2 (B1): the evaluation saved the announcement as in flight, the
+    # channel then took and accepted it, and the process was killed (OOM, SIGKILL) before
+    # anything else was saved. A person got "firing"; the condition clears meanwhile.
+    before = World(tmp_path)
+    before.notifier.load_state()
+    before.gateway = {"phase": "stopped"}
+    await before.tick()  # the evaluation saves, then Teams accepts
+    assert [(m.alert_class, m.kind) for m in before.teams.sent] == [("gateway_stopped", "firing")]
+    after = World(tmp_path, before.clock)  # killed: no further evaluation, no final save
+    after.notifier.load_state()
+    after.gateway = {"phase": "logged-in"}
+    await after.tick(5)
+    assert [(m.alert_class, m.kind) for m in after.teams.sent] == [("gateway_stopped", "resolved")]
+
+
+async def test_an_announcement_no_channel_took_before_a_crash_is_resolved_after_it_too(
+    tmp_path: Path,
+) -> None:
+    # The price of the rule above (review of #32, P1, then reverted in round 2): queued and
+    # saved as in flight, the process died before any channel took it. The file cannot
+    # tell this from B1, so this alert also gets a "resolved" that nobody needed.
     before = World(tmp_path)
     before.notifier.load_state()
     before.gateway = {"phase": "stopped"}
@@ -433,10 +452,10 @@ async def test_an_announcement_no_channel_took_before_a_crash_is_not_resolved_af
     after.notifier.load_state()
     after.gateway = {"phase": "logged-in"}
     await after.tick(5)
-    assert after.teams.sent == []
+    assert [(m.alert_class, m.kind) for m in after.teams.sent] == [("gateway_stopped", "resolved")]
 
 
-async def test_an_announcement_a_channel_had_begun_before_a_crash_is_resolved_after_it(
+async def test_an_announcement_a_channel_was_still_sending_at_a_crash_is_resolved_after_it(
     tmp_path: Path,
 ) -> None:
     before = World(tmp_path)
@@ -449,7 +468,6 @@ async def test_an_announcement_a_channel_had_begun_before_a_crash_is_resolved_af
     worker = asyncio.ensure_future(before.dispatcher.run_channel("teams"))
     try:
         await until(lambda: teams.attempts == 1)
-        await before.notifier.tick()  # the next evaluation saves that a channel began
     finally:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
