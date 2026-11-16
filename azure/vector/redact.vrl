@@ -4,38 +4,74 @@
 # Input   Any event (.). Output: the same event with every string value, at any depth,
 #         rewritten: an IBKR account id keeps only its last three characters, as [ACCT:…567].
 #         Keys, numbers, booleans and timestamps are untouched.
-# Rules   An account id is the prefix DU, DF, U or F followed by 5 to 9 digits and then NOT a
-#         letter or digit. It is recognised
+# Shape   An account id is an optional D (paper), then one of U, F, I, then zero to two
+#         further letters, then 5 to 9 ASCII digits, and then NOT a letter or digit.
+#         [0-9], never \d: Rust's \d matches every script's digits, which no IBKR id uses,
+#         and slice!(…, -3) counts bytes, so a match ending in a multi-byte digit would ship
+#         a broken character; with [0-9] the last three characters are always digits.
+#         Evidence (each source read on 2026-11-16):
+#         F, a fund manager's master account, and U, a hedge fund's sub account (IBKR Campus:
+#         "denoted with the letter F" / "with the letter U"),
+#         https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/
+#         I, a fully disclosed broker's master account, and U, its proprietary account (IBKR
+#         application guide, page 14: "begins with an I prefix" / "with a U prefix"),
+#         https://www.interactivebrokers.ie/download/applicationguide.pdf
+#         DU, a paper account (Interactive Brokers Securities Japan: "will begin with DU"),
+#         https://www.interactivebrokers.co.jp/en/support/customer-service.php
+#         DF and DI are assumptions (paper counterparts of F and I; no source names them).
+#         The letter after DU is observed, in no source: a real paper session on 2026-11-16
+#         showed DU, one more letter and six digits, which the earlier pattern (DU, DF, U or
+#         F directly followed by the digits) missed. The second further letter is headroom,
+#         an assumption: rewriting a word that is no id costs readability only, missing an
+#         id breaks the promise under Why.
+# Rules   An id is recognised
 #           1. in any case, when it stands on its own: start of text, punctuation, white space
-#              or an underscore before it (U1234567, =u1234567;, acct_DU1234567, U1234567_x);
-#           2. in upper case, glued to the end of a lower-case word (acctDU1234567);
+#              or an underscore before it (U1234567, =u1234567;, acct_DUR123456, U1234567_x);
+#           2. in upper case, glued to the end of a lower-case word (acctDUR123456);
 #           3. in any case, right after an escaped line break or tab as text (\nU1234567).
 #         Left alone on purpose: more than 9 digits (U1234567890), an id followed by letters
-#         (f1234567abc is the middle of a hash), an upper-case letter before it (XDU1234567).
-# How     Rust regular expressions have no look-around. An underscore counts as a word
+#         (f1234567abc is the middle of a hash), an upper-case letter before it (XDU1234567,
+#         CPU12345), a first letter other than D, U, F, I (XYZ123456), a third further letter
+#         (DUABC123456).
+#         Rewritten although no id: every word of the shape (id12345, USD100000, disk12345).
+# Copies  The shape is repeated in entrypoint.sh (account_like), ../vm/apply-config.sh
+#         (good_label) and the sidecar (redaction.py, ACCOUNT_RE): change the four together.
+# How     Word boundaries are ASCII ((?-u:\b)): Rust's plain \b treats letters of every script
+#         as word characters, so an id glued to Japanese text (口座DU1234567, DU1234567の) or
+#         to an accented letter (éDU1234567) was shipped whole. Rust regular expressions have
+#         no look-around. An underscore counts as a word
 #         character, so it is swapped for a private-use character (U+E000) while rule 1 runs
-#         with \b, and swapped back afterwards; text that already contains U+E000 keeps it.
+#         with \b, and swapped back afterwards. A text that already holds U+E000 is escaped
+#         first and restored last, with U+E001 as the escape character (U+E001 is written
+#         U+E001 U+E002, U+E000 is written U+E001 U+E003): every original character comes
+#         back exactly, and its underscores still count as boundaries. The rules never
+#         match or write U+E000 to U+E003. Before this escape such a text skipped the swap
+#         and an id behind an underscore in it (acct_DUR123456) was shipped in full.
 # Why     "An account id may leave the container only as its last three characters" must hold
 #         for every column of every stream, including keys the gateway adds later; walking all
 #         string values makes that true by construction instead of per column.
 . = map_values(., recursive: true) -> |value| {
   if is_string(value) {
     text = string!(value)
-    marked = !contains(text, "\u{E000}")
-    if marked {
-      text = replace(text, "_", "\u{E000}")
+    escaped = contains(text, "\u{E000}")
+    if escaped {
+      text = replace(text, "\u{E001}", "\u{E001}\u{E002}")
+      text = replace(text, "\u{E000}", "\u{E001}\u{E003}")
     }
-    text = replace_with(text, r'(?i)\b(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
+    text = replace(text, "_", "\u{E000}")
+    text = replace_with(text, r'(?i)(?-u:\b)D?[UFI][A-Z]{0,2}[0-9]{5,9}(?-u:\b)') -> |m| {
       "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    text = replace_with(text, r'(?P<lead>[a-z])(?:DU|DF|U|F)\d{5,9}\b') -> |m| {
+    text = replace_with(text, r'(?P<lead>[a-z])D?[UFI][A-Z]{0,2}[0-9]{5,9}(?-u:\b)') -> |m| {
       string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    text = replace_with(text, r'(?P<lead>\\[nrt])(?i:DU|DF|U|F)\d{5,9}\b') -> |m| {
+    text = replace_with(text, r'(?P<lead>\\[nrt])(?i:D?[UFI][A-Z]{0,2})[0-9]{5,9}(?-u:\b)') -> |m| {
       string!(m.lead) + "[ACCT:…" + slice!(m.string, -3) + "]"
     }
-    if marked {
-      text = replace(text, "\u{E000}", "_")
+    text = replace(text, "\u{E000}", "_")
+    if escaped {
+      text = replace(text, "\u{E001}\u{E003}", "\u{E000}")
+      text = replace(text, "\u{E001}\u{E002}", "\u{E001}")
     }
     text
   } else {

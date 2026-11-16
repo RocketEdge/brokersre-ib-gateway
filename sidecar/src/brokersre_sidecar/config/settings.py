@@ -37,7 +37,7 @@ from brokersre_sidecar.config.secrets import (
     validate_http_url,
     validate_telegram_token,
 )
-from brokersre_sidecar.redaction import ACCOUNT_RE, SecretRegistry
+from brokersre_sidecar.redaction import SecretRegistry, redact_accounts
 from brokersre_sidecar.vocab import AlertClass, ChannelName
 
 DEFAULT_LOG_DIR = "/var/log/ibgateway"
@@ -300,11 +300,27 @@ class _Reader:
 
 
 def _check_instance(value: str) -> str | None:
-    """Accept a label of letters, digits, dot, dash, underscore that is not an account id."""
+    """Accept a label of letters, digits, dot, dash, underscore that the redaction leaves alone.
+
+    Contract: an accepted label satisfies ``redact_accounts(label) == label``. Why that and
+    not "is not an account id": every output carries the label, some after redaction (status
+    document, notifications, the de-duplication and incident keys) and some as it is (support
+    bundle name, its MANIFEST and settings.json). A label the redaction rewrites would differ
+    between them, would leave the container in full where it is not redacted, and two labels
+    could become one key (``gw-UAT10001`` and ``gw-UAT20001`` both read ``gw-***001``).
+
+    Returns:
+        None when accepted, else the problem. The problem never repeats the value.
+    """
     if not _INSTANCE_RE.fullmatch(value):
         return "must be 1-63 characters of letters, digits, '.', '_' or '-', starting with a letter or digit"
-    if ACCOUNT_RE.fullmatch(value):
-        return "must not be an IBKR account id (the label appears in every notification)"
+    if redact_accounts(value) != value:
+        return (
+            "must not contain text of the shape of an IBKR account id (an optional D, then U,"
+            " F or I, up to two more capital letters, then 5 to 9 digits, not directly behind"
+            " another capital letter): the redaction would rewrite it in some outputs and not"
+            " in others; choose a label without it, for example paper-1"
+        )
     return None
 
 

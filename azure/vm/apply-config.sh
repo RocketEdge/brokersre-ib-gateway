@@ -79,9 +79,13 @@ fi
 # One line per problem; the patterns keep every value safe to write into the files below
 # (no quote, no line break) and refuse what the stack would refuse later.
 problems="$(jq --raw-output --arg keys "${required_keys}" '
-  # The same rule as azure/vector/entrypoint.sh: a label the redaction would rewrite is refused.
+  # The same rule and the same pattern as account_like in azure/vector/entrypoint.sh: a label
+  # the redaction would rewrite is refused (the shape of an account id: an optional D, then
+  # U, F or I, up to two further letters, 5 to 9 digits; azure/vector/redact.vrl explains it).
   def good_label: type == "string" and test("^[A-Za-z0-9._-]{1,64}$")
-    and (test("((^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])|[a-z](DU|DF|U|F))[0-9]{5,9}([^A-Za-z0-9]|$)") | not);
+    and (test("((^|[^A-Za-z0-9])[Dd]?[UuFfIi][A-Za-z]{0,2}|[a-z]D?[UFI][A-Z]{0,2})[0-9]{5,9}([^A-Za-z0-9]|$)") | not);
+  # The shape in words for the two refusals; the value itself is never printed.
+  def account_shape: "the shape of an IBKR account id (an optional D, then U, F or I, up to two more letters, then 5 to 9 digits, in any case on its own or next to a dot, underscore or hyphen, or in capitals right after a lower-case letter)";
   . as $d
   | (($keys | split(" ")) - ($d | keys) | map("\(.) is missing")[]),
     (if ($d.schemaVersion == 1) then empty else "schemaVersion must be 1" end),
@@ -89,8 +93,8 @@ problems="$(jq --raw-output --arg keys "${required_keys}" '
     (if ($d.vectorImage | type == "string" and test("^[a-z0-9./_-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")) then empty else "vectorImage must be pinned by digest (name:tag@sha256:<64 hex>)" end),
     (if ($d.packRepository | type == "string" and test("^https://[A-Za-z0-9./_-]+$")) then empty else "packRepository must be an https URL" end),
     (if ($d.packCommit | type == "string" and test("^[0-9a-f]{40}$")) then empty else "packCommit must be a full 40-character commit id" end),
-    (if ($d.instanceLabel | good_label) then empty else "instanceLabel must be 1 to 64 letters, digits, dots, underscores or hyphens and must not look like an account id" end),
-    (if ($d.hostLabel | good_label) then empty else "hostLabel must be 1 to 64 letters, digits, dots, underscores or hyphens and must not look like an account id" end),
+    (if ($d.instanceLabel | good_label) then empty else "instanceLabel must be 1 to 64 letters, digits, dots, underscores or hyphens without \(account_shape) (change instanceLabel and redeploy vm.bicep)" end),
+    (if ($d.hostLabel | good_label) then empty else "hostLabel must be 1 to 64 letters, digits, dots, underscores or hyphens without \(account_shape); vm.bicep sets it to <namePrefix>-vm, which cannot change on an existing VM: deploy a new VM with another namePrefix" end),
     (if ($d.shipRawLogs | type == "boolean") then empty else "shipRawLogs must be true or false" end),
     (if ($d.tradingMode | IN("paper", "live")) then empty else "tradingMode must be paper or live" end),
     (if ($d.readOnlyApi | IN("yes", "no")) then empty else "readOnlyApi must be yes or no" end),

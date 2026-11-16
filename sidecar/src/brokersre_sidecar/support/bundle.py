@@ -10,7 +10,9 @@ be shared, everything in it is reduced or redacted:
 * of the raw IBC log only lines carrying the ``IBC:`` marker are included, each redacted
   (dialog dumps, which echo typed text, never carry that marker); the gateway's own
   ``jts`` logs are not included at all;
-* account ids keep their last three characters; loaded secrets are scrubbed;
+* account ids keep their last three characters (recognised by shape, see
+  ``redaction.ACCOUNT_RE``; the MANIFEST states the shape and that any other is not
+  shortened); loaded secrets are scrubbed;
 * no secret-file path or content and no host user name is recorded.
 """
 
@@ -50,7 +52,11 @@ Files
   settings.json     non-secret settings (no secret file path, no credential)
 
 Redaction
-  Account ids are shortened to *** plus their last three characters. Values after
+  Account ids are shortened to *** plus their last three characters. An account id is
+  recognised by its shape only: an optional D, then U, F or I, up to two more capital
+  letters, then 5 to 9 digits. An id of any other shape is NOT shortened, nor an id in
+  lower case (du0000000), nor one directly behind another capital letter (ACCTDU0000000).
+  Values after
   identity keys (user, username, login id, account, password) and e-mail addresses are
   replaced by [REDACTED]. Loaded secrets are replaced by [REDACTED]. Lines of the raw IBC
   log without the "IBC:" marker (dialog dumps) and the gateway's own jts logs are left out.

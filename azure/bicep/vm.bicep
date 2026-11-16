@@ -44,7 +44,7 @@ targetScope = 'resourceGroup'
 @description('Azure region of every resource this template creates.')
 param location string = resourceGroup().location
 
-@description('Prefix of the resource names (VM <prefix>-vm, network <prefix>-vnet, ...). 2 to 12 lower-case letters, digits or hyphens.')
+@description('Prefix of the resource names (VM <prefix>-vm, network <prefix>-vnet, ...). 2 to 12 lower-case letters, digits or hyphens. The VM name <prefix>-vm is also the host label of every shipped row and cannot change on an existing VM: a prefix with the shape of an IBKR account id (an optional d, then u, f or i, up to two more letters, then 5 to 9 digits, as a part of its own, for example ib10001) makes the VM refuse its own configuration, so choose one without it.')
 @minLength(2)
 @maxLength(12)
 param namePrefix string = 'ibgw'
@@ -123,7 +123,7 @@ param timeZone string = 'America/New_York'
 @description('Daily restart time of the gateway in its time zone (AUTO_RESTART_TIME), for example 11:45 PM. Keep it outside IBKR\'s reset windows.')
 param autoRestartTime string = '11:45 PM'
 
-@description('Label of this gateway on every shipped row (IBGW_INSTANCE); alerts tell gateways apart by it, so it must be unique in the workspace. Letters, digits, dot, underscore, hyphen.')
+@description('Label of this gateway on every shipped row (IBGW_INSTANCE); alerts tell gateways apart by it, so it must be unique in the workspace. Letters, digits, dot, underscore, hyphen, and nothing of the shape of an IBKR account id (an optional D, then U, F or I, up to two more letters, then 5 to 9 digits, on its own in any case or in capitals right after a lower-case letter, for example gw-UAT10001): the VM refuses such a label (azure/README.md).')
 @minLength(1)
 @maxLength(64)
 param instanceLabel string

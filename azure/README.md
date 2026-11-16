@@ -94,7 +94,14 @@ HOST_LABEL=desk-host-1
 `Instance` (rule B) and by `Instance` and `Host` (rules A and C); two gateways with the same
 labels would hide each other's silence. The shipper therefore refuses to start (exit code 78)
 with the default label `default` and no `HOST_LABEL`, and refuses a label that looks like an
-IBKR account id.
+IBKR account id. "Looks like" means the shape the
+[redaction](#what-is-and-is-not-shipped) rewrites, whether or not the label is an id: an
+optional `D`, then `U`, `F` or `I`, up to two more letters, then 5 to 9 digits, in any case
+where it stands on its own (the whole label, or next to `.`, `_` or `-`) or in capitals right
+after a lower-case letter. The message names the variable and the shape, never the value.
+**Behaviour change (2026-11-16):** from this change on, labels such as `uk100234`,
+`gw-UAT10001`, `ib10001-vm` or `deskDUR123456` are refused; before it only `DU`, `DF`, `U` or
+`F` directly followed by the digits counted. `paper-1`, `wolf100234` and `CPU12345` stay valid.
 
 You should see the values back in
 `docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.azure.yml --profile azure config`.
@@ -164,10 +171,14 @@ network, or the range of an `AzureBastionSubnet` that you add yourself (this tem
 create a Bastion). The serial console needs an account with a password; the template creates
 none, so the serial console does not work either.
 
-**Changing the VM later.** The image digests, the pack commit, the labels, the raw-log switch
-and the gateway settings live in the VM's *userData*, which can change in place; the
-first-boot script (*customData*) is fixed, because Azure refuses to change it on an existing
-VM. To change something:
+**Changing the VM later.** The image digests, the pack commit, the instance label, the
+raw-log switch and the gateway settings live in the VM's *userData*, which can change in
+place; the first-boot script (*customData*) is fixed, because Azure refuses to change it on an
+existing VM. The host label cannot change either: it is the VM name `<namePrefix>-vm`, and a
+new `namePrefix` is a new VM. A `namePrefix` with the shape of an account id as a part of its
+own (for example `ib10001`, giving `ib10001-vm`) makes `apply-config.sh` refuse the VM's
+configuration ([labels](#3-put-the-values-into-composeenv)); such a VM has to be deployed again
+with another `namePrefix`. To change something:
 
 ```bash
 # 1. redeploy with the new values (updates the userData; the VM keeps running)
@@ -220,9 +231,19 @@ days old with its arrival time, which would put old events at the wrong place; t
 drops such lines and says so in its own log (`dropped an event older than 36 hours`).
 
 Redaction happens in Vector on your host, before the network. In every stream an account id
-(`DU`, `DF`, `U` or `F` followed by 5 to 9 digits, in any case, also next to an underscore,
-glued to a lower-case word or after an escaped line break) becomes `[ACCT:…567]`. Raw logs can
-contain your IBKR user name, so they stay on the host unless you choose one of:
+becomes `[ACCT:…567]`. An id is recognised by its shape: an optional `D` (paper), then `U`,
+`F` or `I`, then up to two further letters, then 5 to 9 ASCII digits (`U1234567`,
+`DU1234567`, `DUX123456`); in any case, also next to an underscore, glued to a lower-case
+word or after an escaped line break. IBKR documents the prefixes `U`, `F` and `I`
+([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
+[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf), page 14)
+and that paper account numbers begin with `DU`
+([IBKR Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)); `DF`
+and `DI` are assumed. A paper id with a third letter and six digits was seen in a real
+session on 2026-11-16 and is in none of these, and the second further letter is headroom
+([Limits](#limits)).
+
+Raw logs can contain your IBKR user name, so they stay on the host unless you choose one of:
 
 - `IBGW_REDACT_USERNAME_FILE=/run/secrets/ib-username` in `compose/.env`: raw lines are
   shipped and the user name, in any case, becomes `[USER]`. The file is read as the gateway
@@ -315,8 +336,16 @@ pricing pages). Retention beyond the included days is extra.
   depend on.
 - The dead-man rule knows a gateway for two days after its last row.
 - The alert rules run with the access of whoever deployed them last.
-- An account id written without its prefix, or directly after an upper-case letter or a digit
-  (`XDU1234567`), is not recognised; neither is one followed by letters.
+- An account id is recognised by its shape only, and the shape is IBKR's documented prefixes
+  plus one observed paper id, not a specification. An id written without its prefix, with
+  more than two letters after the prefix, or directly after an upper-case letter or a digit
+  (`XDU1234567`, `ACCTDUR123456`), is not recognised; neither is one directly followed by a
+  letter (`DUR123456x`, `U1234567F`), nor one in lower case glued to a lower-case word
+  (`acctdur123456`). Word boundaries are ASCII, so an id next to a letter of another script
+  is recognised (`口座DU1234567`, `DU1234567の`, `éDU1234567`). Only string values are
+  rewritten, never object keys: a key that is an id (`{"DU1234567": ...}`) is shipped as it
+  is. The price of the shape: a word that has it is rewritten although it is no id
+  (`id12345`, `USD100000`).
 
 ## Security
 

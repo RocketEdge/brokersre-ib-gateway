@@ -96,11 +96,14 @@ fi
 # them: two gateways with the same pair would hide each other's silence from the dead-man rule.
 # A label must also survive redaction unchanged (redact.vrl rewrites every string of an event
 # row, the labels included, but not the metrics rows: a rewritten label would differ between
-# the two tables). So a label that the redaction would touch is refused: prefix DU, DF, U or F
-# and 5 to 9 digits, in any case as a word of its own, or in upper case glued to a lower-case
-# letter. Keep the two patterns in step with rules 1 and 2 of redact.vrl.
+# the two tables). So a label that the redaction would touch is refused: an optional D, then
+# U, F or I, then up to two further letters and 5 to 9 digits (the shape redact.vrl explains),
+# in any case as a word of its own, or in upper case glued to a lower-case letter. The two
+# alternatives are rules 1 and 2 of redact.vrl; keep them in step with it, with
+# ../vm/apply-config.sh (the same pattern for the VM's userData) and with the sidecar's
+# ACCOUNT_RE. A label is refused for its shape, not for being an id: uk100234 is refused too.
 label='[A-Za-z0-9._-]{1,64}'
-account_like='((^|[^A-Za-z0-9])([Dd][UuFf]|[UuFf])|[a-z](DU|DF|U|F))[0-9]{5,9}([^A-Za-z0-9]|$)'
+account_like='((^|[^A-Za-z0-9])[Dd]?[UuFfIi][A-Za-z]{0,2}|[a-z]D?[UFI][A-Z]{0,2})[0-9]{5,9}([^A-Za-z0-9]|$)'
 IBGW_INSTANCE="${IBGW_INSTANCE:-default}"
 HOST_LABEL="${HOST_LABEL:-}"
 matches "${IBGW_INSTANCE}" "${label}" \
@@ -109,11 +112,13 @@ if [ -n "${HOST_LABEL}" ]; then
   matches "${HOST_LABEL}" "${label}" \
     || die "HOST_LABEL must be empty or 1 to 64 letters, digits, dots, underscores or hyphens"
 fi
+# The shape in words for the two refusals below; the value itself is never printed.
+account_shape="the shape of an IBKR account id, which the redaction would rewrite in the events but not in the metrics: an optional D, then U, F or I, up to two more letters, then 5 to 9 digits, in any case where it stands on its own (the whole label, or next to a dot, underscore or hyphen) or in capitals right after a lower-case letter"
 if printf '%s' "${IBGW_INSTANCE}" | grep -Eq -- "${account_like}"; then
-  die "IBGW_INSTANCE looks like an IBKR account id; choose a label that is not one (for example paper-1)"
+  die "IBGW_INSTANCE contains ${account_shape}; choose a label without it (for example paper-1)"
 fi
 if printf '%s' "${HOST_LABEL}" | grep -Eq -- "${account_like}"; then
-  die "HOST_LABEL looks like an IBKR account id; choose a label that is not one"
+  die "HOST_LABEL contains ${account_shape}; choose a label without it (on the VM of azure/bicep/vm.bicep the host label is <namePrefix>-vm)"
 fi
 if [ "${IBGW_INSTANCE}" = default ] && [ -z "${HOST_LABEL}" ]; then
   die "this gateway has no label of its own: set IBGW_INSTANCE to a name that is unique in the workspace (for example paper-1), or set HOST_LABEL; IBGW_INSTANCE=default alone cannot be told apart from another gateway"

@@ -237,10 +237,29 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `azure/cloud-init/gateway.yaml` is pinned by `gateway.yaml.sha256`: change both
   deliberately, because existing VMs keep the old bootstrap. `vmConfig` in `vm.bicep` and
   `required_keys` in `azure/vm/apply-config.sh` change together. The account-id pattern
-  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`. A helper image used by a
-  check must be listed in `helper_images` in `run.sh` (pulled before any check): a first
-  `docker run` of an image writes its pull notice to standard error, and a check that
-  compares standard error then fails on a fresh machine only.
+  lives in `redact.vrl`, `entrypoint.sh` and `apply-config.sh`, and in the sidecar (next
+  item). A helper image used by a check must be listed in `helper_images` in `run.sh`
+  (pulled before any check): a first `docker run` of an image writes its pull notice to
+  standard error, and a check that compares standard error then fails on a fresh machine
+  only.
+- The shape of an account id (an optional `D`, then `U`, `F` or `I`, up to two further capital
+  letters, 5 to 9 digits; as a regular expression `D?[UFI][A-Z]{0,2}\d{5,9}`, with `[0-9]`
+  for `\d` in `redact.vrl`, where `\d` takes any script's digits and `slice!` counts bytes)
+  is written in four places that change together, each with its tests: `ACCOUNT_RE` in
+  `sidecar/src/brokersre_sidecar/redaction.py` (the label check refuses a label it would
+  rewrite; the farm-name guard of `probe/tracker.py` refuses five digits in a row instead,
+  because the pattern does not start behind a capital and an id glued to a farm stem always
+  is), rules 1 to 3 of `azure/vector/redact.vrl`, `account_like` in
+  `azure/vector/entrypoint.sh` and `good_label` in `azure/vm/apply-config.sh` (`run.sh`
+  fails when the last two differ in text, and `label_verdicts` when the three Azure copies
+  decide one of its boundary labels differently or unexpectedly; the VRL unit tests pin
+  each rule at the bounds of the shape). The text follows: the bundle MANIFEST
+  (`support/bundle.py`), `sidecar/README.md`, `azure/README.md`, `docs/limitations.md` L32.
+  The prefixes are IBKR's, the letters after them are one observation plus headroom: a real
+  paper id (`DU`, one more letter, six digits; 2026-11-16) passed the earlier shape and a
+  support bundle carried it in full, while every fixture agreed with the pattern. Take a
+  new shape from the shape of a real id, and never write a real id into a test, a fixture,
+  a commit or a pull request.
 - Never end a pipeline with `grep -q` in a script that sets `pipefail`: the quiet grep exits
   at its first match, the writer gets SIGPIPE (exit 141) and the pipeline is "false" although
   the text was found. In an `if ...; then fail; else pass` check for a leaked secret that is
@@ -345,6 +364,28 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   earlier does not get it (the `quiet_grep` fix was missing from every branch above the
   supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
   building on the top.
+- `unknown_window` means a window that STAYS open (`UNKNOWN_WINDOW_GRACE_S`, 10 s), decided in
+  the read loop of `classify-ibc-log.sh`: the `read` has a time limit only while a window
+  waits, and what bash hands back of an unfinished line at the limit is kept (`LC_ALL=C`, or
+  bash can drop bytes there). Time is `/proc/uptime` (bash's `SECONDS` only where it cannot
+  be read at start; a failed read later keeps the last value). A due window is reported
+  only once no line of IBC is waiting (its "closed" line may be in the pipe), for at most
+  one second counted from the first postponement, never from the due time (after a pause
+  the window is long overdue and its "closed" line is what waits). A new
+  IBC (`ibc_version`) empties the waiting list: `ibcstart.sh` relaunches the Gateway inside
+  one classifier run and the old process writes no "closed" line. Never put a title that
+  says nothing about the content (`Warning`) on `known-windows.txt`: the grace period covers
+  the one IBC answers; a list line that starts with `frame:` applies to frames only. A test of
+  the list sets `UNKNOWN_WINDOW_GRACE_S=0`. A test of the grace period keeps the pipe open
+  past it (`{ printf ...; sleep N; } | classify-ibc-log.sh`): when the input ends every wait
+  ends, and a test that replays a file passes whatever the classifier does with a window.
+- IBC's window lines carry a title and no id. The start-up frame changes its title while open
+  (opened as `Authenticating...`, closed as `Starting application...`), a normal paper login
+  opens a `Warning` that IBC accepts, and the configuration dialog's title starts with the
+  account id. IBC stamps its first lines in UTC and the later ones in `TIME_ZONE`. All of it
+  is in `tests/fixtures/ibc-real-paper-login.log` (real, scrubbed, 2026-11-15 UTC).
+- A bare `wait` in a bats test never returns (bats keeps jobs of its own in the test's
+  shell): `wait "${pid}"`.
 - Docker gives an EMPTY named volume the owner and mode of its mount point in the image of
   a container created on it, when that image has the directory and the mount does not say
   `nocopy` (engine behaviour, seen on Engine 29; not documented). `docker compose up`

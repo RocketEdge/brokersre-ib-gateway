@@ -14,7 +14,7 @@
 //   login_stalled   the login made no progress (event login_stalled) and has not resumed
 //                   (login_resumed) since, in the container start that is running now;
 //   needs_human     the gateway asked for a human (event needs_human) in the last 15 minutes;
-//   unknown_window  IBC met a dialog it does not know (event unknown_window) in the last 15 minutes.
+//   unknown_window  a window IBC does not know stayed open (event unknown_window) in the last 15 minutes.
 // Returns one row per instance and condition; nothing during the maintenance window (the daily
 // restart logs out on purpose). The rule looks back two days (overrideQueryTimeRange) so that
 // a state reported once, hours ago, is still known.
