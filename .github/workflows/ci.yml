@@ -48,8 +48,13 @@ jobs:
           set -euo pipefail
           eval "$(scripts/bake-env.sh)"
           docker buildx bake --print stable latest | scripts/check-bake-tags.sh
-      - name: CI script tests in bats (release and rebuild policy, tag promotion, VEX drift, workflow policy)
+      - name: CI script tests in bats (release and rebuild policy, tag promotion, VEX drift, workflow policy, documented commands)
         run: |
+          # doc-commands.bats types into the documented secret blocks under bash, zsh (the macOS
+          # default shell) and sh through a pty; the runner has bash, dash and python3, not zsh.
+          # The package lists come from the shellcheck step above.
+          sudo apt-get install -y --no-install-recommends zsh
+          zsh --version
           git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
           tests/.bats-core/bin/bats tests/bats/ci
 
