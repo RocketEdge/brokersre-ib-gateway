@@ -39,9 +39,12 @@ Next step.
   test (400 examples) feeds results late, out of order, begun or not, and across restarts:
   every episode someone heard of is resolved once, none other is, the messages of a class
   never go out of episode order, and inside the de-duplication window only an episode a
-  late resolution found active is announced, at most one per window. The review's
-  surviving mutants (M13, M14, L3, M22, and the older M21) are each killed by a test now,
-  as are ten mutants of the review fixes. Sidecar suite 879 to 921 passed (2 skipped).
+  late resolution found active is announced, at most one per window. Of the review's 34
+  mutants, 33 are killed by the suite now (M13, M14, L3, M22 and the older M21 by new tests;
+  M10 and M11 by tests made sharper after a first run left them alive; M7 once a redundant
+  second guard was removed), and M12 mutated that guard, which no longer exists. Ten
+  mutants of the review fixes are each killed too. Sidecar suite 879 to 922 passed (2
+  skipped).
   Clock skew: the reported case (host 0.3 s ahead of a correct IBKR clock, truncated
   readings in (−1.3, −0.3]) and the session's readings (−0.92, −1.77, 0.124 s) never
   alert; with the comparison the report assumed (`|reading| > 1 s + RTT/2`) eight of the
