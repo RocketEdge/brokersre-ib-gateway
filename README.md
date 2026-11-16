@@ -105,9 +105,12 @@ docker compose -f compose/docker-compose.example.yml logs -f
 ```
 
 You should see JSON events with `ibc_starting`, `ibc_version` and `login_dialog`, then
-`login_completed` and `relay_opened` once IBKR has accepted the login (a paper login without a
-second factor took 10 to 17 s from the start in the sessions of 2026-11-15/16). If IBKR
-asks for a second factor, the event `twofa_dialog` appears: approve the prompt in IBKR Mobile.
+`login_completed` and `relay_opened` once IBKR has accepted the login (in the paper logins of
+2026-11-15/16, none of which asked for a second factor, `login_completed` came 8.2 to 11.4 s
+after the event `container_start`). If IBKR asks for a second factor, the event
+`twofa_initiated` appears (`twofa_dialog` may not: according to IBC's source, Gateway 10.16
+and later logs only the first, [log contract](docs/log-contract.md)): approve the prompt in
+IBKR Mobile.
 The image never answers a second factor for you. Stop following the log with Ctrl+C.
 
 ### 3. Check that it is logged in
@@ -190,9 +193,10 @@ Gateway run after 01:00 ET on Sunday". Either way, once a week a person must app
 prompt, and no setting of this image changes that: the image never answers, types or bypasses
 a second factor.
 
-What happens: the phase becomes `2fa-pending` and the events `twofa_initiated` and
-`twofa_dialog` appear (recognised from the text IBC's code logs; not yet seen in a real
-session of this image, [limitations](docs/limitations.md) L09). Approve the prompt in IBKR
+What happens: the phase becomes `2fa-pending` and the event `twofa_initiated` appears, with
+`twofa_dialog` only where the Gateway opens a separate dialog (according to IBC's source,
+Gateway 10.16 and later does not); both are recognised from the text IBC's code logs, not yet
+seen in a real session of this image ([limitations](docs/limitations.md) L09). Approve the prompt in IBKR
 Mobile. A prompt that is not answered
 expires after about three minutes; with the defaults IBC then logs in again and asks again,
 without limit. Each time the phase passes through `login` for a few seconds (event
@@ -229,8 +233,10 @@ The API relay listens only while the gateway is logged in, so "connection refuse
 ready yet": retry. [examples/README.md](examples/README.md) states the readiness rules in plain
 words (wait for healthy, stop sending on IBKR code 1100, continue on 1102, re-subscribe on 1101,
 expect the daily restart) and ships read-only samples that follow them: `wait-for-gateway.sh`,
-a compose file with the strategy on a private network, and a Python and a C# client. The
-samples were run against stand-ins only, never against a logged-in Gateway.
+a compose file with the strategy on a private network, and a Python and a C# client.
+`wait-for-gateway.sh` and the Python client ran against a logged-in paper Gateway
+(2026-11-15/16 UTC); the C# client and the compose file with the strategy were run against
+stand-ins only.
 
 ## Environment variables
 
@@ -447,10 +453,11 @@ a username that another session is using.
 
 In this repository the same script runs in the workflow `Qualify (paper login)`, which is
 dispatched by hand, only from `main`, only for an image given by digest, behind a required
-reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The published `stable`
-(10.50.1g) and `latest` (10.52.1d) images passed the script with a real paper account on
-2026-11-16, run by hand; the workflow has not run yet ([limitations](docs/limitations.md),
-L16). The account you use must have its paper trading account enabled at IBKR;
+reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The published digests
+`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d) passed the script with a
+real paper account on 2026-11-16, run by hand. A digest that a channel tag moves to later,
+after a rebuild for example, is not covered by those runs, and the workflow has not run yet
+([limitations](docs/limitations.md), L16). The account you use must have its paper trading account enabled at IBKR;
 credentials that work on IBKR's website are not proof of that.
 
 ## Get notified of new images

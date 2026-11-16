@@ -192,7 +192,7 @@ has no TOTP secret, no authenticator and no code that approves a prompt.
 
 | What the image provides | Where it comes from |
 |---|---|
-| IBC prompts again after a timeout instead of giving up; the phase is `2fa-pending`, the events are `twofa_initiated` and `twofa_dialog`, and the container is unhealthy until a person approves | `ibc.config.ini.tmpl` (`ReloginAfterSecondFactorAuthenticationTimeout`), `rootfs/etc/brokersre/ibc-patterns.tsv`; test "a 2FA dialog sets phase 2fa-pending and login completion sets logged-in" (`tests/bats/unit/classify.bats`) |
+| IBC prompts again after a timeout instead of giving up; the phase is `2fa-pending`, the event is `twofa_initiated` (and `twofa_dialog` where the Gateway opens a separate dialog, which according to IBC's source Gateway 10.16 and later does not), and the container is unhealthy until a person approves | `ibc.config.ini.tmpl` (`ReloginAfterSecondFactorAuthenticationTimeout`), `rootfs/etc/brokersre/ibc-patterns.tsv`; test "a 2FA dialog sets phase 2fa-pending and login completion sets logged-in" (`tests/bats/unit/classify.bats`) |
 | An optional cap on unanswered prompts (`TWOFA_MAX_PROMPTS`): the image then stops asking, sets the phase `needs-human` and stays up, so a restart policy cannot loop through more logins | `classify-ibc-log.sh`, `entrypoint.sh`; test "after TWOFA_MAX_PROMPTS unanswered prompts the gateway asks for a human and stops IBC" (`classify.bats`) |
 
 Limit: the log lines for the second factor come from IBC's source code and have not yet been
@@ -241,9 +241,10 @@ removing a file of the base layer is a change of its own.
 
 Read [limitations.md](limitations.md) in full; the points an auditor should not miss:
 
-- **Only fresh paper logins have been observed.** The published `stable` (10.50.1g) and
-  `latest` (10.52.1d) images completed real paper logins and passed the qualification on
-  2026-11-16, run by hand outside CI (L16). The patterns for the second factor, the daily
+- **Only fresh paper logins have been observed.** The published digests `7773ff7`
+  (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d) completed real paper logins and
+  passed the qualification on 2026-11-16, run by hand outside CI (L16); a digest that a
+  channel tag moves to later is not covered by those runs. The patterns for the second factor, the daily
   restart and a competing session are unconfirmed (L01), no session has run through a daily
   restart or a weekly re-authentication, and no test in CI ever logs in (L04).
 - **This is not an IBKR-supported way to run IB Gateway.** IB Gateway is a desktop
