@@ -9,7 +9,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from brokersre_sidecar.clock import format_utc
+from brokersre_sidecar.clock import format_utc, parse_utc
 from brokersre_sidecar.notify import (
     Condition,
     Evaluation,
@@ -17,6 +17,7 @@ from brokersre_sidecar.notify import (
     LadderEngine,
     Outbound,
 )
+from brokersre_sidecar.notify.ladder import Moment
 from brokersre_sidecar.vocab import AlertClass, MessageKind
 from testkit import T0
 
@@ -258,13 +259,16 @@ def test_a_second_episode_waits_until_the_first_ones_outcome_is_known() -> None:
     assert engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(10)) == []
     assert engine.active()[0].since == at(10)
     engine.record_result(first, delivered=True, now=at(11))
-    (resolved,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(12))
-    assert (resolved.kind, resolved.since) == (MessageKind.RESOLVED, at(0))
-    # The second episode is announced when the de-duplication window of the first ends.
-    assert run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 910) == []
-    (second,) = run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 911)
+    resolved, second = run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 12)
+    assert (resolved.kind, resolved.since, resolved.active_again_since) == (
+        MessageKind.RESOLVED,
+        at(0),
+        at(10),
+    )
+    # Its late resolution must not be the last word while the condition is back: the
+    # second episode is announced right after it, not when the window of the first ends.
     assert (second.kind, second.since) == (MessageKind.FIRING, at(10))
-    (closing,) = run(engine, {AlertClass.LOGIN_FAILED: INACTIVE}, 920)
+    (closing,) = run(engine, {AlertClass.LOGIN_FAILED: INACTIVE}, 20)
     assert (closing.kind, closing.since) == (MessageKind.RESOLVED, at(10))
 
 
@@ -288,8 +292,89 @@ def test_a_late_result_belongs_to_the_ended_episode_when_the_next_began_that_ins
     engine.record_result(first, delivered=True, now=at(1))
     assert engine.active()[0].notified is False
     assert kinds(engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(2))) == [
-        ("login_failed", "resolved")
+        ("login_failed", "resolved"),
+        ("login_failed", "firing"),
     ]
+
+
+def test_a_late_resolution_tells_when_it_cleared_and_what_the_gateway_was_then() -> None:
+    # Review of #32 (P5): the resolution was rendered with the facts of the next episode.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    cleared = Moment(phase="logged-in", api_status="ready")
+    assert engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(3), moment=cleared) == []
+    engine.record_result(first, delivered=True, now=at(6))
+    (resolved,) = engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(7))
+    assert (resolved.cleared_at, resolved.moment, resolved.active_again_since) == (
+        at(3),
+        cleared,
+        None,
+    )
+
+
+def test_an_immediate_resolution_carries_no_late_facts() -> None:
+    engine = ladder()
+    run(engine, {AlertClass.GATEWAY_STOPPED: ACTIVE}, 0)
+    (resolved,) = engine.step(
+        {AlertClass.GATEWAY_STOPPED: INACTIVE}, at(3), moment=Moment("logged-in", "ready")
+    )
+    assert (resolved.cleared_at, resolved.moment, resolved.active_again_since) == (
+        None,
+        None,
+        None,
+    )
+
+
+def test_a_late_resolution_lets_the_next_episode_through_at_most_once_per_window() -> None:
+    # A class that flaps faster than its only channel answers must stay within the
+    # de-duplication rule: one announcement after a late resolution, then the window.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(1))
+    engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(2))
+    engine.record_result(first, delivered=True, now=at(3))
+    resolved, second = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(4))
+    assert (resolved.kind, second.kind, second.since) == (
+        MessageKind.RESOLVED,
+        MessageKind.FIRING,
+        at(2),
+    )
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))  # second still out
+    engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(6))
+    engine.record_result(second, delivered=True, now=at(7))
+    (again,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(8))
+    assert (again.kind, again.since, again.active_again_since) == (
+        MessageKind.RESOLVED,
+        at(2),
+        at(6),
+    )
+    assert run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 906) == []  # the window holds it
+    (third,) = run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 907)
+    assert (third.kind, third.since) == (MessageKind.FIRING, at(6))
+
+
+def test_a_late_resolution_while_the_verdict_is_unknown_still_lets_the_next_through() -> None:
+    engine = ladder()
+    (first,) = engine.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(0))
+    engine.step({AlertClass.API_UNHEALTHY: INACTIVE}, at(1))
+    engine.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(2))
+    engine.record_result(first, delivered=True, now=at(3))
+    (resolved,) = engine.step({AlertClass.API_UNHEALTHY: UNKNOWN}, at(4))
+    assert resolved.active_again_since == at(2)
+    (second,) = engine.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(5))
+    assert (second.kind, second.since) == (MessageKind.FIRING, at(2))
+
+
+def test_a_late_resolution_keeps_its_facts_across_a_restart() -> None:
+    before = ladder()
+    (first,) = before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    before.record_started(first)
+    cleared = Moment(phase="starting", api_status="not_measured")
+    before.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(3), moment=cleared)
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    (resolved,) = after.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(9))
+    assert (resolved.cleared_at, resolved.moment) == (at(3), cleared)
 
 
 def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
@@ -776,10 +861,21 @@ def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
     resolved: list[str] = []
     announced_at: list[datetime] = []  # when a channel accepted an announcement
     last_since: str | None = None
+    let_through: set[str] = set()  # episodes a late resolution found active
+    early: set[str] = set()  # episodes announced within 15 minutes of an acceptance
+    grants: list[datetime] = []  # when the ladder let an episode through (saved state)
 
     def episode(item: Outbound) -> str:
         assert item.since is not None
         return format_utc(item.since)
+
+    def note_grant() -> None:
+        saved = engine.export_state()["classes"].get(alert.value, {})
+        granted = parse_utc(saved.get("exempted_at"))
+        if granted is not None and (not grants or granted != grants[-1]):
+            # At most one episode per window goes through without the hold.
+            assert not grants or granted - grants[-1] >= timedelta(seconds=900)
+            grants.append(granted)
 
     def take(due: list[Outbound]) -> None:
         nonlocal last_since
@@ -795,10 +891,15 @@ def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
                 assert since in heard | lost
                 assert since not in {format_utc(listed.since) for listed in engine.active()}
                 resolved.append(since)
+                if item.active_again_since is not None:
+                    let_through.add(format_utc(item.active_again_since))
                 continue
             if item.kind is MessageKind.FIRING:
                 assert not any(out.kind is MessageKind.FIRING for out in pending)
-                assert all(now - accepted >= timedelta(seconds=900) for accepted in announced_at)
+                if not all(now - accepted >= timedelta(seconds=900) for accepted in announced_at):
+                    # Inside the window only an episode a late resolution found active.
+                    assert since in let_through
+                    early.add(since)
             else:
                 assert ladder_class
                 assert not any(
@@ -818,6 +919,8 @@ def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
         if kind == "step":
             now += timedelta(seconds=delta)
             take(engine.step({alert: Evaluation(state, "d")}, now))
+            note_grant()
+            assert len(early) <= len(grants)
         elif kind == "start" and pending:
             start(pending[pick % len(pending)])
         elif kind == "answer" and pending:

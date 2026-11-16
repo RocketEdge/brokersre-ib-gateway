@@ -459,6 +459,73 @@ async def test_an_announcement_a_channel_had_begun_before_a_crash_is_resolved_af
     assert [(m.alert_class, m.kind) for m in after.teams.sent] == [("gateway_stopped", "resolved")]
 
 
+class LateAccept:
+    """Teams that holds its first message until released, then accepts everything."""
+
+    name = "teams"
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.taken = 0
+        self.sent: list[Message] = []
+
+    def wants(self, message: Message) -> bool:
+        return True
+
+    async def send(self, message: Message) -> None:
+        self.taken += 1
+        if self.taken == 1:
+            await self.gate.wait()
+        self.sent.append(message)
+
+
+async def test_a_late_resolution_tells_its_own_facts_and_the_new_episode_follows_at_once(
+    tmp_path: Path,
+) -> None:
+    """Review of #32 (P5): stop, back, stop again, then the first acceptance arrives.
+
+    Before: the resolution said phase "stopped" (the next episode's) and the late
+    acceptance held the new episode back for 15 minutes.
+    """
+    world = World(tmp_path)
+    teams = LateAccept()
+    world.dispatcher = Dispatcher({"teams": teams}, world.clock, RecordingSleep(world.clock))
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    worker = asyncio.ensure_future(world.dispatcher.run_channel("teams"))
+    try:
+        world.gateway = {"phase": "stopped"}
+        await world.notifier.tick()
+        await until(lambda: teams.taken == 1)
+        world.gateway = {"phase": "logged-in"}
+        world.clock.advance(3)
+        await world.notifier.tick()  # cleared with its announcement out
+        world.gateway = {"phase": "stopped"}
+        world.clock.advance(2)
+        await world.notifier.tick()  # active again: waits for the first outcome
+        teams.gate.set()
+        await until(lambda: len(teams.sent) == 1)
+        world.clock.advance(1)
+        await world.notifier.tick()
+        await world.dispatcher.drain()
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    assert [(m.kind, m.phase, m.since_utc) for m in teams.sent] == [
+        ("firing", "stopped", "2026-11-12T15:00:00.000Z"),
+        ("resolved", "logged-in", "2026-11-12T15:00:00.000Z"),
+        ("firing", "stopped", "2026-11-12T15:00:05.000Z"),
+    ]
+    resolved = teams.sent[1]
+    assert resolved.api_status == "ready"
+    assert resolved.detail == (
+        "cleared at 2026-11-12T15:00:03.000Z (phase and API status as at that time); "
+        "sent once the announcement's delivery was known; "
+        "active again since 2026-11-12T15:00:05.000Z"
+    )
+    assert [a.alert_class for a in world.notifier.snapshot().active_alerts] == ["gateway_stopped"]
+
+
 async def test_the_heartbeat_says_what_it_cannot_vouch_for(tmp_path: Path) -> None:
     world = World(tmp_path, heartbeat=time(0, 0))
     world.gateway = {"phase": "login", "feeds_seen": False, "quiet_for_s": None}

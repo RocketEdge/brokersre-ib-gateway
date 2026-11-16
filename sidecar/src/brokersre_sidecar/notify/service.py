@@ -6,14 +6,15 @@ import asyncio
 import functools
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Literal
 
-from brokersre_sidecar.clock import Clock
+from brokersre_sidecar.clock import Clock, format_utc
 from brokersre_sidecar.logsetup import log_event
 from brokersre_sidecar.model.health import NotifierSnapshot, ProbeSnapshot
 from brokersre_sidecar.model.state import GatewaySnapshot
 from brokersre_sidecar.notify.dispatcher import Dispatcher
-from brokersre_sidecar.notify.ladder import LadderEngine, Outbound
+from brokersre_sidecar.notify.ladder import LadderEngine, Moment, Outbound
 from brokersre_sidecar.notify.message import MessageFactory
 from brokersre_sidecar.notify.rules import RuleEngine
 from brokersre_sidecar.notify.store import NotifierStore
@@ -117,19 +118,25 @@ class Notifier:
         probe = self._probe()
         evaluations = self._rules.evaluate(gateway, probe, now=now, mono=self._clock.monotonic())
         can_see = gateway.phase is not None and gateway.phase != UNKNOWN_PHASE
-        for due in self._ladder.step(evaluations, now, can_see=can_see):
+        current = Moment(phase=gateway.phase, api_status=probe.status.value)
+        for due in self._ladder.step(evaluations, now, can_see=can_see, moment=current):
+            if due.kind is MessageKind.HEARTBEAT:
+                detail = _not_measured(gateway, probe)
+            elif due.cleared_at is not None:
+                detail = _late_resolution(due.cleared_at, due.active_again_since)
+            else:
+                detail = due.detail
+            # A late resolution shows the gateway as it was when the condition cleared:
+            # by now the facts may belong to the next episode of the class.
+            shown = due.moment if due.moment is not None else current
             message = self._factory.build(
                 due.kind,
                 due.alert_class,
-                detail=(
-                    _not_measured(gateway, probe)
-                    if due.kind is MessageKind.HEARTBEAT
-                    else due.detail
-                ),
+                detail=detail,
                 escalation_step=due.escalation_step,
                 since=due.since,
-                phase=gateway.phase,
-                api_status=probe.status.value,
+                phase=shown.phase,
+                api_status=shown.api_status,
                 now=now,
                 superseded_by=due.superseded_by,
             )
@@ -247,6 +254,21 @@ class Notifier:
             state_persistence=self._persistence,
             state_persistence_reason=self._persistence_reason,
         )
+
+
+def _late_resolution(cleared_at: datetime, active_again_since: datetime | None) -> str:
+    """Say when a late resolution's condition cleared, and whether it is back.
+
+    Fixed words and timestamps only (the message text rules). A late resolution goes out
+    once the announcement's delivery is known, which can be after the condition returned.
+    """
+    detail = (
+        f"cleared at {format_utc(cleared_at)} (phase and API status as at that time); "
+        "sent once the announcement's delivery was known"
+    )
+    if active_again_since is not None:
+        detail += f"; active again since {format_utc(active_again_since)}"
+    return detail
 
 
 def _not_measured(gateway: GatewaySnapshot, probe: ProbeSnapshot) -> str:

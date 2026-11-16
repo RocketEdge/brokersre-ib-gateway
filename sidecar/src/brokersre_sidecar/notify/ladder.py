@@ -42,7 +42,7 @@ Rules of the ladder:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -92,6 +92,19 @@ class LadderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class Moment:
+    """What the gateway looked like at one evaluation, kept for a resolution sent later.
+
+    Attributes:
+        phase: Gateway phase token, or None when not measured.
+        api_status: ``vocab.ProbeStatus`` value.
+    """
+
+    phase: str | None
+    api_status: str
+
+
+@dataclass(frozen=True, slots=True)
 class Outbound:
     """One notification that is due.
 
@@ -105,6 +118,13 @@ class Outbound:
             the step it identifies the notification for ``record_result``.
         attempt: 1 for the first try, counting up while it stays undelivered.
         superseded_by: For a ``RESOLVED`` that is a hand-over: the class that took over.
+        cleared_at: For a late ``RESOLVED`` (its episode cleared while a message about it
+            was out): when the condition cleared. None for an immediate one.
+        moment: For a late ``RESOLVED``: the gateway's phase and API status at the
+            clearing, to render it with instead of the current ones (which may belong to
+            the next episode). None when not known (immediate, or not given to ``step``).
+        active_again_since: For a late ``RESOLVED``: the start of the episode of the same
+            class that is active when it is sent, if any.
     """
 
     kind: MessageKind
@@ -115,6 +135,9 @@ class Outbound:
     since: datetime | None = None
     attempt: int = 1
     superseded_by: AlertClass | None = None
+    cleared_at: datetime | None = None
+    moment: Moment | None = None
+    active_again_since: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -157,6 +180,8 @@ class _Closing:
         superseded_by: The hand-over class of the verdict that ended it, if any.
         started: The steps of ``waiting`` that a channel has begun to send; only these can
             have reached anyone if the sidecar stops before their result is known.
+        cleared_at: When the condition cleared (the resolution says so).
+        moment: Phase and API status at the clearing, or None when not given.
     """
 
     since: datetime
@@ -165,11 +190,22 @@ class _Closing:
     escalated: bool
     superseded_by: AlertClass | None
     started: set[int] = field(default_factory=set)
+    cleared_at: datetime | None = None
+    moment: Moment | None = None
 
 
 @dataclass(slots=True)
 class _AlertState:
-    """Mutable per-class state: the current episode and the ended ones still to settle."""
+    """Mutable per-class state: the current episode and the ended ones still to settle.
+
+    Attributes:
+        unheld: The current episode is announced without the de-duplication hold, because
+            the late resolution of the previous one went out while it was active (that
+            resolution must not be the last word while the condition is back).
+        exempted_at: When the last episode of this class was made ``unheld``; at most one
+            per de-duplication window, so a class that flaps faster than its channels
+            answer still stays within the de-duplication rule.
+    """
 
     active: bool = False
     since: datetime | None = None
@@ -178,13 +214,16 @@ class _AlertState:
     last_announced: datetime | None = None
     notices: dict[int, _Notice] = field(default_factory=dict)
     closing: list[_Closing] = field(default_factory=list)
+    unheld: bool = False
+    exempted_at: datetime | None = None
 
     def clear_episode(self) -> None:
-        """End the current episode, keeping ``last_announced`` and the closing episodes."""
+        """End the current episode, keeping the class's timestamps and the closing episodes."""
         self.active = False
         self.since = None
         self.delivered = False
         self.escalated = False
+        self.unheld = False
         self.notices = {}
 
     def waiting_on_earlier(self) -> bool:
@@ -221,6 +260,7 @@ class LadderEngine:
         now: datetime,
         *,
         can_see: bool = True,
+        moment: Moment | None = None,
     ) -> list[Outbound]:
         """Advance the ladder and return the notifications that are due.
 
@@ -229,6 +269,9 @@ class LadderEngine:
             now: Current time (UTC).
             can_see: Whether the sidecar can see the gateway at all (volume mounted, phase
                 known). Without that there is nothing a heartbeat could vouch for.
+            moment: The gateway's phase and API status now. Kept with an episode that
+                clears while a message about it is out, so that its resolution, sent
+                later, tells what the gateway looked like when it cleared.
 
         Returns:
             Notifications in catalogue order; within a class, owed resolutions of ended
@@ -241,15 +284,16 @@ class LadderEngine:
             if alert.value in self._config.disabled_classes:
                 continue
             state = self._state.classes.get(alert)
-            if state is not None and state.closing:
-                due += self._owed_resolutions(alert, state)
+            owed = self._owed_resolutions(alert, state) if state and state.closing else []
             evaluation = evaluations.get(alert)
-            if evaluation is None or evaluation.state is Condition.UNKNOWN:
-                continue
-            if evaluation.state is Condition.ACTIVE:
-                due += self._on_active(alert, evaluation, now)
-            else:
-                due += self._on_inactive(alert, evaluation)
+            current: list[Outbound] = []
+            if evaluation is not None and evaluation.state is Condition.ACTIVE:
+                current = self._on_active(alert, evaluation, now, after_late=bool(owed))
+            elif evaluation is not None and evaluation.state is Condition.INACTIVE:
+                current = self._on_inactive(alert, evaluation, now, moment)
+            elif owed and state is not None and state.active:
+                self._exempt(state, now)  # undecidable now, but the episode is still open
+            due += self._active_again(alert, owed) + current
         if not due and can_see and self._heartbeat_due(now):
             self._state.heartbeat_date = now.astimezone(self._zone).date().isoformat()
             self.dirty = True
@@ -383,9 +427,17 @@ class LadderEngine:
         ]
 
     def _on_active(
-        self, alert: AlertClass, evaluation: Evaluation, now: datetime
+        self, alert: AlertClass, evaluation: Evaluation, now: datetime, *, after_late: bool
     ) -> list[Outbound]:
-        """Handle an active verdict: open an episode, announce it, climb the ladder."""
+        """Handle an active verdict: open an episode, announce it, climb the ladder.
+
+        Args:
+            alert: The class.
+            evaluation: Its active verdict (the detail goes into the messages).
+            now: Current time (UTC).
+            after_late: A late resolution of an earlier episode goes out in this step; this
+                episode is then announced without the de-duplication hold (``_exempt``).
+        """
         state = self._state.classes.setdefault(alert, _AlertState())
         config = self._config
         if not state.active:
@@ -393,6 +445,8 @@ class LadderEngine:
             state.active = True
             state.since = now
             self.dirty = True
+        if after_late:
+            self._exempt(state, now)
         if state.waiting_on_earlier():
             # Whether the previous episode gets a resolution is not known yet; a message
             # about this one now could reach a receiver before that resolution does.
@@ -400,7 +454,11 @@ class LadderEngine:
         due: list[Outbound] = []
         if not state.delivered:
             window = timedelta(seconds=config.dedup_window_s)
-            held = state.last_announced is not None and now - state.last_announced < window
+            held = (
+                not state.unheld
+                and state.last_announced is not None
+                and now - state.last_announced < window
+            )
             if not held:
                 due += self._attempt(
                     state,
@@ -432,11 +490,40 @@ class LadderEngine:
                 )
         return due
 
-    def _on_inactive(self, alert: AlertClass, evaluation: Evaluation) -> list[Outbound]:
+    def _exempt(self, state: _AlertState, now: datetime) -> None:
+        """Let the open episode through the de-duplication hold, once per window.
+
+        Called when a late resolution of an earlier episode goes out while this one is
+        active. The late acceptance of the earlier announcement restarted the window, so
+        without this the new episode would wait up to 15 minutes behind a "resolved" that
+        is already untrue (and PagerDuty would hold no open incident). At most one episode
+        per window is let through: a class that flaps faster than its channels answer
+        still sends no more than one extra announcement per window.
+        """
+        if state.unheld or not state.active:
+            return
+        window = timedelta(seconds=self._config.dedup_window_s)
+        if state.exempted_at is not None and now - state.exempted_at < window:
+            return
+        state.unheld = True
+        state.exempted_at = now
+        self.dirty = True
+
+    def _active_again(self, alert: AlertClass, owed: list[Outbound]) -> list[Outbound]:
+        """Mark late resolutions with the start of the episode of their class now active."""
+        state = self._state.classes.get(alert)
+        if not owed or state is None or not state.active or state.since is None:
+            return owed
+        return [replace(item, active_again_since=state.since) for item in owed]
+
+    def _on_inactive(
+        self, alert: AlertClass, evaluation: Evaluation, now: datetime, moment: Moment | None
+    ) -> list[Outbound]:
         """Handle an inactive verdict: close the episode and tell whoever heard about it.
 
         With a message of the episode still out, the decision waits for its result (the
-        episode is kept as a ``_Closing``); otherwise it is made now.
+        episode is kept as a ``_Closing``, with the time and ``moment`` of the clearing);
+        otherwise it is made now.
         """
         state = self._state.classes.get(alert)
         if state is None or not state.active or state.since is None:
@@ -449,7 +536,16 @@ class LadderEngine:
         if waiting:
             begun = {step for step in waiting if state.notices[step].started}
             state.closing.append(
-                _Closing(state.since, waiting, heard, escalated, evaluation.superseded_by, begun)
+                _Closing(
+                    state.since,
+                    waiting,
+                    heard,
+                    escalated,
+                    evaluation.superseded_by,
+                    begun,
+                    cleared_at=now,
+                    moment=moment,
+                )
             )
         elif heard:
             due.append(self._resolution(alert, state.since, escalated, evaluation.superseded_by))
@@ -468,7 +564,14 @@ class LadderEngine:
         state.closing = [closing for closing in state.closing if closing.waiting]
         self.dirty = True
         return [
-            self._resolution(alert, closing.since, closing.escalated, closing.superseded_by)
+            self._resolution(
+                alert,
+                closing.since,
+                closing.escalated,
+                closing.superseded_by,
+                cleared_at=closing.cleared_at,
+                moment=closing.moment,
+            )
             for closing in settled
             if closing.heard
         ]
@@ -479,8 +582,14 @@ class LadderEngine:
         since: datetime,
         escalated: bool,
         superseded_by: AlertClass | None,
+        *,
+        cleared_at: datetime | None = None,
+        moment: Moment | None = None,
     ) -> Outbound:
-        """Build the ``RESOLVED`` for one episode: primary channels, escalation ones if told."""
+        """Build the ``RESOLVED`` for one episode: primary channels, escalation ones if told.
+
+        ``cleared_at`` and ``moment`` are given for a late resolution only.
+        """
         channels = list(self._config.primary_channels)
         if escalated:
             channels += [name for name in self._config.escalation_channels if name not in channels]
@@ -490,6 +599,8 @@ class LadderEngine:
             tuple(channels),
             since=since,
             superseded_by=superseded_by,
+            cleared_at=cleared_at,
+            moment=moment,
         )
 
     def _heartbeat_due(self, now: datetime) -> bool:
@@ -536,16 +647,23 @@ class LadderEngine:
         """Return the state as a JSON-serialisable mapping and clear ``dirty``."""
         classes: dict[str, dict[str, Any]] = {}
         for alert, state in self._state.classes.items():
-            if not state.active and state.last_announced is None and not state.closing:
+            if (
+                not state.active
+                and state.last_announced is None
+                and state.exempted_at is None
+                and not state.closing
+            ):
                 continue
             classes[alert.value] = {
                 "active": state.active,
                 "since": format_utc(state.since) if state.since else None,
                 "delivered": state.delivered,
                 "escalated": state.escalated,
+                "unheld": state.unheld,
                 "last_announced": (
                     format_utc(state.last_announced) if state.last_announced else None
                 ),
+                "exempted_at": format_utc(state.exempted_at) if state.exempted_at else None,
                 "notices": {
                     str(step): {
                         "delivered": notice.delivered,
@@ -565,6 +683,17 @@ class LadderEngine:
                         "escalated": closing.escalated,
                         "superseded_by": (
                             closing.superseded_by.value if closing.superseded_by else None
+                        ),
+                        "cleared_at": (
+                            format_utc(closing.cleared_at) if closing.cleared_at else None
+                        ),
+                        "moment": (
+                            {
+                                "phase": closing.moment.phase,
+                                "api_status": closing.moment.api_status,
+                            }
+                            if closing.moment
+                            else None
                         ),
                     }
                     for closing in state.closing
@@ -608,6 +737,8 @@ class LadderEngine:
                 last_announced=parse_utc(raw.get("last_announced")),
                 notices=_load_notices(raw.get("notices")),
                 closing=_load_closing(raw.get("closing")),
+                unheld=raw.get("unheld") is True,
+                exempted_at=parse_utc(raw.get("exempted_at")),
             )
             if state.active and state.since is None:
                 continue
@@ -665,10 +796,23 @@ def _load_closing(raw: object) -> list[_Closing]:
             heard=entry.get("heard") is True or bool(lost),
             escalated=entry.get("escalated") is True or any(step != _FIRING_STEP for step in lost),
             superseded_by=classes.get(successor) if isinstance(successor, str) else None,
+            cleared_at=parse_utc(entry.get("cleared_at")),
+            moment=_load_moment(entry.get("moment")),
         )
         if closing.heard:
             loaded.append(closing)
     return loaded
+
+
+def _load_moment(raw: object) -> Moment | None:
+    """Read a saved phase and API status; anything malformed is None (shown as current)."""
+    if not isinstance(raw, dict):
+        return None
+    phase = raw.get("phase")
+    api_status = raw.get("api_status")
+    if not isinstance(api_status, str) or (phase is not None and not isinstance(phase, str)):
+        return None
+    return Moment(phase=phase, api_status=api_status)
 
 
 def _steps(raw: object) -> set[int]:
