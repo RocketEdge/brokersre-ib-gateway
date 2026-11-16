@@ -48,7 +48,8 @@ class Message:
         title: Headline without severity and instance.
         instruction: What the human should do.
         detail: Factual detail from the rule (numbers and fixed words), possibly empty.
-        runbook: Runbook URL for this class, or None when no base is configured.
+        runbook: Runbook URL for this class (``<base>/<class>``; the base itself, the
+            runbook index, for a test message), or None when no base is configured.
         dedup_key: Stable key of the condition (instance and class) for receivers that
             group or resolve by key.
         escalation_step: 0, or 1-2 for an escalation.
@@ -247,7 +248,14 @@ class MessageFactory:
         else:
             shown_phase = UNKNOWN_PHASE
         local = now.astimezone(self._zone)
-        runbook = f"{self._runbook_base}/{alert_class}" if self._runbook_base is not None else None
+        if self._runbook_base is None:
+            runbook = None
+        elif alert_class == _TEST_CLASS:
+            # No alert is behind a test message, so there is no page of its own: the index
+            # shows where the link of each real alert will lead.
+            runbook = self._runbook_base
+        else:
+            runbook = f"{self._runbook_base}/{alert_class}"
         return Message(
             instance=self._clean(self._instance),
             alert_class=alert_class,

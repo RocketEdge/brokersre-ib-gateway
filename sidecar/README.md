@@ -247,7 +247,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `ESCALATE_AFTER_S` | `600` | 60 to 86400 | Delay from the first notification to the first escalation. |
 | `ESCALATE_AGAIN_AFTER_S` | `1800` | above `ESCALATE_AFTER_S` | Delay from the first notification to the second, last escalation. |
 | `HEARTBEAT_TIME` | unset | `HH:MM` | Enables the daily heartbeat at this local time. |
-| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification. Visible ASCII (percent-encode anything else); no credentials or query string. The pages of this repository: see [Alert classes](#alert-classes). |
+| `NOTIFY_RUNBOOK_BASE` | unset | `https://...` | Adds `runbook: <base>/<alert class>` to every notification (a test message links `<base>`, the index). Visible ASCII (percent-encode anything else); no credentials or query string. The pages of this repository: see [Alert classes](#alert-classes). |
 | `NOTIFY_ALLOW_HTTP` | `no` | `yes`, `no` | Allows `http://` channel URLs. Only for a receiver on a private network, such as a local ntfy. |
 | `NOTIFY_CHANNELS` | all configured | list of channel names | Channels for first notifications, resolutions and heartbeats. |
 | `NOTIFY_ESCALATION_CHANNELS` | all configured | list of channel names | Channels for escalations. |

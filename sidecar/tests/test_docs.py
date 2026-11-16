@@ -20,7 +20,9 @@ from brokersre_sidecar.model.health import (
     TaskSnapshot,
 )
 from brokersre_sidecar.notify.catalog import CATALOG
-from brokersre_sidecar.vocab import AlertClass, ChannelName, ProbeStatus
+from brokersre_sidecar.notify.message import MessageFactory
+from brokersre_sidecar.redaction import SecretRegistry
+from brokersre_sidecar.vocab import AlertClass, ChannelName, MessageKind, ProbeStatus
 from testkit import T0, gateway_snapshot, metrics_sample, probe_snapshot
 
 SIDECAR_ROOT = Path(__file__).resolve().parents[1]
@@ -543,6 +545,49 @@ def test_the_readme_and_the_compose_file_name_the_runbook_base_of_this_repositor
     )
     assert RUNBOOK_BASE in README
     assert RUNBOOK_BASE in compose
+
+
+def _runbook_links_of_messages() -> list[tuple[str, str | None]]:
+    """Return (source, runbook link) of every kind of message the notifier can send.
+
+    Built with the base the documents recommend: one firing message per alert class (every
+    kind of a class carries the same link) and the message of `notify test`.
+    """
+    factory = MessageFactory("desk-1", "Etc/UTC", RUNBOOK_BASE, SecretRegistry())
+    links: list[tuple[str, str | None]] = [
+        (
+            alert.value,
+            factory.build(
+                MessageKind.FIRING,
+                alert,
+                detail="",
+                escalation_step=0,
+                since=None,
+                phase=None,
+                api_status="not_measured",
+                now=T0,
+            ).runbook,
+        )
+        for alert in sorted(AlertClass, key=str)
+    ]
+    test_message = factory.build_test(phase=None, api_status="not_measured", now=T0)
+    links.append(("notify test", test_message.runbook))
+    return links
+
+
+@pytest.mark.parametrize(
+    ("source", "link"),
+    _runbook_links_of_messages(),
+    ids=[source for source, _ in _runbook_links_of_messages()],
+)
+def test_every_runbook_link_a_message_carries_leads_to_a_page(source: str, link: str | None) -> None:
+    # A person taps the link in the notification. `notify test` is the first message most
+    # people see, and its link led to docs/runbooks/test, which does not exist (GitHub 404,
+    # seen 2026-11-17 with sidecar 0.2.1 and a local ntfy server).
+    assert link is not None
+    assert link == RUNBOOK_BASE or link.startswith(f"{RUNBOOK_BASE}/"), link
+    page = RUNBOOKS / link.removeprefix(RUNBOOK_BASE).strip("/") / "README.md"
+    assert page.is_file(), f"{source}: {link} leads to no page"
 
 
 def test_the_sidecar_accepts_the_runbook_base_the_documents_recommend() -> None:
