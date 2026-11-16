@@ -35,7 +35,13 @@ Next step.
   script only, where that cannot happen. Rejected: braces with a note to run `stty echo`
   after Ctrl-C (bash and dash left echo off), and braces with `trap 'stty echo' INT` (after
   the trap the shell went on and wrote the password file: 7 bytes of the next typed line in
-  bash and zsh, an empty file in dash). A subshell confines the trap and its `exit`.
+  bash and zsh, an empty file in dash). A subshell confines the trap and its `exit`. The
+  first push of the new tests failed on the GitHub runner only: Ubuntu's `/etc/zsh/zshrc`
+  runs `compinit`, which found an insecure directory there and waited at "Ignore insecure
+  directories and continue [y] or abort compinit [n]?", so the test's zsh never showed its
+  prompt (12 zsh cases). Reproduced locally with a world-writable
+  `/usr/local/share/zsh/site-functions`; the test's zsh now unsets `GLOBAL_RCS` in its own
+  `.zshenv`, so no host start-up file runs.
 - **Next step:** a Mac with Terminal.app or iTerm2 was not used; their paste settings are
   not modelled beyond bracketed paste on and off.
 
