@@ -402,10 +402,10 @@ def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
     engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))
     engine.record_started(first)
     engine.record_started(first)  # a second start of the same message marks nothing new
-    assert engine.dirty is True
+    dirty_after_start = engine.dirty
     engine.export_state()
     engine.record_started(first)
-    assert engine.dirty is False
+    assert (dirty_after_start, engine.dirty) == (True, False)
     never_sent = Outbound(
         MessageKind.ESCALATION,
         AlertClass.LOGIN_FAILED,
