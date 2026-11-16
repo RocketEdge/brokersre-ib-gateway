@@ -215,7 +215,11 @@ Four rules about what counts:
   the "resolved" follows; none did, nothing follows. While such a result is outstanding
   nothing new is sent for that class, so its messages never overtake each other (PagerDuty
   keys an incident by instance and class: an older resolve after a newer trigger would close
-  the new incident). A message whose result a restart lost counts as possibly received.
+  the new incident); the log shows the wait (`notify_resolution_waiting`). The late
+  "resolved" carries the phase, API status and time of its clearing; if the class is
+  active again it says since when, and the new alert follows at once, not held by the
+  15-minute window (one such pass per window and class). A message whose result a restart
+  lost counts as possibly received only if a channel had begun to send it.
 - **Moving on is not recovering.** When a pending second factor or a stalled login ends
   because the gateway gave up, exited or was stopped, the closing message says "Superseded"
   and names the alert that describes the gateway now.

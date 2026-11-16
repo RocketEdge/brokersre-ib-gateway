@@ -388,17 +388,31 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   unreachable channel does not hold that back. A condition that clears while a message
   about it is still being sent waits for that result: if a channel accepted the message,
   the `resolved` follows, if none did, nothing does. Until the result is in, nothing new is
-  sent for that class, so the messages of one class arrive in order (PagerDuty keys an
-  incident by instance and class and never gets an older resolve after a newer trigger).
+  sent for that class, escalations included, so the messages of one class arrive in order
+  (PagerDuty keys an incident by instance and class and never gets an older resolve after a
+  newer trigger). The wait is bounded by the channels: one message holds a channel for at
+  most four tries of 10 s plus back-off (48.4 s), times its place in that channel's queue.
+  The log says when such a wait begins and ends (`notify_resolution_waiting`,
+  `notify_resolution_decided`).
+- Such a late `resolved` shows the phase and API status of the moment the condition
+  cleared, and its detail says when that was. If the condition is active again by the time
+  it goes out, the detail says since when, and the new alert is announced right after it,
+  without the 15-minute hold (once per 15 minutes per class at most, so a condition that
+  flaps faster than its channels answer still sends no more than one extra announcement).
 - The state, including what was not delivered yet, is kept in `notifier-state.json` under
-  `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write). After a restart a
+  `SIDECAR_STATE_DIR` (written atomically, at most 5 seconds per write), and written once
+  more when the sidecar stops, after the queued messages were flushed. After a restart a
   delivered alert is not repeated and an undelivered one is announced, not forgotten. A
-  message that was being sent when the sidecar stopped is sent again while its condition
-  lasts, and if the condition has cleared it gets its `resolved`: whether it had reached
-  anyone is not known, and an open incident is worse than a `resolved` nobody needed. When
-  the file cannot be written the state is kept in memory, `/status` says so, and the write
-  is tried again every 30 seconds. Its format is `brokersre.sidecar.notifier-state.v3`; the
-  v2 file of an earlier sidecar is read.
+  message that a channel had begun to send when the sidecar stopped is sent again while
+  its condition lasts, and if the condition has cleared it gets its `resolved`: whether it
+  had reached anyone is not known, and an open incident is worse than a `resolved` nobody
+  needed. A message that no channel had taken yet cannot have reached anyone and clears
+  silently (one begun within about the last second before a kill counts as not taken).
+  When the file cannot be written the state is kept in memory, `/status` says so, and the
+  write is tried again every 30 seconds. Its format is
+  `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read. A
+  sidecar older than 0.2.2 ignores a v3 file: after a downgrade it announces the active
+  alerts again and forgets resolutions that were still owed.
 
 ## Dead-man ping (recommended)
 
@@ -558,14 +572,17 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
   `ibgw_clock_offset_seconds` are the uncorrected reading: the true difference lies between
   the reading minus 0.5 s and the reading plus 1 s, each widened by half the round-trip
   time (a reading of −1.77 s: the host is 0.77 to 2.27 s ahead).
-- **Not verified against a logged-in gateway.** The probe is tested against an in-process
-  server that speaks the IB API wire protocol and against a scriptable fake; the end-to-end
-  check runs the real gateway image on a network without a route out, so it never logs in.
-  Still to be confirmed with a paper login: the handshake through the relay port, the 20
-  second grace against the relay's real start-up time, the notices 1100/1101/1102 and the
-  farm codes as the Gateway really sends them, the second-factor timeline with a real
-  prompt, and error 326 for a client id that is in use. Channel payloads are tested against
-  local receivers, not against the real services.
+- **Verified against a logged-in gateway only in part.** The tests use an in-process
+  server that speaks the IB API wire protocol, a scriptable fake, and the real gateway
+  image on a network without a route out (it never logs in). On 2026-11-15 and 16 the
+  sidecar (0.2.0, then 0.2.1) also ran next to a logged-in paper Gateway 10.50.1g: the
+  handshake and the time request through the relay port, the relay opening well inside the
+  20 second grace, the farm codes as the Gateway sends them, `/readyz` while logged in and
+  while stopped, and a `gateway_stopped` alert to a local webhook receiver all behaved as
+  described here (`docs/limitations.md` L20). Still to be confirmed: the notices
+  1100/1101/1102, the second-factor timeline with a real prompt, error 326 for a client id
+  that is in use, and the clock offset against IBKR's answer. Channel payloads are tested
+  against local receivers, not against the real services.
 - **One gateway per sidecar.**
 
 ## Development

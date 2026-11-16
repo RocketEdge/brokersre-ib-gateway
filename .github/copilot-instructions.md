@@ -412,7 +412,12 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   one waits, nothing new is sent for that class. Keep both: 0.2.1 lost the "resolved" when a
   failing Teams channel held back the webhook's acceptance (2026-11-16), and PagerDuty keys
   an incident by instance and class (`dedup_key`), so a resolve queued after the next
-  trigger closes the new incident. A change to the ladder state bumps
+  trigger closes the new incident. A late resolution is rendered from the `Moment` its
+  closing kept (the tick that sends it may see the next episode), and lets the episode
+  that is active by then through the 15-minute hold, once per window. Only a message a
+  channel has begun (`on_start` → `record_started`) counts as possibly received after a
+  restart. The state is saved again after the shutdown flush (`Notifier.save_on_stop`,
+  which waits for a write the stop left running). A change to the ladder state bumps
   `notifier-state.vN` and keeps reading the previous version.
 - Sidecar `clock_skew`: IBKR's time request is whole seconds and IBKR documents neither
   truncation nor rounding. `skew_exceeds` counts a reading only when it is beyond the limit

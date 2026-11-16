@@ -19,21 +19,33 @@ Next step.
   began meanwhile); while such a result is outstanding nothing new is sent for that class;
   an escalation still out when the condition clears now gets its resolution on the
   escalation channels too. Notifier state `brokersre.sidecar.notifier-state.v3` (in-flight
-  marks, closing episodes); a v2 file is read. A message whose result a restart lost counts
-  as possibly received: its clearing is told. Released as sidecar 0.2.2. The `clock_skew`
+  marks, closing episodes); a v2 file is read. Released as sidecar 0.2.2. The `clock_skew`
   false alert reported the same day was checked and does not exist (point 5); the rule is
-  unchanged, its detection band is now pinned by tests and documented.
-- **Result:** 11 new tests (ladder, dispatcher, and the notifier end to end with a webhook,
-  the real PagerDuty channel over a mock transport and a Teams channel that fails late)
-  failed on 0.2.1 for the expected reasons and pass now; end to end, 0.2.1 gave the
-  webhook `firing` only and PagerDuty `trigger` only, now `firing` + `resolved` and
-  `trigger` + `resolve` under one `dedup_key`. A property test (400 examples) feeds results
-  late, out of order and across restarts and checks that every episode someone heard of is
-  resolved once, none other is, and the messages of a class never go out of episode order.
-  Sidecar suite 879 to 901 passed (2 skipped), coverage 96.9 %. Clock skew: the reported
-  case (host 0.3 s ahead of a correct IBKR clock, truncated readings in (−1.3, −0.3]) and
-  the session's readings (−0.92, −1.77, 0.124 s) never alert; with the comparison the
-  report assumed (`|reading| > 1 s + RTT/2`) eight of the new tests fail.
+  unchanged, its detection band is now pinned by tests and documented. An independent
+  review of the pull request added, each test-first: a late "resolved" carries the phase,
+  API status and time of its clearing (it was rendered with the next episode's facts) and
+  says "active again since" when the class is back; that new episode is then announced
+  right after it instead of 15 minutes later, at most once per window and class; only a
+  message a channel had begun to send counts as possibly received after a restart (one
+  merely queued before a kill used to bring a "resolved" no channel had attempted); the
+  state is saved once more after the flush at a stop, and that final save waits for a
+  write still running; the log shows a resolution that waits for a result
+  (`notify_resolution_waiting`, `notify_resolution_decided`). Also an end-to-end check
+  that raced (it read the phase once right after `docker stop`) now waits for `stopped`.
+- **Result:** the tests added for defect 1, as first committed, measured against the 0.2.1
+  source: 15 fail (13 new tests, and 2 existing ones whose state schema string changed),
+  56 pass. End to end, 0.2.1 gave the webhook `firing` only and PagerDuty `trigger` only,
+  now `firing` + `resolved` and `trigger` + `resolve` under one `dedup_key`. A property
+  test (400 examples) feeds results late, out of order, begun or not, and across restarts:
+  every episode someone heard of is resolved once, none other is, the messages of a class
+  never go out of episode order, and inside the de-duplication window only an episode a
+  late resolution found active is announced, at most one per window. The review's
+  surviving mutants (M13, M14, L3, M22, and the older M21) are each killed by a test now,
+  as are ten mutants of the review fixes. Sidecar suite 879 to 921 passed (2 skipped).
+  Clock skew: the reported case (host 0.3 s ahead of a correct IBKR clock, truncated
+  readings in (−1.3, −0.3]) and the session's readings (−0.92, −1.77, 0.124 s) never
+  alert; with the comparison the report assumed (`|reading| > 1 s + RTT/2`) eight of the
+  new tests fail.
 - **What did NOT work / root cause:** (1) *A message's outcome was its slowest channel's.*
   `_Delivery.settle` called back once every channel had finished, so the webhook's
   acceptance reached the ladder when Teams gave up, about 6 s after the condition had
@@ -58,12 +70,25 @@ Next step.
   gain 0.5 s on one side and could alert below 1 s if IBKR rounds; not done. What misled
   was the reading (`clock_skew_s` is uncorrected: a correct clock reads about −1 to +0.5 s)
   and the runbook's "more than one second" without "provably"; both are documented now.
-- **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check;
+  (6) *From the review:* the late result's facts were not kept, so the resolution showed
+  the gateway of the moment it was sent; the late acceptance restarted the de-duplication
+  window for an episode that was already active; "in flight" was set when the ladder
+  emitted, before any channel had the message, and the same evaluation saved it; the stop
+  flushed the outboxes and never saved again. The first fix of the last point was itself
+  flaky (4 of 6 runs): the stop cancels the evaluation that awaits a save, the write goes
+  on, and the final save found the state thread busy and skipped; it now waits for that
+  write. The hold stays: while an ended episode waits (at most 48.4 s per message and
+  channel with the defaults, times its place in that channel's queue), the class sends
+  nothing, escalations included.
+- **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check
+  (a rollback to 0.2.1 does not read the v3 state file: it announces the active alerts
+  again and forgets resolutions still owed);
   repeat the stop and start with one failing channel against a paper login and confirm the
-  resolution on every channel that heard. `docs/limitations.md` L20 still says the sidecar
-  never ran next to a logged-in gateway; update it from that session. A millisecond time
-  request exists from TWS API 10.34.01 (`reqCurrentTimeInMillis`, IBKR changelog) and would
-  remove the whole-second band; whether the gateway and ib_async offer it is not checked.
+  resolution on every channel that heard. A millisecond time request exists from TWS API
+  10.34.01 (`reqCurrentTimeInMillis`, IBKR changelog) and would remove the whole-second
+  band; whether the gateway and ib_async offer it is not checked. Open from the review,
+  older than this change: a `resolved` whose own delivery fails is not sent again, and a
+  class disabled after a restart while active blocks the heartbeat.
 
 ### 2026-11-16 — What the first completed paper sessions established
 
