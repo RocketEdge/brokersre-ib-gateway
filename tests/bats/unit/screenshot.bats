@@ -129,7 +129,8 @@ files() {
 # --- the two moments a screenshot is taken by itself -----------------------------------------
 
 @test "classifier: a window IBC has no handler for is photographed" {
-  export SCREENSHOTS=yes SCREENSHOT_NOW=1794441600
+  # Reported at once here; the test after this one covers the grace period.
+  export SCREENSHOTS=yes SCREENSHOT_NOW=1794441600 UNKNOWN_WINDOW_GRACE_S=0
   printf '%s\n' '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Hunter2 Promo Offer 12345; event=Opened' \
     | IBC_PATTERNS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/ibc-patterns.tsv" \
       IBC_KNOWN_WINDOWS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/known-windows.txt" \
@@ -145,7 +146,45 @@ files() {
   ! grep -q -i 'promo' "${EVENTS}" || false
 }
 
+@test "classifier: the picture is taken when the window is reported, not when it opens" {
+  # A window is drawn a moment after IBC reports it (the first automatic picture of a real
+  # dialog, 2026-11-13, showed an empty frame). Reporting after the grace period takes the
+  # picture of a window that has been on the screen for that long.
+  export SCREENSHOTS=yes SCREENSHOT_NOW=1794441600 UNKNOWN_WINDOW_GRACE_S=3
+  {
+    printf '%s\n' '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Hunter2 Promo Offer 12345; event=Opened'
+    sleep 8
+  } | IBC_PATTERNS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/ibc-patterns.tsv" \
+    IBC_KNOWN_WINDOWS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/known-windows.txt" \
+    "${BROKERSRE_LIB}/classify-ibc-log.sh" >/dev/null &
+  classifier_pid=$!
+  sleep 1.5
+  [ -z "$(files)" ]
+  # Not a bare `wait`: bats keeps jobs of its own in this shell.
+  wait "${classifier_pid}"
+  for _ in $(seq 1 50); do
+    if [ -n "$(files)" ]; then break; fi
+    sleep 0.1
+  done
+  [ "$(files)" == "20261112T000000Z-unknown_window.xwd" ]
+}
+
+@test "classifier: a window that closes within the grace period is not photographed" {
+  export SCREENSHOTS=yes SCREENSHOT_NOW=1794441600 UNKNOWN_WINDOW_GRACE_S=1
+  {
+    printf '%s\n' '2026-11-15 15:15:41:567 IBC: detected dialog entitled: Warning; event=Opened' \
+      '2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Closed'
+    sleep 4
+  } | IBC_PATTERNS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/ibc-patterns.tsv" \
+    IBC_KNOWN_WINDOWS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/known-windows.txt" \
+    "${BROKERSRE_LIB}/classify-ibc-log.sh" >/dev/null
+  sleep 0.5
+  [ -z "$(files)" ]
+  [ ! -s "${EVENTS}" ]
+}
+
 @test "classifier: with SCREENSHOTS off an unknown window is an event only" {
+  export UNKNOWN_WINDOW_GRACE_S=0
   printf '%s\n' '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Hunter2 Promo Offer 12345; event=Opened' \
     | IBC_PATTERNS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/ibc-patterns.tsv" \
       IBC_KNOWN_WINDOWS="${BATS_TEST_DIRNAME}/../../../rootfs/etc/brokersre/known-windows.txt" \

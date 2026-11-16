@@ -344,3 +344,25 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   earlier does not get it (the `quiet_grep` fix was missing from every branch above the
   supply-chain one). `git merge-base --is-ancestor <lower> <upper>` for each pair, before
   building on the top.
+- `unknown_window` means a window that STAYS open (`UNKNOWN_WINDOW_GRACE_S`, 10 s), decided in
+  the read loop of `classify-ibc-log.sh`: the `read` has a time limit only while a window
+  waits, and what bash hands back of an unfinished line at the limit is kept (`LC_ALL=C`, or
+  bash can drop bytes there). Time is `/proc/uptime` (bash's `SECONDS` only where it cannot
+  be read at start; a failed read later keeps the last value). A due window is reported
+  only once no line of IBC is waiting (its "closed" line may be in the pipe), for at most
+  one second counted from the first postponement, never from the due time (after a pause
+  the window is long overdue and its "closed" line is what waits). A new
+  IBC (`ibc_version`) empties the waiting list: `ibcstart.sh` relaunches the Gateway inside
+  one classifier run and the old process writes no "closed" line. Never put a title that
+  says nothing about the content (`Warning`) on `known-windows.txt`: the grace period covers
+  the one IBC answers; a list line that starts with `frame:` applies to frames only. A test of
+  the list sets `UNKNOWN_WINDOW_GRACE_S=0`. A test of the grace period keeps the pipe open
+  past it (`{ printf ...; sleep N; } | classify-ibc-log.sh`): when the input ends every wait
+  ends, and a test that replays a file passes whatever the classifier does with a window.
+- IBC's window lines carry a title and no id. The start-up frame changes its title while open
+  (opened as `Authenticating...`, closed as `Starting application...`), a normal paper login
+  opens a `Warning` that IBC accepts, and the configuration dialog's title starts with the
+  account id. IBC stamps its first lines in UTC and the later ones in `TIME_ZONE`. All of it
+  is in `tests/fixtures/ibc-real-paper-login.log` (real, scrubbed, 2026-11-15 UTC).
+- A bare `wait` in a bats test never returns (bats keeps jobs of its own in the test's
+  shell): `wait "${pid}"`.

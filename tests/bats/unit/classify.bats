@@ -87,6 +87,8 @@ classify() {
 }
 
 @test "a window IBC has no handler for becomes one unknown_window event without its title" {
+  # Reported at once here: this test is about the event, the grace period has its own tests.
+  export UNKNOWN_WINDOW_GRACE_S=0
   run bash -c "printf '%s\n' \
     '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Hunter2 Promo Offer 12345; event=Opened' \
     '2026-11-11 23:23:04:158 IBC: detected dialog entitled: Hunter2 Promo Offer 12345; event=Activated' \
@@ -101,26 +103,434 @@ classify() {
 }
 
 @test "windows that IBC handles or that are part of a normal start are not reported" {
+  # Without a grace period, so that the list is what is tested and not the end of the input.
+  export UNKNOWN_WINDOW_GRACE_S=0
   for title in "IBKR Gateway" "IB Gateway" "Login" "Configuration" "Second Factor Authentication" \
     "Existing session detected" "Re-login is required" "Tip of the Day" "Shutdown progress" \
     "Starting application..." "** no title **" "" "Password Notice" "Login Error" \
     "Connecting to server (trying for another 19 seconds)..." \
-    "Attempt 3: connection error, will retry in 5 seconds..."; do
+    "Attempt 3: connection error, will retry in 5 seconds..." \
+    "Authenticating..." "DUX000000 Trader Workstation Configuration (Simulated Trading)"; do
     run classify "2026-11-11 23:23:02:900 IBC: detected frame entitled: ${title}; event=Opened"
     [[ "$output" != *"unknown_window"* ]] || { echo "reported: ${title}"; false; }
   done
 }
 
+@test "a start-up step nobody has seen yet is not reported: its title ends with an ellipsis" {
+  # The start-up frame is titled with the step it is in ("Connecting to server ...",
+  # "Authenticating...", "Starting application..."). A start that hangs in a step is reported
+  # by login_stalled; the frame itself asks nothing of a person.
+  export UNKNOWN_WINDOW_GRACE_S=0
+  run classify '2026-11-11 23:23:02:900 IBC: detected frame entitled: Loading a step of some later Gateway...; event=Opened'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a dialog whose title ends with an ellipsis is not a start-up step: it is reported" {
+  # The family rule is for frames. A dialog titled like a progress text may be waiting for an
+  # answer, and the stalled-login event covers only the login.
+  export UNKNOWN_WINDOW_GRACE_S=0
+  run classify '2026-11-11 23:23:02:900 IBC: detected dialog entitled: Waiting for your approval...; event=Opened'
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
 @test "without the list of known windows nothing is reported as unknown (no alert noise)" {
-  export IBC_KNOWN_WINDOWS="${LOG_DIR}/does-not-exist.txt"
+  export IBC_KNOWN_WINDOWS="${LOG_DIR}/does-not-exist.txt" UNKNOWN_WINDOW_GRACE_S=0
   run classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'
   [ -z "$output" ]
 }
 
 @test "an unknown window leaves the phase untouched" {
+  export UNKNOWN_WINDOW_GRACE_S=0
   mkdir -p "${LOG_DIR}/state"; echo logged-in > "${LOG_DIR}/state/phase"
-  classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' >/dev/null
+  run classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'
+  [ "$output" == "unknown_window" ]
   [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
+}
+
+# --- the grace period: a window is reported when it STAYS open ---------------------------------
+# Seen in the first completed paper logins (2026-11-15): the dialog "Warning" (this is not a
+# brokerage account) opens after every paper login and IBC accepts it in the same millisecond;
+# it is gone 0.3 s later. Reporting a window the moment it opens called that a window nobody
+# handles. What needs a person is a window that is still there after a while.
+#
+# The tests below feed the classifier through a pipe that stays open (`sleep` in the writer):
+# when the input ends, every wait ends with it, and a test that only replays a file would
+# pass whatever the classifier does with a waiting window. The second-factor timeout line is
+# used as a marker: it is an event of its own and has nothing to do with windows.
+
+MARKER='2026-11-11 23:23:04:200 IBC: Re-login after second factor authentication timeout in 5 second'
+
+@test "a window that closes within the grace period is not reported: IBC or the Gateway dealt with it" {
+  export UNKNOWN_WINDOW_GRACE_S=2
+  run bash -c "{ printf '%s\n' \
+    '2026-11-15 15:15:41:567 IBC: detected dialog entitled: Warning; event=Opened' \
+    '2026-11-15 15:15:41:567 IBC: Click button: I understand and accept' \
+    '2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Activated' \
+    '2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Focused' \
+    '2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Closed'; sleep 6; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a window still open after the grace period is reported once, while IBC keeps running" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # The marker shows that the window was NOT reported when it opened, and the login line shows
+  # that it WAS reported before IBC said anything further.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' \
+    '2026-11-11 23:23:04:158 IBC: detected dialog entitled: Something New; event=Activated' \
+    '2026-11-11 23:23:04:160 IBC: detected dialog entitled: Something New; event=Focused' \
+    '${MARKER}'; sleep 6; \
+    printf '%s\n' '2026-11-11 23:23:09:000 IBC: Login has completed'; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'twofa_timeout\nunknown_window\nlogin_completed' ]
+}
+
+@test "a window is not reported before the grace period is over, not even a second before" {
+  export UNKNOWN_WINDOW_GRACE_S=3
+  # The marker arrives 2.5 s after the window opened. The classifier reads the window's line
+  # no sooner than it was written, so the window is due no sooner than 3 s after the writer
+  # wrote it: a report a second early (at 2 s) would come before the marker.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; sleep 2.5; \
+    printf '%s\n' '${MARKER}'; sleep 4; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'twofa_timeout\nunknown_window' ]
+}
+
+@test "by default a window is reported after 10 seconds: not after 7, and by 14" {
+  unset UNKNOWN_WINDOW_GRACE_S
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; sleep 7; \
+    printf '%s\n' '${MARKER}'; sleep 7; \
+    printf '%s\n' '2026-11-11 23:23:18:000 IBC: Login has completed'; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'twofa_timeout\nunknown_window\nlogin_completed' ]
+}
+
+@test "a waiting window is reported while IBC keeps writing other lines" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # A line every 0.3 s for 6 s: the read never runs into its time limit, so the report has to
+  # be made between two lines.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; \
+    for n in \$(seq 1 20); do printf '%s\n' \"2026-11-11 23:23:05:000 IBC: chatter \${n}\"; sleep 0.3; done; \
+    printf '%s\n' '2026-11-11 23:23:11:000 IBC: Login has completed'; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\nlogin_completed' ]
+}
+
+@test "a flood of lines postpones the report of a due window only so far" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # Lines that are already waiting are read before a due window is reported (one of them may
+  # close it), but not without limit. 200,000 lines keep the classifier busy for many seconds
+  # with input always waiting: the window must be reported long before the last of them.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; \
+    yes '2026-11-11 23:23:05:000 IBC: chatter' | head -n 200000; \
+    printf '%s\n' '2026-11-11 23:23:11:000 IBC: Login has completed'; sleep 3; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\nlogin_completed' ]
+}
+
+@test "a stream of lines always waiting postpones a due window by about a second, not more" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # 3 s of lines that are always waiting (the writer is faster than the classifier), then a
+  # marker. The window is due at 1 s and must be reported by about 2 s, long before the marker,
+  # however many lines are still in the pipe.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; \
+    end=\$((SECONDS + 4)); while [ \"\${SECONDS}\" -lt \"\${end}\" ]; do \
+      printf '2026-11-11 23:23:05:000 IBC: chatter\n%.0s' 1 2 3 4 5 6 7 8 9 10; done; \
+    printf '%s\n' '${MARKER}'; sleep 2; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\ntwofa_timeout' ]
+}
+
+@test "a line whose UTF-8 characters arrive across many time limits keeps every byte" {
+  # The classifier reads bytes (LC_ALL=C): in a UTF-8 locale bash can drop bytes when a timed
+  # read ends inside a character. 28 windows fall due 0.1 s apart (3.0 s to 5.7 s) while the
+  # title of the line that closes a window titled in multibyte characters arrives one byte at
+  # a time (from 2.9 s, about 0.8 s): time limits end inside its characters. That window is
+  # due at 5.8 s; if one byte were lost it would not close, and 29 windows would be reported.
+  export UNKNOWN_WINDOW_GRACE_S=3 LC_ALL=C.UTF-8
+  title=$'Pr\xc3\xbcfung \xe2\x82\xac\xf0\x9f\x98\x80\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80\xc3\xa9\xe2\x82\xac'
+  run bash -c "{ \
+    for n in \$(seq 1 28); do printf '%s\n' \"2026-11-11 23:23:04:155 IBC: detected dialog entitled: Stray \${n}; event=Opened\"; sleep 0.1; done; \
+    printf '%s\n' \"2026-11-11 23:23:07:000 IBC: detected dialog entitled: \${1}; event=Opened\"; sleep 0.1; \
+    printf '%s' '2026-11-11 23:23:07:500 IBC: detected dialog entitled: '; \
+    LC_ALL=C; title=\"\${1}\"; for ((i = 0; i < \${#title}; i++)); do printf '%s' \"\${title:i:1}\"; sleep 0.02; done; \
+    printf '%s\n' '; event=Closed'; sleep 5; } | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event | sort | uniq -c | tr -s ' '" _ "${title}"
+  [ "$status" -eq 0 ]
+  [ "$output" == " 28 unknown_window" ]
+}
+
+@test "the end of IBC's output ends the wait: a window that went down with IBC is not reported" {
+  export UNKNOWN_WINDOW_GRACE_S=60
+  started="${SECONDS}"
+  run classify '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # The classifier ends with its input; it does not sit out the grace period.
+  [ "$((SECONDS - started))" -lt 20 ]
+}
+
+@test "a new IBC ends the wait: a window of the Gateway process that was replaced is not reported" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # ibcstart.sh starts the Gateway again inside one classifier run (daily restart, restart
+  # after a second-factor timeout). The old process writes no Closed line for its windows.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' \
+    '2026-11-11 23:23:04:900 IBC: version: 3.24.2'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "ibc_version" ]
+}
+
+@test "a window reported before a restart does not make the next answered one look unknown" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Warning; event=Opened'; sleep 5; \
+    printf '%s\n' \
+    '2026-11-11 23:23:09:000 IBC: version: 3.24.2' \
+    '2026-11-11 23:23:12:000 IBC: detected dialog entitled: Warning; event=Opened' \
+    '2026-11-11 23:23:12:300 IBC: detected dialog entitled: Warning; event=Closed'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\nibc_version' ]
+}
+
+@test "of two windows with one title, the one that stays open is still reported" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Warning; event=Opened' \
+    '2026-11-11 23:23:04:255 IBC: detected dialog entitled: Warning; event=Opened' \
+    '2026-11-11 23:23:04:355 IBC: detected dialog entitled: Warning; event=Closed'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
+@test "a window that stays open keeps its due time when others with its title open and close" {
+  export UNKNOWN_WINDOW_GRACE_S=5
+  # The first Warning is never answered. One with the same title opens and closes every
+  # second: each closing takes the NEWEST waiting window off the list, so the first is
+  # reported 5 s after it opened, before the marker at 9 s, and not 5 s after the last answered one.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Warning; event=Opened'; \
+    for n in \$(seq 1 9); do sleep 1; printf '%s\n' \
+      '2026-11-11 23:23:05:000 IBC: detected dialog entitled: Warning; event=Opened' \
+      '2026-11-11 23:23:05:300 IBC: detected dialog entitled: Warning; event=Closed'; done; \
+    printf '%s\n' '${MARKER}'; sleep 3; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\ntwofa_timeout' ]
+}
+
+@test "after a window was reported, an answered window with its title is not reported" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Warning; event=Opened'; sleep 5; \
+    printf '%s\n' \
+    '2026-11-11 23:23:08:155 IBC: detected dialog entitled: Warning; event=Opened' \
+    '2026-11-11 23:23:08:255 IBC: detected dialog entitled: Warning; event=Closed'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
+@test "of two waiting windows the one that is due first is reported first, on time" {
+  export UNKNOWN_WINDOW_GRACE_S=6
+  # Opened at 0 s and at 4 s, so due at 6 s and at 10 s; the marker comes at 8 s.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: First; event=Opened'; sleep 4; \
+    printf '%s\n' '2026-11-11 23:23:08:155 IBC: detected dialog entitled: Second; event=Opened'; sleep 4; \
+    printf '%s\n' '${MARKER}'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'unknown_window\ntwofa_timeout\nunknown_window' ]
+}
+
+@test "a window that only lost the focus is still open" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' \
+    '2026-11-11 23:23:04:255 IBC: detected dialog entitled: Something New; event=Lost focus' \
+    '2026-11-11 23:23:04:256 IBC: detected dialog entitled: Something New; event=Deactivated'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
+@test "a title is compared as text: a closing window titled * closes no other" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' \
+    '2026-11-11 23:23:04:255 IBC: detected dialog entitled: *; event=Closed'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
+@test "a title full of pattern characters closes the window of exactly that title" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:355 IBC: detected dialog entitled: [x] what? * \$HOME \$(true); event=Opened' \
+    '2026-11-11 23:23:04:455 IBC: detected dialog entitled: [x] what? * \$HOME \$(true); event=Closed'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "no more than 32 windows wait at a time: the first 32 are followed, a further one is not" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # 40 windows open; windows 1, 2 and 40 close again. 1 and 2 were followed (two reports
+  # less); 40 never was (its closing changes nothing): 30 reports. Had the oldest been dropped
+  # to make room, 1 and 2 would no longer be followed and 40 would: 31.
+  run bash -c "{ for n in \$(seq 1 40); do \
+    printf '%s\n' \"2026-11-11 23:23:04:155 IBC: detected dialog entitled: Stray window \${n}; event=Opened\"; done; \
+    printf '%s\n' \
+    '2026-11-11 23:23:04:255 IBC: detected dialog entitled: Stray window 1; event=Closed' \
+    '2026-11-11 23:23:04:255 IBC: detected dialog entitled: Stray window 2; event=Closed' \
+    '2026-11-11 23:23:04:256 IBC: detected dialog entitled: Stray window 40; event=Closed'; \
+    sleep 5; } | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event | sort | uniq -c | tr -s ' '"
+  [ "$status" -eq 0 ]
+  [ "$output" == " 30 unknown_window" ]
+}
+
+@test "a window is reported once however long it stays open" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; sleep 6; \
+    printf '%s\n' '2026-11-11 23:23:10:000 IBC: detected dialog entitled: Something New; event=Closed'; sleep 3; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "unknown_window" ]
+}
+
+@test "a line that arrives in two pieces while a window is waiting is still one line, and the next is too" {
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # The wait for the window ends between the two halves of the login line: the halves must be
+  # joined again, or 'Login has completed' would be lost (and with it the phase logged-in).
+  # The line after it must not get the old half in front: the restart line is matched from
+  # its first character.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened' \
+    '${MARKER}'; \
+    printf '%s' '2026-11-11 23:23:05:000 IBC: Login has'; sleep 5; printf '%s\n' ' completed' \
+    'autorestart file found at /home/ibgateway/Jts/settings/abcdefgh/autorestart: authentication will not be required'; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'twofa_timeout\nunknown_window\nlogin_completed\ndaily_restart' ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "restarting" ]
+}
+
+@test "a pause of the classifier does not turn an answered window into an unknown one" {
+  export UNKNOWN_WINDOW_GRACE_S=2
+  # The classifier is stopped (as a paused container or a suspended host stops it) right after
+  # the window opened. IBC handles and closes the window 0.3 s later; when the classifier runs
+  # again the grace period is long over AND the window's lines are in the pipe, the closing one
+  # last (as in the real log). It must read them all before it decides: the limit on reading
+  # first runs from the first postponement, not from the due time, or the long-overdue window
+  # would be reported at the second line.
+  fifo="${LOG_DIR}/ibc.fifo"
+  mkfifo "${fifo}"
+  "${BROKERSRE_LIB}/classify-ibc-log.sh" <"${fifo}" >"${LOG_DIR}/classified.jsonl" &
+  classifier_pid=$!
+  exec 9>"${fifo}"
+  printf '%s\n' '2026-11-15 15:15:41:567 IBC: detected dialog entitled: Warning; event=Opened' >&9
+  sleep 1
+  kill -STOP "${classifier_pid}"
+  printf '%s\n' \
+    '2026-11-15 15:15:41:567 IBC: Click button: I understand and accept' \
+    '2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Activated' \
+    '2026-11-15 15:15:41:645 IBC: detected dialog entitled: Warning; event=Focused' \
+    '2026-11-15 15:15:41:857 IBC: detected dialog entitled: Warning; event=Lost focus' \
+    '2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Deactivated' \
+    '2026-11-15 15:15:41:858 IBC: detected dialog entitled: Warning; event=Closed' >&9
+  sleep 5
+  kill -CONT "${classifier_pid}"
+  sleep 2
+  exec 9>&-
+  wait "${classifier_pid}"
+  [ ! -s "${LOG_DIR}/classified.jsonl" ]
+}
+
+@test "a last line without a line end is still classified" {
+  run bash -c "printf '%s' '2026-11-01 09:03:07:000 IBC: Login has completed' | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == "login_completed" ]
+}
+
+@test "UNKNOWN_WINDOW_GRACE_S that is not a whole number of seconds falls back to the default" {
+  # With the default (10 s) a window that closes at once is not reported; with 0 it would be.
+  for bad in soon -1 1.5 ""; do
+    export UNKNOWN_WINDOW_GRACE_S="${bad}"
+    run classify \
+      '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Warning; event=Opened' \
+      '2026-11-11 23:23:04:355 IBC: detected dialog entitled: Warning; event=Closed'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ] || { echo "reported with UNKNOWN_WINDOW_GRACE_S='${bad}'"; false; }
+  done
+}
+
+@test "UNKNOWN_WINDOW_GRACE_S with a leading zero is a decimal number of seconds" {
+  export UNKNOWN_WINDOW_GRACE_S=08
+  # bash reads 08 as a broken octal number; the classifier must not print an error or stop.
+  run bash -c "{ printf '%s\n' \
+    '2026-11-11 23:23:04:155 IBC: detected dialog entitled: Something New; event=Opened'; sleep 3; \
+    printf '%s\n' '${MARKER}'; sleep 8; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' 2>&1 | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'twofa_timeout\nunknown_window' ]
+}
+
+@test "REAL completed paper logins (10.50.1g): version, login dialog, login completed, no unknown window" {
+  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-paper-login.log"
+  export UNKNOWN_WINDOW_GRACE_S=1
+  # The pipe stays open well past the grace period: a window of the real log that the
+  # classifier still waited for would be reported here.
+  run bash -c "{ cat '${REAL}'; sleep 5; } | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  # Two starts of one session. IBC's stop message between them ("Login has completed: exiting
+  # via [File, Close] menu") is no login, and the windows of a normal paper login (the
+  # start-up steps, the paper-account warning IBC accepts, the configuration dialog titled
+  # with the account id) are no unknown windows.
+  [ "$output" == $'ibc_version\nlogin_dialog\nlogin_completed\nibc_version\nlogin_dialog\nlogin_completed' ]
+  [ "$(cat "${LOG_DIR}/state/phase")" == "logged-in" ]
+}
+
+@test "REAL completed paper logins: without the lines that close the warning, it is reported" {
+  # The counterpart of the test above, on the same real log: take away IBC's report that the
+  # paper-account warning closed, and the warning of the running Gateway is an unknown window.
+  # (The warning of the first start is not reported here only because the replay reaches the
+  # second IBC's version line within the grace period; in the real timeline it was due minutes
+  # earlier and its Closed line, removed here, is what ended it.)
+  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-paper-login.log"
+  export UNKNOWN_WINDOW_GRACE_S=1
+  run bash -c "{ grep -v 'entitled: Warning; event=Closed' '${REAL}'; sleep 5; } \
+    | '${BROKERSRE_LIB}/classify-ibc-log.sh' | jq -r .event"
+  [ "$status" -eq 0 ]
+  [ "$output" == $'ibc_version\nlogin_dialog\nlogin_completed\nibc_version\nlogin_dialog\nlogin_completed\nunknown_window' ]
+}
+
+@test "REAL completed paper logins: only the paper-account warning relies on the grace period" {
+  # The title "Warning" is deliberately not on the list of known windows: a warning that IBC
+  # does not answer must be reported. Without a grace period it is the only window reported.
+  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-paper-login.log"
+  export UNKNOWN_WINDOW_GRACE_S=0
+  run bash -c "'${BROKERSRE_LIB}/classify-ibc-log.sh' < '${REAL}' | jq -r .event | grep -c unknown_window"
+  [ "$output" == "2" ]
+  [ "$(grep -c 'entitled: Warning; event=Opened' "${REAL}")" == "2" ]
 }
 
 @test "a Re-login dialog and IBC's handling of it are one event (ReloginDialogHandler logs both)" {
@@ -218,12 +628,14 @@ classify() {
   [[ "$output" != *"needs_human"* ]]
 }
 
-@test "the real fixture is labelled as real and holds only IBC lines" {
-  REAL="${BATS_TEST_DIRNAME}/../../fixtures/ibc-real-failed-login.log"
-  run head -1 "${REAL}"
-  [[ "$output" == "# REAL LOG, scrubbed"* ]]
-  run bash -c "tail -n +2 '${REAL}' | grep -c -v -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]+ IBC: '"
-  [ "$output" == "0" ]
+@test "the real fixtures are labelled as real and hold only IBC lines" {
+  for name in ibc-real-failed-login.log ibc-real-paper-login.log; do
+    REAL="${BATS_TEST_DIRNAME}/../../fixtures/${name}"
+    run head -1 "${REAL}"
+    [[ "$output" == "# REAL LOG, scrubbed"* ]] || { echo "${name}: ${output:0:60}"; false; }
+    run bash -c "tail -n +2 '${REAL}' | grep -c -v -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]+ IBC: '"
+    [ "$output" == "0" ] || { echo "${name}: ${output} lines that are not IBC lines"; false; }
+  done
 }
 
 @test "a dialog that IBC reports as Opened, Activated and Focused is one event" {

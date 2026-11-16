@@ -95,6 +95,14 @@ checks="" # newline-separated "status<TAB>name<TAB>detail"
 reason=""
 twofa_prompted=false
 login_seconds=""
+logged_in_at=""
+settled=" (no wait for late reports: the login did not complete)"
+# The image reports a window nobody handles only once it has stayed open for its grace period
+# (UNKNOWN_WINDOW_GRACE_S, 10 s unless QUALIFY_DOCKER_ARGS sets it). The verdict on such
+# windows is taken this many seconds after the login was seen: the grace period plus a margin
+# for a window that opened a few seconds after the login and for the report itself.
+window_margin_s=5
+window_grace_s=10
 
 # check <status> <name> <detail>: record one check (status is pass, fail or info) and print it.
 check() {
@@ -147,6 +155,7 @@ if [ -z "${reason}" ]; then
     case "${now}" in
       logged-in)
         login_seconds=$((${EPOCHSECONDS:-$(date +%s)} - started_epoch))
+        logged_in_at="${SECONDS}"
         break
         ;;
       needs-human)
@@ -217,6 +226,15 @@ if [ -z "${reason}" ]; then
   else
     check info resources "no resource sample in phase logged-in within 45 s"
   fi
+  # A window that opened with the login is reported only after the image's grace period:
+  # wait it out before the events are copied and the verdict on unknown windows is taken.
+  # The grace period is the container's own setting, read back from it.
+  configured_grace="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${name}" 2>/dev/null \
+    | sed -n 's/^UNKNOWN_WINDOW_GRACE_S=\([0-9]\{1,6\}\)$/\1/p' | tail -n 1)"
+  if [ -n "${configured_grace}" ]; then window_grace_s=$((10#${configured_grace})); fi
+  window_settle_s=$((window_grace_s + window_margin_s))
+  while [ "$((SECONDS - logged_in_at))" -lt "${window_settle_s}" ]; do sleep 1; done
+  settled=" reported within ${window_settle_s} s of the login (grace period ${window_grace_s} s: a window that opened up to ${window_margin_s} s after the login is covered)"
 fi
 
 # --- evidence that is collected in every case -------------------------------------------
@@ -234,7 +252,7 @@ if [ "${events_ok}" -eq 1 ] && running; then
     reason="${reason:-the event sequence has a gap}"
   fi
   unknown="$(in_container 'jq -s "[.[] | select(.event == \"unknown_window\")] | length" /var/log/ibgateway/events/events.jsonl' 2>/dev/null || echo "?")"
-  if [ "${unknown}" = "0" ]; then check pass unknown_windows "none"; else
+  if [ "${unknown}" = "0" ]; then check pass unknown_windows "none${settled}"; else
     check fail unknown_windows "${unknown} window(s) without a handler (titles in ibc/ibc.log inside the container)"
     reason="${reason:-a window without a handler appeared}"
   fi

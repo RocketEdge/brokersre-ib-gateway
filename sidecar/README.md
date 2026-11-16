@@ -276,7 +276,7 @@ in `ibgw_notify_failures_total`.
 | `login_failed` | error | The gateway reported a failed login in the last 15 minutes and has not logged in since. Silent while the phase is `needs-human` (that alert carries the cause). | Check the username and password secrets and whether the account is locked. |
 | `existing_session` | error | The phase is `existing-session`. | Log out the other session or give this gateway its own username. |
 | `login_stalled` | error | The gateway reports `login_stalled` (its own `LOGIN_STALL_S`) and has not reported `login_resumed`. When the gateway gives up, exits or is stopped instead, the alert is handed over ("Superseded"). | Look at the gateway screen and log. |
-| `unknown_window` | warning | The gateway reported a dialog it does not recognise while not logged in. | Handle the dialog and report its title. |
+| `unknown_window` | warning | The gateway reported a window it does not recognise that stayed open, while not logged in. | Handle the dialog and report its title. |
 | `gateway_exited` | critical | The phase is `exited` (IBC ended on its own), or the gateway's boot id changed without a `shutdown_requested` event (the container was killed or crashed; reported for 15 minutes). | Read the container log, then start the container when it is safe (new login and 2FA). |
 | `gateway_stopped` | info | The phase is `stopping` or `stopped`: a shutdown was requested. | Nothing, if the stop was intended. |
 | `api_unhealthy` | error | The status has been `down`, `degraded` or `client_id_in_use` for 5 minutes. A lost IBKR link inside a [reset window](#ibkr-reset-windows) of `IBKR_REGION` is excused; a failed API handshake and a zombie gateway never are. | Read `/status` for the reason. Do not restart blindly. |
