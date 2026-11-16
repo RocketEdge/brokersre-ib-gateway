@@ -168,8 +168,9 @@ class _Notice:
 class _Closing:
     """An episode that ended while some of its messages were still out.
 
-    Invariant: kept only while ``waiting`` is not empty (the resolution is undecided) or
-    ``heard`` is True (the resolution is owed and goes out at the next ``step``).
+    Lifecycle: kept while ``waiting`` is not empty (the resolution is undecided). Once it is
+    empty the next ``step`` removes it, with its resolution if ``heard`` and silently if
+    not (``_owed_resolutions`` is the one place that decides).
 
     Attributes:
         since: When the episode began; with the step it matches a late ``record_result``.
@@ -333,8 +334,6 @@ class LadderEngine:
                     state.last_announced = now
                 else:
                     closing.escalated = True
-            if not closing.waiting and not closing.heard:
-                state.closing.remove(closing)  # nobody heard of it: it clears silently
             self.dirty = True
             return
         if state.active and state.since == outbound.since:
