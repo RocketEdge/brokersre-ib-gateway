@@ -79,6 +79,7 @@ services:
   sidecar:
     image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.2   # pin by digest in production
     restart: unless-stopped
+    stop_grace_period: 20s   # stopping takes up to 13 s; Docker's default is 10 s
     read_only: true
     user: "1000:1000"
     cap_drop: [ALL]

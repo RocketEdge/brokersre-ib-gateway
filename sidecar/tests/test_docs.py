@@ -287,6 +287,59 @@ def test_every_container_but_the_gateway_mounts_the_log_volume_read_only_and_wit
         assert volume_options.get("nocopy") is True, f"{service}: {mount}"
 
 
+SIDECAR_STOP_GRACE_S = 20.0
+"""Least time a shipped compose file gives the sidecar to stop. Stopping takes up to 13 s:
+the flush of the outboxes (3 s), a state write the stop interrupted (up to 5 s) and the
+final save after the flush (up to 5 s). Docker's default of 10 s would kill the final save,
+and after a hard kill the next start treats what was in flight as possibly received."""
+
+
+def _sidecar_services(resolved: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
+    """Return every (name, service) of a resolved configuration that runs the sidecar image."""
+    services = resolved["services"]
+    assert isinstance(services, dict)
+    return [
+        (name, service)
+        for name, service in services.items()
+        if "brokersre-ib-gateway-sidecar" in str(service.get("image", ""))
+    ]
+
+
+def _duration_s(text: str) -> float:
+    """Return a Go duration as compose prints it (``20s``, ``1m30s``, ``500ms``) in seconds."""
+    units = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001, "us": 1e-6, "ns": 1e-9}
+    parts = re.findall(r"([0-9]+(?:\.[0-9]+)?)(ms|us|ns|h|m|s)", text)
+    assert parts and "".join(f"{n}{u}" for n, u in parts) == text, text
+    return sum(float(number) * units[unit] for number, unit in parts)
+
+
+@pytest.mark.parametrize(
+    ("files", "profiles"),
+    [(files, profiles) for files, profiles, _ in COMPOSE_CONFIGURATIONS],
+    ids=[
+        " + ".join(files) + "".join(f" --profile {p}" for p in profiles)
+        for files, profiles, _ in COMPOSE_CONFIGURATIONS
+    ],
+)
+def test_every_sidecar_service_has_time_to_save_its_state_when_it_stops(
+    files: tuple[str, ...], profiles: tuple[str, ...]
+) -> None:
+    if not _docker_compose_available():
+        assert not os.environ.get("CI"), "docker compose is needed for this check in CI"
+        pytest.skip("docker compose is not available")
+    sidecars = _sidecar_services(_resolved_compose(files, profiles))
+    if any("sidecar" in name for name in files):
+        assert sidecars, f"{files}: no sidecar service found"
+    for name, service in sidecars:
+        grace = service.get("stop_grace_period")
+        assert isinstance(grace, str), f"{name}: no stop_grace_period"
+        assert _duration_s(grace) >= SIDECAR_STOP_GRACE_S, f"{name}: {grace}"
+
+
+def test_the_readme_example_gives_the_sidecar_time_to_stop() -> None:
+    assert "stop_grace_period: 20s" in _without_comments(README)
+
+
 def test_every_shipped_compose_file_is_in_a_checked_configuration() -> None:
     checked = {name for files, _, _ in COMPOSE_CONFIGURATIONS for name in files}
     shipped = {
