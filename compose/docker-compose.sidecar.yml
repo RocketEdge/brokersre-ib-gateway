@@ -13,7 +13,7 @@
 # or a ping URL in here.
 services:
   sidecar:
-    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.1
+    image: ghcr.io/rocketedge/brokersre-ib-gateway-sidecar:0.2.2
     restart: unless-stopped
     depends_on:
       ib-gateway:

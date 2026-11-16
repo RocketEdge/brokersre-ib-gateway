@@ -40,7 +40,7 @@ RUN uv sync --frozen --no-dev --no-editable
 # Runtime stage.
 FROM base AS runtime
 
-ARG VERSION=0.2.1
+ARG VERSION=0.2.2
 ARG REVISION=unknown
 ARG CREATED=unknown
 
