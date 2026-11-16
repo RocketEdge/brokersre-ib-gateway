@@ -353,6 +353,41 @@ def test_a_late_resolution_lets_the_next_episode_through_at_most_once_per_window
     assert (third.kind, third.since) == (MessageKind.FIRING, at(6))
 
 
+def test_the_once_per_window_pass_is_not_granted_again_after_a_restart() -> None:
+    # Second review of #32 (R3): without exempted_at read back, a restart would allow a
+    # second pass inside the same window.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(1))
+    engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(2))
+    engine.record_result(first, delivered=True, now=at(3))
+    _, second = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(4))  # the pass, used
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))  # second still out
+    engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(6))
+    engine.record_result(second, delivered=True, now=at(7))
+    after = ladder()
+    after.import_state(json.loads(json.dumps(engine.export_state())))
+    assert kinds(after.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(8))) == [
+        ("login_failed", "resolved")
+    ]
+
+
+def test_an_episode_let_through_is_still_let_through_after_a_restart() -> None:
+    # Second review of #32 (R5): without unheld read back, an episode let through but not
+    # yet announced (its announcement was refused) would wait up to 15 minutes.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(1))
+    engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(2))
+    engine.record_result(first, delivered=True, now=at(3))
+    _, second = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(4))
+    engine.record_result(second, delivered=False, now=at(5))  # refused: to be sent again
+    after = ladder()
+    after.import_state(json.loads(json.dumps(engine.export_state())))
+    (retry,) = after.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(6))
+    assert (retry.kind, retry.since, retry.attempt) == (MessageKind.FIRING, at(2), 2)
+
+
 def test_a_late_resolution_while_the_verdict_is_unknown_still_lets_the_next_through() -> None:
     engine = ladder()
     (first,) = engine.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(0))
