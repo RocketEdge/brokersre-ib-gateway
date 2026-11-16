@@ -717,10 +717,13 @@ class LadderEngine:
         worst outcome of ignoring state is one repeated notification. What was in flight
         when the sidecar stopped never reports back: it is treated as not delivered (it is
         sent again while the condition lasts) and as possibly received (its clearing is
-        told). A v2 file carries no in-flight marks, so nothing in it is possibly received.
+        told). A v2 file carries no in-flight marks, and the sidecar that wrote it (up to
+        0.2.1) saved nothing after its stop flush: every message in it that is not marked
+        delivered counts as possibly received.
         """
         if not isinstance(data, dict) or data.get("schema") not in (STATE_SCHEMA, _PREVIOUS_SCHEMA):
             return
+        previous = data.get("schema") == _PREVIOUS_SCHEMA
         heartbeat_date = data.get("heartbeat_date")
         if isinstance(heartbeat_date, str):
             self._state.heartbeat_date = heartbeat_date
@@ -737,7 +740,7 @@ class LadderEngine:
                 delivered=raw.get("delivered") is True,
                 escalated=raw.get("escalated") is True,
                 last_announced=parse_utc(raw.get("last_announced")),
-                notices=_load_notices(raw.get("notices")),
+                notices=_load_notices(raw.get("notices"), previous=previous),
                 closing=_load_closing(raw.get("closing")),
                 unheld=raw.get("unheld") is True,
                 exempted_at=parse_utc(raw.get("exempted_at")),
@@ -747,11 +750,13 @@ class LadderEngine:
             self._state.classes[known[name]] = state
 
 
-def _load_notices(raw: object) -> dict[int, _Notice]:
+def _load_notices(raw: object, *, previous: bool = False) -> dict[int, _Notice]:
     """Read the saved per-step delivery state; anything malformed is dropped.
 
     A notice saved while in flight is loaded as not in flight and uncertain: its result
-    went with the stopped process, and it may have reached someone.
+    went with the stopped process, and it may have reached someone. In a file of the
+    previous schema (``previous``) every notice not marked delivered is uncertain: that
+    file has no in-flight marks, and its writer did not save after its stop flush.
     """
     notices: dict[int, _Notice] = {}
     if not isinstance(raw, dict):
@@ -760,9 +765,14 @@ def _load_notices(raw: object) -> dict[int, _Notice]:
         if key not in ("0", "1", "2") or not isinstance(value, dict):
             continue
         attempts = value.get("failed_attempts")
+        delivered = value.get("delivered") is True
         notices[int(key)] = _Notice(
-            delivered=value.get("delivered") is True,
-            uncertain=value.get("uncertain") is True or value.get("in_flight") is True,
+            delivered=delivered,
+            uncertain=(
+                value.get("uncertain") is True
+                or value.get("in_flight") is True
+                or (previous and not delivered)
+            ),
             failed_attempts=(
                 attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
             ),

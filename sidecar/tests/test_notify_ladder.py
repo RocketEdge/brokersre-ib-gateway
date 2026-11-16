@@ -665,6 +665,46 @@ def test_a_clearing_still_waiting_for_its_result_is_resolved_after_a_restart() -
     assert run(after, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 11) == []
 
 
+def v2_unconfirmed(active: bool) -> dict[str, object]:
+    """A 0.2.1 state file with an announcement it never saw confirmed."""
+    return {
+        "schema": "brokersre.sidecar.notifier-state.v2",
+        "classes": {
+            "gateway_stopped": {
+                "active": active,
+                "since": "2026-11-12T14:59:00.000Z",
+                "delivered": False,
+                "escalated": False,
+                "last_announced": None,
+                "notices": {"0": {"delivered": False, "failed_attempts": 0}},
+            }
+        },
+        "heartbeat_date": None,
+    }
+
+
+def test_an_unconfirmed_announcement_in_a_file_of_0_2_1_counts_as_possibly_received() -> None:
+    # Third review of #32 (P3): 0.2.1 saved nothing after its stop flush, so its file shows
+    # an announcement the flush delivered as not delivered. Same rule as for in-flight
+    # marks: whether it reached anyone is unknown, so its clearing is told.
+    engine = ladder()
+    engine.import_state(v2_unconfirmed(active=True))
+    (resolved,) = run(engine, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 0)
+    assert (resolved.kind, resolved.alert_class) == (
+        MessageKind.RESOLVED,
+        AlertClass.GATEWAY_STOPPED,
+    )
+
+
+def test_an_unconfirmed_announcement_of_0_2_1_still_active_is_sent_again_then_resolved() -> None:
+    engine = ladder()
+    engine.import_state(v2_unconfirmed(active=True))
+    (again,) = run(engine, {AlertClass.GATEWAY_STOPPED: ACTIVE}, 0, delivered=False)
+    assert (again.kind, again.attempt) == (MessageKind.FIRING, 1)
+    (resolved,) = run(engine, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 10)
+    assert resolved.kind is MessageKind.RESOLVED
+
+
 def test_state_saved_by_the_previous_version_is_still_read() -> None:
     v2 = {
         "schema": "brokersre.sidecar.notifier-state.v2",
