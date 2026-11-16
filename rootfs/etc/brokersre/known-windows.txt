@@ -2,7 +2,7 @@
 # per line, matched against the WHOLE title that IBC logs in
 #   "IBC: detected (dialog|frame) entitled: <title>; event=Opened".
 # A line that starts with "frame:" applies to frames only; any other line applies to dialogs
-# and frames alike.
+# and frames alike. (A title that itself starts with "frame:" is listed as "[f]rame:...".)
 # A window whose title matches none of these lines (and no row of ibc-patterns.tsv) and that
 # is still open after UNKNOWN_WINDOW_GRACE_S seconds raises the `unknown_window` event: nothing
 # dealt with it, so it may block the login or the daily restart until a person looks at it.
@@ -27,6 +27,11 @@ IBKR Gateway
 # a step is reported by `login_stalled`. A DIALOG with such a title is not covered: it may be
 # waiting for an answer.
 frame:.*\.\.\.
+# The two start-up titles listed before the family existed, kept for both kinds of window and
+# any ending. The "Attempt" title was on the first list without a recorded source; no real log
+# has shown it.
+Connecting to server.*
+Attempt [0-9]+: connection error.*
 # IBC: Gateway and TWS frames under their other names
 IB Gateway
 Interactive Brokers Gateway

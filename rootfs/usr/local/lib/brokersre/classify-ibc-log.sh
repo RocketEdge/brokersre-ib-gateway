@@ -26,10 +26,11 @@
 #     line: the Gateway process was started again, and the windows of the old one are gone
 #     without a "Closed" line); the end of IBC's output.
 #     Time is the kernel's uptime, not the wall clock: a clock step neither hurries nor delays
-#     a report. A window is never reported before the wait is over, and it is reported only
+#     a report (bash's SECONDS is the fallback only where /proc/uptime cannot be read at
+#     start). A window is never reported before the wait is over, and it is reported only
 #     when no further line of IBC is already waiting to be read: after a pause of this
 #     process, of the container or of the host, the line that closes the window may be in the
-#     pipe already.
+#     pipe already. A stream of lines postpones a report by at most one second.
 #     Limits: IBC names a window by its title only. Of several open windows with one title the
 #     one that opened LAST counts as the one that closed, so a window that stays open keeps
 #     its place and is reported on time. A window whose title changes while it is open is
@@ -85,10 +86,13 @@ waiting_due=()
 # IBC's output pipe must never wait for the classifier. A further window is not followed; the
 # ones that wait already are still reported, which is what brings a person to the screen.
 max_waiting=32
-# A due window is reported only when no line of IBC is waiting to be read. This many lines in
-# a row may postpone a report; then it is made anyway, so a flood of lines cannot hide a window.
-max_deferred=1000
-deferred=0
+# A due window is reported only when no line of IBC is waiting to be read, but lines are read
+# first for no longer than this many hundredths of a second: a stream of lines cannot hide a
+# window. Counted from the first time a report was put off, not from the due time: after a
+# pause of the process the window is long overdue, and the line that closes it is exactly what
+# is waiting.
+max_defer_cs=100
+defer_since_cs=-1
 
 events=() regexes=() phases=() levels=()
 while IFS=$'\t' read -r event regex phase level; do
@@ -124,22 +128,24 @@ window_opened_re='IBC: detected (dialog|frame) entitled: (.*); event=Opened$'
 window_closed_re='IBC: detected (dialog|frame) entitled: (.*); event=Closed$'
 
 # Where the time comes from: the kernel's uptime, which a step of the wall clock does not
-# move. Decided once, so that two sources are never mixed; bash's SECONDS (wall clock) is the
-# fallback where /proc/uptime cannot be read.
+# move. Decided once, so that two sources are never mixed; bash's SECONDS (wall clock, whole
+# seconds) is the fallback only where /proc/uptime cannot be read at start.
 clock_source=seconds
 if { read -r probe _ </proc/uptime; } 2>/dev/null && [[ "${probe}" =~ ^[0-9]+\.[0-9][0-9]$ ]]; then
   clock_source=uptime
 fi
+now_cs=0
 
-# clock_now: put the time into ${now_cs}, in hundredths of a second. It overwrites
-# BASH_REMATCH: a caller takes what it needs from a match before calling it.
+# clock_now: put the time into ${now_cs}, in hundredths of a second. A read of /proc/uptime
+# that fails once keeps the last value (time then stands still for that call, which can only
+# delay a report, never bring it forward), instead of switching to the other clock. It
+# overwrites BASH_REMATCH: a caller takes what it needs from a match before calling it.
 clock_now() {
   local up=""
-  if [ "${clock_source}" = uptime ] && { read -r up _ </proc/uptime; } 2>/dev/null \
-    && [[ "${up}" =~ ^([0-9]+)\.([0-9][0-9])$ ]]; then
-    now_cs=$((10#${BASH_REMATCH[1]} * 100 + 10#${BASH_REMATCH[2]}))
-  else
+  if [ "${clock_source}" = seconds ]; then
     now_cs=$((SECONDS * 100))
+  elif { read -r up _ </proc/uptime; } 2>/dev/null && [[ "${up}" =~ ^([0-9]+)\.([0-9][0-9])$ ]]; then
+    now_cs=$((10#${BASH_REMATCH[1]} * 100 + 10#${BASH_REMATCH[2]}))
   fi
 }
 
@@ -246,6 +252,20 @@ input_waiting() {
   read -r -t 0
 }
 
+# set_overdue: put into ${overdue_cs} how long, in hundredths of a second, the window that
+# became due first has been due; -1 when no waiting window is due yet.
+set_overdue() {
+  local i
+  overdue_cs=-1
+  [ "${#waiting_due[@]}" -eq 0 ] && return 0
+  clock_now
+  for i in "${!waiting_due[@]}"; do
+    if [ "${now_cs}" -ge "${waiting_due[${i}]}" ] && [ "$((now_cs - waiting_due[i]))" -gt "${overdue_cs}" ]; then
+      overdue_cs=$((now_cs - waiting_due[i]))
+    fi
+  done
+}
+
 # after_event EVENT: bookkeeping that outlives the line (the windows of a Gateway process
 # that was replaced, the second-factor prompt cap, the rejected-login latch).
 after_event() {
@@ -327,13 +347,17 @@ while :; do
     if [ "${read_status}" -ne 0 ]; then break; fi
   fi
   # A due window is reported only when IBC has nothing more to say right now: a line that is
-  # already in the pipe may be the one that closes it. max_deferred bounds the postponing.
-  if [ "${#waiting_due[@]}" -gt 0 ]; then
-    if [ "${deferred}" -lt "${max_deferred}" ] && input_waiting; then
-      deferred=$((deferred + 1))
-    else
-      deferred=0
-      report_due_windows
-    fi
+  # already in the pipe may be the one that closes it. max_defer_cs bounds the postponing.
+  set_overdue
+  if [ "${overdue_cs}" -lt 0 ]; then
+    defer_since_cs=-1
+  elif ! input_waiting; then
+    defer_since_cs=-1
+    report_due_windows
+  elif [ "${defer_since_cs}" -lt 0 ]; then
+    defer_since_cs="${now_cs}"
+  elif [ "$((now_cs - defer_since_cs))" -ge "${max_defer_cs}" ]; then
+    defer_since_cs=-1
+    report_due_windows
   fi
 done
