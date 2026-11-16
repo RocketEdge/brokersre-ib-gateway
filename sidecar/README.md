@@ -195,7 +195,7 @@ at start, so a URL or token can never sit in a compose file or in `docker inspec
 | `TRADING_MODE` | `paper` | `paper`, `live` | Selects the API port (see `API_PORT`). Pass the gateway's value. |
 | `GATEWAY_HOST` | `ib-gateway` | host name or IP address | Where the probe reaches the gateway: its service name on the compose network. A loopback address (`127.0.0.1`) selects the [shared-namespace mode](#shared-network-namespace-optional). |
 | `API_PORT` | from `TRADING_MODE` and the mode | port | The probed port. Default: the gateway's relay port, 4004 paper or 4003 live; in the shared-namespace mode the Gateway's own port, 4002 paper or 4001 live. |
-| `IBGW_INSTANCE` | `default` | letters, digits, `.`, `_`, `-` | Label of this gateway in every notification and in `/status`. Must not be an account id. |
+| `IBGW_INSTANCE` | `default` | letters, digits, `.`, `_`, `-` | Label of this gateway in every notification and in `/status`. Must not contain anything the account-id redaction would shorten ([Command line](#command-line)). |
 | `TIME_ZONE` | `Etc/UTC` | IANA zone | Local time shown in notifications (next to UTC) and zone of `HEARTBEAT_TIME`. |
 | `GATEWAY_LOG_DIR` | `/var/log/ibgateway` | path | Where the gateway's log volume is mounted (read-only). Unreadable for 5 minutes raises `volume_missing`. |
 | `SIDECAR_STATE_DIR` | `/var/lib/sidecar` | path | Writable directory for the notifier's state file. When it is not writable the sidecar keeps the state in memory and says so in `/status`. |
@@ -446,6 +446,28 @@ The support bundle holds the last event and metrics lines (contract fields only)
 phase, the status document, versions and non-secret settings. Account ids are cut to their
 last three characters; of the raw IBC log only the lines marked `IBC:` are included, after
 redaction. Review it before sharing.
+
+An account id is recognised by its shape, in upper case only: an optional `D` (paper), then
+`U`, `F` or `I`, up to two more capital letters, then 5 to 9 digits (`U1234567`, `DU1234567`,
+`DUX123456`). IBKR documents the prefixes `U`, `F` and `I`
+([account overview](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/),
+[application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf), page 14)
+and that paper account numbers begin with `DU`
+([IBKR Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)); `DF`
+and `DI` are assumed. A paper id with a third letter and six digits was seen in a real
+session on 2026-11-16 and is in none of these, and the second further letter is headroom. An id of any other shape is **not** shortened, which is why the review matters.
+The same rule applies to the sidecar's own log and to notifications. Its price: any word of
+this shape is cut too (`ID12345` becomes `***345`).
+
+The `IBGW_INSTANCE` label is refused at start when this redaction would change any part of
+it, because the label is printed redacted in some places (`/status`, notifications, the
+de-duplication key) and as it is in others (the bundle's file name, its MANIFEST and
+`settings.json`): `gw-UAT10001` and `gw-UAT20001` would both read `gw-***001`. The message
+names the variable, never the value. **Behaviour change in the first release after 0.2.0:**
+labels such as `ID12345`, `IB10001`, `UK100234`, `FIX12345`, `UAT20261116`, `gw-UAT10001`
+and `desk-DU1234567` stop the sidecar at start; 0.2.0 refused only a label that was an id
+as a whole (`DU1234567`). A lower-case label (`uk100234`) and one in
+which the letters before the digits do not start the shape (`CPU12345`) stay valid.
 
 ## Security posture
 

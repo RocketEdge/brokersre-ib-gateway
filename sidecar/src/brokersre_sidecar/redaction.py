@@ -15,12 +15,43 @@ from urllib.parse import quote
 REDACTED = "[REDACTED]"
 """Replacement text for a secret or an identity value."""
 
-# IBKR account ids: U/F (live individual/advisor), DU/DF (paper) followed by 5-9 digits.
-# Boundaries are deliberately loose on the left: an id glued to an underscore, a digit or
-# lower-case text (``acct_DU1234567``, the ``\\x00DU1234567`` of a bytes repr) must still
-# be caught. Only an upper-case letter before it (``CPU12345``) or a tenth digit after it
-# make it something else.
-ACCOUNT_RE = re.compile(r"(?<![A-Z])(?:DU|DF|U|F)\d{5,9}(?!\d)")
+# The shape of an IBKR account id: an optional D (paper), then one of U, F, I, then zero to
+# two further capital letters, then 5 to 9 digits.
+#
+# Evidence (each source read on 2026-11-16).
+#   F and U: "The account number for the Fund Manager master account is denoted with the
+#     letter F", "The sub-Hedge Fund account number is denoted with the letter U" (IBKR
+#     Campus, hedge fund account overview):
+#     https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/
+#   I and U: a fully disclosed broker's "Master Account, whose Account ID begins with an I
+#     prefix", and its proprietary account, whose id "begins with a U prefix" (IBKR
+#     application guide, page 14):
+#     https://www.interactivebrokers.ie/download/applicationguide.pdf
+#   DU: "The account number for the paper trading account will begin with DU" (Interactive
+#     Brokers Securities Japan, customer service):
+#     https://www.interactivebrokers.co.jp/en/support/customer-service.php
+#   DF and DI: assumptions (paper counterparts of F and I); no source names them.
+#   The letter after DU: observed, in no source. A real paper session on 2026-11-16 showed
+#     DU, one more letter and six digits; the earlier pattern (DU, DF, U or F directly
+#     followed by the digits) missed it and a support bundle carried the id in full.
+#   The second further letter: headroom, an assumption. Masking a token that is no id costs
+#     readability only; missing an id breaks the rule in the module docstring.
+#
+# Boundaries. Loose on the left on purpose: an id glued to an underscore, a digit or
+# lower-case text (``acct_DUR123456``, the ``\\x00DU1234567`` of a bytes repr) must still be
+# caught. Tight in one respect: the match must start at the FIRST letter of a run of capital
+# letters, so a run that begins with any letter other than D, U, F, I is never touched
+# (``CPU12345``, ``XYZ123456``, ``XDU1234567``). Tight on the right: a tenth digit makes it
+# something else (``U1234567890``).
+#
+# Not caught: lower-case ids (``dur123456``), an id directly behind another capital letter,
+# three or more further letters (``DUABC123456``), fewer than 5 or more than 9 digits.
+# Caught although no id: any run of one to four capital letters of this shape in front of 5
+# to 9 digits (``ID12345``, ``USD100000``, ``FIX12345``, ``0FA2345678`` in upper-case hex).
+#
+# The same shape lives in azure/vector/redact.vrl, azure/vector/entrypoint.sh and
+# azure/vm/apply-config.sh; change the four together.
+ACCOUNT_RE = re.compile(r"(?<![A-Z])D?[UFI][A-Z]{0,2}\d{5,9}(?!\d)")
 
 # "key=value" / "key: value" where the key names an identity. The value runs to the next
 # whitespace, comma, semicolon or closing bracket. Keys are matched case-insensitively and

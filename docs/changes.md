@@ -5,6 +5,97 @@ Next step.
 
 ## Change History
 
+### 2026-11-16 — An account id with a third letter is redacted
+
+- **What changed:** the shape by which an IBKR account id is recognised is now an optional
+  `D`, then `U`, `F` or `I`, then zero to two further capital letters, then 5 to 9 digits
+  (`D?[UFI][A-Z]{0,2}\d{5,9}`; `[0-9]` for `\d` in `redact.vrl`). It replaces "`DU`, `DF`, `U` or `F` directly followed by 5 to
+  9 digits" in the four places that carry it: `ACCOUNT_RE` of the sidecar (`redaction.py`;
+  its label check refuses an `IBGW_INSTANCE` that this redaction would change), rules 1 to 3 of
+  `azure/vector/redact.vrl`, `account_like` in `azure/vector/entrypoint.sh` and `good_label`
+  in `azure/vm/apply-config.sh`. The support bundle's MANIFEST, `sidecar/README.md`,
+  `azure/README.md` and L32 state the shape and that an id of any other shape is not
+  shortened. `azure/tests/run.sh` fails when the two label patterns of the Azure pack differ
+  in text, and when they and `redact.vrl` decide one of 43 boundary labels differently.
+- **Result:** the line that leaked, written with a made-up id of the same shape
+  (`IBC: detected dialog entitled: DUR123456 Trader Workstation Configuration (Simulated
+  Trading); event=Opened`), leaves the sidecar's support bundle with `***456` and the Azure
+  shipper with `[ACCT:…456]`; a label of that shape is refused by the sidecar, the shipper
+  and `apply-config.sh`. A run of capital letters that begins with another letter stays as
+  it was (`CPU12345`, `XYZ123456`), and so do ten digits and a third further letter. Each
+  new test was seen to fail against the old pattern first (test counts in the pull request).
+- **What did NOT work / root cause:** (1) *A real paper account id passed every pattern.*
+  The paper account of the session of 2026-11-16 had the shape `DU`, one more letter, six
+  digits. Every pattern expected the digits directly after `DU`, `DF`, `U` or `F`, so the
+  sidecar's support bundle carried the full id in `ibc-redacted.txt`, inside the title of the
+  configuration window that IBC logs, while the bundle's MANIFEST said that account ids are
+  shortened. The patterns and their fixtures came from the same assumption about the shape,
+  so every test agreed with the pattern (the lesson of the first real IBC log, again).
+  (2) *The new shape is one observation plus headroom, not a specification.* IBKR names
+  `F` for a fund manager's master account and `U` for a hedge fund's sub account
+  ([IBKR Campus](https://www.interactivebrokers.com/campus/trading-lessons/hedge-fund-account-overview/)),
+  `I` for a fully disclosed broker's master account and `U` for that broker's proprietary
+  account ([application guide](https://www.interactivebrokers.ie/download/applicationguide.pdf),
+  page 14), and says that a paper trading account number begins with `DU`
+  ([Interactive Brokers Securities Japan](https://www.interactivebrokers.co.jp/en/support/customer-service.php)).
+  None of them says what follows the letters, and none names `DF` or `DI`: both are
+  assumptions. The first wording of this change said more than the sources ("`U` for
+  individual and sub accounts", "`F` for advisor masters", "`DU` widely documented"); a
+  review read the two IBKR documents and the wording now quotes them, with a source for
+  `DU` that was read rather than assumed. The letter after `DU` is an observation, the
+  second further letter an assumption. The trade is deliberate: a
+  word of the shape that is no id is masked too (`ID12345`, `USD100000`; in the Azure pack
+  in any case, `disk12345`), which costs readability, while a missed id breaks the promise.
+  (3) *The label rule had to follow.* The Azure shipper refuses a label that the redaction
+  would rewrite, so it now also refuses a label such as `uk100234`; a deployment that used
+  one stops at the next start with exit code 78 and a message naming the variable. The
+  sidecar refused only a label that was an id as a whole (`fullmatch`), so a label its own
+  redaction rewrites was accepted, and the first review of this change found what that
+  does: `gw-UAT10001` and `gw-UAT20001` both became `gw-***001`, one de-duplication and
+  PagerDuty incident key for two gateways; `desk-DUR123456` left the container in full in
+  the bundle's file name, its MANIFEST and `settings.json` while `status.json` showed
+  `desk-***456`. The sidecar now refuses a label when `redact_accounts(label) != label`,
+  the principle the Azure pack already used (a property test checks it for generated
+  labels). **Behaviour change:** labels such as `ID12345`, `IB10001`, `UK100234`,
+  `FIX12345`, `UAT20261116`, `gw-UAT10001` and `desk-DU1234567` stop the sidecar at start
+  (the message names `IBGW_INSTANCE`, never the value); lower-case labels stay valid in the
+  sidecar, whose redaction is upper case only.
+  (4) *The sidecar's farm-name guard had the same hole, and the first attempt left half of
+  it open.* A farm notice ending in an id of the observed shape in front of a farm stem
+  would have been shown as a farm name in `/status` (found with a constructed input, not
+  in a session). The first fix kept `ACCOUNT_RE` as the guard, on the upper-cased
+  candidate; the review found that an id BEHIND the stem still passed
+  (`secdefu1234567`), because after upper-casing the letter before the id is a capital
+  and the pattern does not start behind one. The guard now refuses any candidate with five
+  digits in a row: every account id has them, no farm name known to the tracker does
+  (`usfarm`, `usfarm.nj`, `cashfarm`, `ushmds`, `secdefnj`, `usfuture`, `usopt`), and the
+  rule does not depend on the account-id shape at all.
+  (5) Not changed: the two redactions still differ in their boundaries. The sidecar matches
+  upper case only, anywhere after a character that is not a capital letter; the Azure pack
+  matches any case, but only a word of its own, an id in upper case glued to a lower-case
+  word, or one after an escaped line break (L32).
+  (6) *The tests did not pin what the comments claimed.* The review ran mutants: rules 2
+  and 3 of `redact.vrl` had no test of their own (rule 3 was only reached by ids that rule
+  2 catches first, because after `\n`, `\r` or `\t` the letter is a lower-case lead), and
+  nothing tied `redact.vrl` to the two label patterns. With this repository's own mutant set
+  (one change each, run against the real checks): `redact.vrl` 29 of 49 killed before, 51
+  of 51 after (two mutants of the new escape added); label pattern, changed alike in both
+  shell files, 16 of 28 killed before, 28 of 28 after (each earlier survivor by
+  `label_verdicts`). Each rule now has a test at every bound of the shape, and
+  `label_verdicts` decides 43 boundary labels with all three engines.
+  (7) *Smaller holes the same review found, each fixed with a test that failed first:*
+  `\d` in `redact.vrl` took any script's digits, and `slice!` cut such a match inside a
+  character; a text that already held U+E000 skipped the underscore swap, so
+  `acct_DUR123456` in it was shipped in full (now escaped and restored exactly); the
+  end-to-end canaries were old-shape ids only (now `DUQ864209` beside each; red against the
+  old redaction and the published sidecar 0.2.0). The VM's host label is `<namePrefix>-vm`
+  and cannot change, and a `namePrefix` such as `ib10001` (accepted before this change) now
+  makes `apply-config.sh` refuse the configuration; the refusals name the shape and the
+  remedy, never the value.
+- **Next step:** release the sidecar as 0.2.1 in a pull request of its own (this change
+  leaves the version alone); compare the shape with a live, an advisor and a broker id when
+  one is at hand (the shape only, never the id) and change the four places together.
+
 ### 2026-11-16 — `unknown_window` is raised for a window that stays open, not for one that opens
 
 - **What changed:** the first completed logins on this image (a paper account, Gateway

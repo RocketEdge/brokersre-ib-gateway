@@ -18,7 +18,6 @@ import re
 from collections import OrderedDict
 
 from brokersre_sidecar.model.health import Connectivity, FarmCondition, FarmKind, FarmState
-from brokersre_sidecar.redaction import ACCOUNT_RE
 
 CODE_CONNECTIVITY_LOST = 1100
 CODES_CONNECTIVITY_RESTORED = frozenset({1101, 1102})
@@ -43,6 +42,11 @@ _FARM_CODES: dict[int, tuple[FarmKind, FarmCondition]] = {
 _FARM_NAME_RE = re.compile(
     r"^[a-z0-9]{0,10}(?:farm|hmds|secdef|future|opt|bond)[a-z0-9]{0,8}(?:[.-][a-z0-9]{1,6})?$"
 )
+# Five or more digits in a row occur in no farm name known here (see _FARM_NAME_RE) and in
+# every account id (5 to 9 digits, whatever letters precede them). A digit rule instead of the account-id
+# pattern: that pattern does not start behind a capital letter, and behind a farm stem an id
+# always is (secdefu1234567), so it missed exactly the case this guard exists for.
+_DIGIT_RUN_RE = re.compile(r"[0-9]{5}")
 _MAX_FARM_NAME = 24
 _MAX_FARMS = 32
 _ON_DEMAND_PREFIX = "demand."
@@ -55,9 +59,10 @@ def farm_name(message: str) -> str:
 
     The notices end in ``...:usfarm`` or, for the inactive form, ``...upon demand.usfarm``.
     Only that last token is looked at, lower-cased, and only when it has the shape of an
-    IBKR farm name (see ``_FARM_NAME_RE``) is it returned. Nothing else of the notice ever
-    leaves this function, so gateway free text cannot reach ``/status``, ``/readyz`` or an
-    alert through a farm notice.
+    IBKR farm name (see ``_FARM_NAME_RE``) and holds no five digits in a row (see
+    ``_DIGIT_RUN_RE``: an account id glued to a farm stem has the shape of a farm name) is
+    it returned. Nothing else of the notice ever leaves this function, so gateway free text
+    cannot reach ``/status``, ``/readyz`` or an alert through a farm notice.
     """
     text = message.strip()
     candidate = text.rsplit(":", 1)[1] if ":" in text else (text.split() or [""])[-1]
@@ -67,7 +72,7 @@ def farm_name(message: str) -> str:
     if (
         len(candidate) <= _MAX_FARM_NAME
         and _FARM_NAME_RE.fullmatch(candidate)
-        and not ACCOUNT_RE.search(candidate.upper())
+        and not _DIGIT_RUN_RE.search(candidate)
     ):
         return candidate
     return OTHER_FARM

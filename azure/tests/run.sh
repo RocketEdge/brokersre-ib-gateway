@@ -61,6 +61,9 @@ UBUNTU_IMAGE="ubuntu:26.04"
 # Canary identifiers: obviously fake, used to prove that redaction works and nothing leaks.
 CANARY_USERNAME=CANARY_USER_zq7
 CANARY_ACCOUNT=DU1234567
+# The shape of the real paper id that leaked on 2026-11-16 (DU, one more letter, six digits),
+# made up. It rides in the line after the over-long raw line and in an events fixture line.
+CANARY_ACCOUNT_SHAPED=DUQ864209
 
 # jq_cli <jq arguments...>: reads stdin. Programs and JSON arguments are passed as strings,
 # never as file paths, so the host binary and the container take the same call.
@@ -255,6 +258,98 @@ group_vector() {
     forced_mode redacted "" /etc/vector/tests/raw-failclosed.test.yaml
 }
 
+# Boundary labels and the verdict each must get: "refused" when redact.vrl rewrites the label
+# (so the label patterns must refuse it), "accepted" when it leaves the label alone. Each line
+# differs from a neighbour in one respect of the shape (an optional D, then U, F or I, up to
+# two further letters, 5 to 9 digits) or of its boundaries (rule 1: a word of its own in any
+# case; rule 2: upper case glued to a lower-case letter). Labels hold no backslash, so rule 3
+# cannot apply to them. ib10001-vm is the host label of a VM deployed with namePrefix ib10001.
+boundary_labels='refused U12345
+refused U123456789
+refused DUR123456
+refused DUAB1234567
+refused I1234567
+refused DI123456
+refused FAB98765
+refused dur123456
+refused Dur123456
+refused uk100234
+refused ib10001-vm
+refused gw-UAT10001
+refused paper-DUR123456
+refused paper.dur123456
+refused desk_DUR123456
+refused DUR123456-x
+refused DUR123456.x
+refused DUR123456_x
+refused deskDUR123456
+refused deskDUAB1234567
+refused deskI1234567
+refused deskU12345
+refused deskU123456789
+refused deskFAB98765-x
+accepted paper-1
+accepted ibgw-vm
+accepted U1234
+accepted U1234567890
+accepted DUABC123456
+accepted XYZ123456
+accepted CPU12345
+accepted XDUR123456
+accepted DUR123456x
+accepted U1234567F
+accepted 7DUR123456
+accepted wolf100234
+accepted deskdur123456
+accepted deskDUr123456
+accepted deskDUABC123456
+accepted deskU1234
+accepted deskU1234567890
+accepted deskQ1234567
+accepted deskDUR123456x'
+
+# label_verdicts <account_like of entrypoint.sh> <good_label pattern of apply-config.sh>:
+# decides every boundary label three times, each with the engine that decides it in
+# production: redact.vrl in the pinned Vector image (vector vrl), account_like with that
+# image's grep exactly as entrypoint.sh calls it, good_label's pattern with jq's test() as
+# apply-config.sh calls it. Two checks: the three agree on every label (a label the patterns
+# accept but the redaction rewrites would read differently in the events table, which is
+# redacted, and the metrics table, which is not, and the alert queries join the two on
+# Instance), and each verdict is the expected one (the patterns' boundaries, pinned as the VRL
+# unit tests pin the rules).
+label_verdicts() {
+  local entrypoint_pattern="$1" vm_pattern="$2" labels redacted by_vrl by_entrypoint by_vm table problems
+  labels="$(printf '%s\n' "${boundary_labels}" | cut -d' ' -f2)"
+  redacted="$(printf '%s\n' "${labels}" | sed 's/.*/{"label":"&"}/' \
+    | vector_container -i -- -c 'cat >/var/tmp/labels.jsonl &&
+      /usr/local/bin/vector vrl --input /var/tmp/labels.jsonl --program /etc/vector/redact.vrl --print-object 2>/dev/null' \
+    | jq_cli -r '.label')"
+  by_vrl="$(paste -d' ' <(printf '%s\n' "${labels}") <(printf '%s\n' "${redacted}") \
+    | awk '{ print (NF == 2 && $1 == $2) ? "accepted" : (NF == 2 ? "refused" : "missing") }')"
+  by_entrypoint="$(printf '%s\n' "${labels}" | vector_container -i -e "ACCOUNT_LIKE=${entrypoint_pattern}" -- -c '
+    while IFS= read -r label; do
+      if printf "%s" "${label}" | grep -Eq -- "${ACCOUNT_LIKE}"; then echo refused; else echo accepted; fi
+    done')"
+  by_vm="$(printf '%s\n' "${labels}" \
+    | jq_cli -R -r --arg pattern "${vm_pattern}" 'if test($pattern) then "refused" else "accepted" end')"
+  table="$(paste -d' ' <(printf '%s\n' "${boundary_labels}") <(printf '%s\n' "${by_vrl}") \
+    <(printf '%s\n' "${by_entrypoint}") <(printf '%s\n' "${by_vm}"))"
+  problems="$(awk 'NF != 5 || $3 != $4 || $3 != $5 { print $2 ": redact.vrl " $3 ", entrypoint.sh " $4 ", apply-config.sh " $5 }' <<<"${table}")"
+  if [[ -n "${table}" && -z "${problems}" ]]; then
+    pass "redact.vrl, entrypoint.sh and apply-config.sh decide each of $(wc -l <<<"${table}") boundary labels alike"
+  else
+    fail "redact.vrl, entrypoint.sh and apply-config.sh decide each boundary label alike" "they disagree"
+    show "${problems}"
+  fi
+  problems="$(awk 'NF != 5 || $1 != $3 || $1 != $4 || $1 != $5 { print $2 ": expected " $1 "; redact.vrl " $3 ", entrypoint.sh " $4 ", apply-config.sh " $5 }' <<<"${table}")"
+  if [[ -n "${table}" && -z "${problems}" ]]; then
+    pass "every boundary label is refused exactly when the redaction would rewrite it"
+  else
+    fail "every boundary label is refused exactly when the redaction would rewrite it" "unexpected verdicts"
+    show "${problems}"
+  fi
+}
+
 # sinks_without_auth <file>: the sink template without comments and without its auth blocks.
 sinks_without_auth() {
   awk '
@@ -345,6 +440,45 @@ VARIABLES
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=deskDU1234567 -- validate --no-environment
   check "accepts a label that only resembles an account id (wolf100234, the redaction leaves it alone)" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=wolf100234 -- validate --no-environment
+  # The shape of a real paper account (2026-11-16): DU, one more letter, six digits. The
+  # redaction rewrites it, so a label of that shape must be refused like any other id; the
+  # labels accepted below are the words the redaction unit tests leave alone.
+  expect_refusal "refuses an IBGW_INSTANCE that is a paper account id with a third letter (DUR123456)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=DUR123456 -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE with the prefix I (I1234567)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=I1234567 -- validate --no-environment
+  expect_refusal "refuses a HOST_LABEL that contains such an id in lower case (desk_dur123456)" "HOST_LABEL" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e HOST_LABEL=desk_dur123456 -- validate --no-environment
+  expect_refusal "refuses an IBGW_INSTANCE with such an id glued to a word (deskDUAB1234567)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=deskDUAB1234567 -- validate --no-environment
+  check "accepts labels whose first letter is not D, U, F or I (XYZ123456, CPU12345)" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=XYZ123456 -e HOST_LABEL=CPU12345 -- validate --no-environment
+  check "accepts labels with a third further letter or ten digits (DUABC123456, DUR1234567890)" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=DUABC123456 -e HOST_LABEL=DUR1234567890 -- validate --no-environment
+  # A label is refused for its shape, not for being an id: the redaction rewrites uk100234.
+  expect_refusal "refuses a label that has the shape of an id although it is none (uk100234)" "IBGW_INSTANCE" \
+    entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=uk100234 -- validate --no-environment
+  # azure/vm/apply-config.sh validates the same two labels before they reach the env file and
+  # repeats the pattern: the two copies must be the same text.
+  local entrypoint_pattern vm_pattern
+  entrypoint_pattern="$(sed -n "s/^account_like='\(.*\)'$/\1/p" "${repo}/azure/vector/entrypoint.sh")"
+  vm_pattern="$(sed -n 's/^    and (test("\(.*\)") | not);$/\1/p' "${repo}/azure/vm/apply-config.sh")"
+  expect "apply-config.sh refuses a label by the same pattern as entrypoint.sh" \
+    '-n "${entrypoint_pattern}" && "${vm_pattern}" == "${entrypoint_pattern}"'
+  label_verdicts "${entrypoint_pattern}" "${vm_pattern}"
+  # The refusal must tell the operator what to avoid without repeating the value: the shape
+  # in words. ib10001-vm is the host label a VM with namePrefix ib10001 is given.
+  local variable value
+  for variable in IBGW_INSTANCE HOST_LABEL; do
+    if [[ "${variable}" == IBGW_INSTANCE ]]; then value=gw-UAT10001; else value=ib10001-vm; fi
+    out="$(entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "${variable}=${value}" -- validate --no-environment 2>&1)"
+    if [[ $? -eq 78 && "${out}" == *"${variable}"* && "${out}" == *"an optional D, then U, F or I, up to two more letters, then 5 to 9 digits"* && "${out}" != *"${value}"* && "${out}" != *"10001"* ]]; then
+      pass "the refusal of an id-shaped ${variable} names the shape, not the value"
+    else
+      fail "the refusal of an id-shaped ${variable} names the shape, not the value" "exit and message"
+      show "${out}"
+    fi
+  done
   expect_refusal "refuses a line break in HOST_LABEL" "HOST_LABEL" \
     entrypoint "${unlabelled_env[@]}" -e IBGW_INSTANCE=paper-1 -e "HOST_LABEL=desk${newline}x" -- validate --no-environment
 
@@ -514,10 +648,10 @@ group_pipeline() {
   # An over-long raw line (300 KB, more than the source's max_line_bytes) that carries the user
   # name and an account id at both ends: it is not shipped, the line after it is, and nothing
   # of it may appear in the shipper's own log (checked on the whole output further down).
-  as_gateway "{ printf '%s' 'LONG_LINE_BEGIN ${CANARY_USERNAME} ${CANARY_ACCOUNT} ' &&
+  as_gateway "{ printf '%s' 'LONG_LINE_BEGIN ${CANARY_USERNAME} ${CANARY_ACCOUNT} ${CANARY_ACCOUNT_SHAPED} ' &&
     head -c 300000 /dev/zero | tr '\\000' 'x' &&
-    printf '%s\\n' ' ${CANARY_USERNAME} ${CANARY_ACCOUNT} LONG_LINE_END' &&
-    printf '%s\\n' '2026-11-12 01:06:00 INFO line after the long one'; } >>/var/log/ibgateway/jts/launcher.log"
+    printf '%s\\n' ' ${CANARY_USERNAME} ${CANARY_ACCOUNT} ${CANARY_ACCOUNT_SHAPED} LONG_LINE_END' &&
+    printf '%s\\n' '2026-11-12 01:06:00 INFO line after the long one, account ${CANARY_ACCOUNT_SHAPED}'; } >>/var/log/ibgateway/jts/launcher.log"
   expect_rows "skips a raw line longer than the limit and ships the line after it" "${a}" "${raw_stream}" 7
   # The log lines of Vector's file source are switched off (they would print the discarded
   # line), so the counters the shipper prints every minute must say what those lines used to
@@ -577,8 +711,14 @@ group_pipeline() {
   lowered="${output,,}"
   expect "the user name is neither in a row nor in the shipper's own log" '"${lowered}" != *"${CANARY_USERNAME,,}"*'
   expect "the user name was replaced by [USER]" '"${rows}" == *"[USER]"*'
-  expect "no full account id is in a row or in the shipper's own log" '"${output}" != *"${CANARY_ACCOUNT}"*'
+  expect "no full account id is in a row or in the shipper's own log" \
+    '"${output}" != *"${CANARY_ACCOUNT}"* && "${output}" != *"${CANARY_ACCOUNT_SHAPED}"*'
   expect "account ids keep their last three characters" '"${rows}" == *"[ACCT:…567]"*'
+  counts="$(for stream in "${events_stream}" "${raw_stream}"; do
+    grep -F "\"capture\":\"${stream}\"" "${capture_file}" | grep -cF "[ACCT:…${CANARY_ACCOUNT_SHAPED: -3}]"
+  done | tr '\n' ' ')"
+  expect "an id of the paper shape seen on 2026-11-16 is shortened in one events row and one raw row" \
+    '"${counts}" == "1 1 "'
   expect "the raw history from before the first start is not shipped" '"${rows}" != *"OLD_LINE_MARKER"*'
   expect "nothing of the over-long raw line is in a row or in the shipper's own log" \
     '"${output}" != *"LONG_LINE_"* && "${output}" != *"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"* && "${output}" == *"line after the long one"*'
