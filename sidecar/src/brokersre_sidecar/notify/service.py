@@ -150,14 +150,18 @@ class Notifier:
             await self._save()
 
     def _delivered(self, due: Outbound, accepted: bool) -> None:
-        """Tell the ladder whether a notification reached at least one channel."""
+        """Tell the ladder whether a notification reached at least one channel.
+
+        Called by the dispatcher at the first acceptance, or when every channel failed;
+        possibly after the condition has cleared, which the ladder handles.
+        """
         self._ladder.record_result(due, delivered=accepted, now=self._clock.now())
         if not accepted:
             log_event(
                 _LOGGER,
                 logging.WARNING,
                 "notify_undelivered",
-                "no channel accepted the notification; it will be sent again",
+                "no channel accepted the notification; it is sent again while the condition lasts",
                 alert_class=due.alert_class.value,
                 kind=due.kind.value,
                 attempt=due.attempt,

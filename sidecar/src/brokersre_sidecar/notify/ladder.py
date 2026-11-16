@@ -22,7 +22,17 @@ Rules of the ladder:
 * When a condition clears, ``RESOLVED`` goes to the channels that heard about it. A
   condition nobody was told about clears silently: no "resolved" for an alert that no
   channel ever received.
-* An ``UNKNOWN`` verdict changes nothing.
+* **A person who received a message about an episode receives its resolution**, also when
+  the condition clears while that message is still out. The episode then ends at once, and
+  its resolution is decided when the outstanding results are in: sent if any message of the
+  episode was accepted, dropped if none was. Until then nothing new is sent for that class
+  (a new episode is held, as by the de-duplication window), so the messages of one class
+  never overtake each other: a receiver that keys by class (PagerDuty's ``dedup_key`` is
+  instance and class) never gets an older "resolved" after a newer trigger.
+* What was in flight when the sidecar stopped is sent again while the condition lasts, and
+  counts as possibly received: should the condition clear first, its resolution is sent. A
+  "resolved" that nobody needed is harmless; an incident that is never closed is not.
+* An ``UNKNOWN`` verdict changes nothing (a resolution that is already owed is still sent).
 * The optional heartbeat is sent once per local day at or after ``heartbeat_time`` when the
   sidecar can see the gateway, no alert is active and nothing else is being sent.
 """
@@ -42,9 +52,12 @@ from brokersre_sidecar.notify.catalog import CATALOG, CONDITION_CLASSES
 from brokersre_sidecar.notify.rules import Condition, Evaluation
 from brokersre_sidecar.vocab import AlertClass, MessageKind
 
-STATE_SCHEMA = "brokersre.sidecar.notifier-state.v2"
+STATE_SCHEMA = "brokersre.sidecar.notifier-state.v3"
+# Written by sidecar 0.2.0 and 0.2.1: no in-flight marks and no closing episodes. Still read.
+_PREVIOUS_SCHEMA = "brokersre.sidecar.notifier-state.v2"
 _FIRING_STEP = 0
 _LAST_STEP = 2
+_STEPS = frozenset({0, 1, 2})
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,17 +117,51 @@ class Outbound:
 
 @dataclass(slots=True)
 class _Notice:
-    """Delivery state of one notification of an episode (announcement or escalation step)."""
+    """Delivery state of one notification of an episode (announcement or escalation step).
+
+    Attributes:
+        delivered: A channel accepted it.
+        in_flight: Sent; no result yet. Never sent again while set.
+        uncertain: An attempt's result was lost because the sidecar stopped while it was
+            out; it may have reached someone. Does not stop a resend, but makes the
+            episode's clearing worth a resolution.
+        failed_attempts: Attempts that no channel accepted.
+        retry_at: Earliest time of the next attempt after a failure.
+    """
 
     delivered: bool = False
     in_flight: bool = False
+    uncertain: bool = False
     failed_attempts: int = 0
     retry_at: datetime | None = None
 
 
 @dataclass(slots=True)
+class _Closing:
+    """An episode that ended while some of its messages were still out.
+
+    Invariant: kept only while ``waiting`` is not empty (the resolution is undecided) or
+    ``heard`` is True (the resolution is owed and goes out at the next ``step``).
+
+    Attributes:
+        since: When the episode began; with the step it matches a late ``record_result``.
+        waiting: Steps (0 = announcement, 1-2 = escalations) whose result is outstanding.
+        heard: A channel accepted (or, across a restart, possibly accepted) a message of it.
+        escalated: An escalation of it was accepted (or possibly was): the resolution goes
+            to the escalation channels too.
+        superseded_by: The hand-over class of the verdict that ended it, if any.
+    """
+
+    since: datetime
+    waiting: set[int]
+    heard: bool
+    escalated: bool
+    superseded_by: AlertClass | None
+
+
+@dataclass(slots=True)
 class _AlertState:
-    """Mutable per-class state (one episode at a time)."""
+    """Mutable per-class state: the current episode and the ended ones still to settle."""
 
     active: bool = False
     since: datetime | None = None
@@ -122,14 +169,19 @@ class _AlertState:
     escalated: bool = False
     last_announced: datetime | None = None
     notices: dict[int, _Notice] = field(default_factory=dict)
+    closing: list[_Closing] = field(default_factory=list)
 
     def clear_episode(self) -> None:
-        """End the current episode, keeping ``last_announced`` for de-duplication."""
+        """End the current episode, keeping ``last_announced`` and the closing episodes."""
         self.active = False
         self.since = None
         self.delivered = False
         self.escalated = False
         self.notices = {}
+
+    def waiting_on_earlier(self) -> bool:
+        """True while an ended episode of this class still waits for a delivery result."""
+        return any(closing.waiting for closing in self.closing)
 
 
 @dataclass(slots=True)
@@ -171,13 +223,18 @@ class LadderEngine:
                 known). Without that there is nothing a heartbeat could vouch for.
 
         Returns:
-            Notifications in catalogue order; the heartbeat, if due, is the only item.
-            Every ``FIRING`` and ``ESCALATION`` must be answered with ``record_result``.
+            Notifications in catalogue order; within a class, owed resolutions of ended
+            episodes (oldest first) come before anything about the current one. The
+            heartbeat, if due, is the only item. Every ``FIRING`` and ``ESCALATION`` must
+            be answered with ``record_result``.
         """
         due: list[Outbound] = []
         for alert in CONDITION_CLASSES:
             if alert.value in self._config.disabled_classes:
                 continue
+            state = self._state.classes.get(alert)
+            if state is not None and state.closing:
+                due += self._owed_resolutions(alert, state)
             evaluation = evaluations.get(alert)
             if evaluation is None or evaluation.state is Condition.UNKNOWN:
                 continue
@@ -196,7 +253,10 @@ class LadderEngine:
     def record_result(self, outbound: Outbound, *, delivered: bool, now: datetime) -> None:
         """Record whether a ``FIRING`` or ``ESCALATION`` reached at least one channel.
 
-        A result for an episode that has ended meanwhile is ignored.
+        A result for the current episode updates its delivery state (and schedules a retry
+        when nothing was accepted). A result for an episode that ended while the message was
+        out decides that episode's resolution (see the module rules). Any other result (a
+        duplicate, or one for an episode the state no longer knows) is ignored.
 
         Args:
             outbound: The notification returned by ``step``.
@@ -204,8 +264,33 @@ class LadderEngine:
             now: Current time (UTC).
         """
         state = self._state.classes.get(outbound.alert_class)
-        if state is None or not state.active or state.since != outbound.since:
+        if state is None:
             return
+        step = outbound.escalation_step
+        # Ended episodes first: while one waits, the current episode sends nothing (see
+        # ``_on_active``), so a match here can never be a message of the current episode.
+        for closing in state.closing:
+            if closing.since != outbound.since or step not in closing.waiting:
+                continue
+            closing.waiting.discard(step)
+            if delivered:
+                closing.heard = True
+                if step == _FIRING_STEP:
+                    # A delivered announcement starts the de-duplication window, late or not.
+                    state.last_announced = now
+                else:
+                    closing.escalated = True
+            if not closing.waiting and not closing.heard:
+                state.closing.remove(closing)  # nobody heard of it: it clears silently
+            self.dirty = True
+            return
+        if state.active and state.since == outbound.since:
+            self._record_current(state, outbound, delivered=delivered, now=now)
+
+    def _record_current(
+        self, state: _AlertState, outbound: Outbound, *, delivered: bool, now: datetime
+    ) -> None:
+        """Apply a delivery result to the current episode of ``state``."""
         notice = state.notices.get(outbound.escalation_step)
         if notice is None:
             return
@@ -268,6 +353,10 @@ class LadderEngine:
             state.active = True
             state.since = now
             self.dirty = True
+        if state.waiting_on_earlier():
+            # Whether the previous episode gets a resolution is not known yet; a message
+            # about this one now could reach a receiver before that resolution does.
+            return []
         due: list[Outbound] = []
         if not state.delivered:
             window = timedelta(seconds=config.dedup_window_s)
@@ -304,29 +393,63 @@ class LadderEngine:
         return due
 
     def _on_inactive(self, alert: AlertClass, evaluation: Evaluation) -> list[Outbound]:
-        """Handle an inactive verdict: close the episode and tell whoever heard about it."""
+        """Handle an inactive verdict: close the episode and tell whoever heard about it.
+
+        With a message of the episode still out, the decision waits for its result (the
+        episode is kept as a ``_Closing``); otherwise it is made now.
+        """
         state = self._state.classes.get(alert)
-        if state is None or not state.active:
+        if state is None or not state.active or state.since is None:
             return []
+        uncertain = {step for step, notice in state.notices.items() if notice.uncertain}
+        heard = state.delivered or bool(uncertain)
+        escalated = state.escalated or any(step != _FIRING_STEP for step in uncertain)
+        waiting = {step for step, notice in state.notices.items() if notice.in_flight}
         due: list[Outbound] = []
-        if state.delivered:
-            channels = list(self._config.primary_channels)
-            if state.escalated:
-                channels += [
-                    name for name in self._config.escalation_channels if name not in channels
-                ]
-            due.append(
-                Outbound(
-                    MessageKind.RESOLVED,
-                    alert,
-                    tuple(channels),
-                    since=state.since,
-                    superseded_by=evaluation.superseded_by,
-                )
+        if waiting:
+            state.closing.append(
+                _Closing(state.since, waiting, heard, escalated, evaluation.superseded_by)
             )
+        elif heard:
+            due.append(self._resolution(alert, state.since, escalated, evaluation.superseded_by))
         state.clear_episode()
         self.dirty = True
         return due
+
+    def _owed_resolutions(self, alert: AlertClass, state: _AlertState) -> list[Outbound]:
+        """Return the resolutions of ended episodes whose results are all in, oldest first."""
+        settled = sorted(
+            (closing for closing in state.closing if not closing.waiting),
+            key=lambda closing: closing.since,
+        )
+        if not settled:
+            return []
+        state.closing = [closing for closing in state.closing if closing.waiting]
+        self.dirty = True
+        return [
+            self._resolution(alert, closing.since, closing.escalated, closing.superseded_by)
+            for closing in settled
+            if closing.heard
+        ]
+
+    def _resolution(
+        self,
+        alert: AlertClass,
+        since: datetime,
+        escalated: bool,
+        superseded_by: AlertClass | None,
+    ) -> Outbound:
+        """Build the ``RESOLVED`` for one episode: primary channels, escalation ones if told."""
+        channels = list(self._config.primary_channels)
+        if escalated:
+            channels += [name for name in self._config.escalation_channels if name not in channels]
+        return Outbound(
+            MessageKind.RESOLVED,
+            alert,
+            tuple(channels),
+            since=since,
+            superseded_by=superseded_by,
+        )
 
     def _heartbeat_due(self, now: datetime) -> bool:
         """True at or after the heartbeat time on a local day without a heartbeat yet."""
@@ -334,6 +457,13 @@ class LadderEngine:
         if config.heartbeat_time is None or AlertClass.HEARTBEAT.value in config.disabled_classes:
             return False
         if any(state.active for state in self._state.classes.values()):
+            return False
+        # An ended episode still being settled is "something being sent", unless its class
+        # is switched off: then nothing of it is ever sent and it must not block for ever.
+        if any(
+            state.closing and alert.value not in config.disabled_classes
+            for alert, state in self._state.classes.items()
+        ):
             return False
         local = now.astimezone(self._zone)
         if local.time() < config.heartbeat_time:
@@ -365,7 +495,7 @@ class LadderEngine:
         """Return the state as a JSON-serialisable mapping and clear ``dirty``."""
         classes: dict[str, dict[str, Any]] = {}
         for alert, state in self._state.classes.items():
-            if not state.active and state.last_announced is None:
+            if not state.active and state.last_announced is None and not state.closing:
                 continue
             classes[alert.value] = {
                 "active": state.active,
@@ -379,9 +509,23 @@ class LadderEngine:
                     str(step): {
                         "delivered": notice.delivered,
                         "failed_attempts": notice.failed_attempts,
+                        "in_flight": notice.in_flight,
+                        "uncertain": notice.uncertain,
                     }
                     for step, notice in state.notices.items()
                 },
+                "closing": [
+                    {
+                        "since": format_utc(closing.since),
+                        "waiting": sorted(closing.waiting),
+                        "heard": closing.heard,
+                        "escalated": closing.escalated,
+                        "superseded_by": (
+                            closing.superseded_by.value if closing.superseded_by else None
+                        ),
+                    }
+                    for closing in state.closing
+                ],
             }
         self.dirty = False
         return {
@@ -391,14 +535,16 @@ class LadderEngine:
         }
 
     def import_state(self, data: object) -> None:
-        """Load state saved by ``export_state``.
+        """Load state saved by ``export_state`` (this schema or the previous one, v2).
 
         Tolerant by design: a file from another schema, a truncated or hand-edited file or
         an entry of an unknown class is ignored (entry by entry) rather than raised. The
         worst outcome of ignoring state is one repeated notification. What was in flight
-        when the sidecar stopped is treated as not delivered: it is sent again.
+        when the sidecar stopped never reports back: it is treated as not delivered (it is
+        sent again while the condition lasts) and as possibly received (its clearing is
+        told). A v2 file carries no in-flight marks, so nothing in it is possibly received.
         """
-        if not isinstance(data, dict) or data.get("schema") != STATE_SCHEMA:
+        if not isinstance(data, dict) or data.get("schema") not in (STATE_SCHEMA, _PREVIOUS_SCHEMA):
             return
         heartbeat_date = data.get("heartbeat_date")
         if isinstance(heartbeat_date, str):
@@ -417,6 +563,7 @@ class LadderEngine:
                 escalated=raw.get("escalated") is True,
                 last_announced=parse_utc(raw.get("last_announced")),
                 notices=_load_notices(raw.get("notices")),
+                closing=_load_closing(raw.get("closing")),
             )
             if state.active and state.since is None:
                 continue
@@ -424,7 +571,11 @@ class LadderEngine:
 
 
 def _load_notices(raw: object) -> dict[int, _Notice]:
-    """Read the saved per-step delivery state; anything malformed is dropped."""
+    """Read the saved per-step delivery state; anything malformed is dropped.
+
+    A notice saved while in flight is loaded as not in flight and uncertain: its result
+    went with the stopped process.
+    """
     notices: dict[int, _Notice] = {}
     if not isinstance(raw, dict):
         return notices
@@ -434,8 +585,44 @@ def _load_notices(raw: object) -> dict[int, _Notice]:
         attempts = value.get("failed_attempts")
         notices[int(key)] = _Notice(
             delivered=value.get("delivered") is True,
+            uncertain=value.get("uncertain") is True or value.get("in_flight") is True,
             failed_attempts=(
                 attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
             ),
         )
     return notices
+
+
+def _load_closing(raw: object) -> list[_Closing]:
+    """Read the saved ended-but-unsettled episodes; anything malformed is dropped.
+
+    A step that was still waiting when the sidecar stopped never reports back: it counts as
+    possibly received, so the episode's resolution is owed and goes out at the next step.
+    """
+    loaded: list[_Closing] = []
+    if not isinstance(raw, list):
+        return loaded
+    classes = {alert.value: alert for alert in AlertClass}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        since = parse_utc(entry.get("since"))
+        waiting = entry.get("waiting")
+        if since is None or not isinstance(waiting, list):
+            continue
+        lost = {
+            step
+            for step in waiting
+            if isinstance(step, int) and not isinstance(step, bool) and step in _STEPS
+        }
+        successor = entry.get("superseded_by")
+        closing = _Closing(
+            since=since,
+            waiting=set(),
+            heard=entry.get("heard") is True or bool(lost),
+            escalated=entry.get("escalated") is True or any(step != _FIRING_STEP for step in lost),
+            superseded_by=classes.get(successor) if isinstance(successor, str) else None,
+        )
+        if closing.heard:
+            loaded.append(closing)
+    return loaded

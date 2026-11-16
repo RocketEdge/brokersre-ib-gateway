@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, time, timedelta
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from brokersre_sidecar.clock import format_utc
 from brokersre_sidecar.notify import (
     Condition,
     Evaluation,
@@ -209,15 +211,108 @@ def test_the_escalation_channel_is_told_even_when_the_announcement_never_got_thr
     assert resolved.channels == ("teams", "pagerduty", "telegram")
 
 
-def test_a_result_for_an_episode_that_already_ended_is_ignored() -> None:
+def test_a_result_that_arrives_after_the_condition_cleared_still_brings_the_resolution() -> None:
+    # The incident of 2026-11-16 (sidecar 0.2.1): the announcement reached the webhook at
+    # once, the other channel was still failing when the gateway came back, and the late
+    # "delivered" was dropped because the episode had ended. Nobody was told it cleared.
     engine = ladder()
-    (stale,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    (firing,) = engine.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    assert engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(5)) == []
+    assert engine.active() == ()
+    engine.record_result(firing, delivered=True, now=at(9))
+    (resolved,) = engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(10))
+    assert (resolved.kind, resolved.alert_class, resolved.channels, resolved.since) == (
+        MessageKind.RESOLVED,
+        AlertClass.GATEWAY_STOPPED,
+        PRIMARY,
+        at(0),
+    )
+    assert engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(11)) == []
+
+
+def test_a_late_result_brings_the_resolution_even_while_the_verdict_is_unknown() -> None:
+    engine = ladder()
+    (firing,) = engine.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(0))
+    engine.step({AlertClass.API_UNHEALTHY: INACTIVE}, at(5))
+    engine.record_result(firing, delivered=True, now=at(6))
+    assert kinds(engine.step({AlertClass.API_UNHEALTHY: UNKNOWN}, at(7))) == [
+        ("api_unhealthy", "resolved")
+    ]
+
+
+def test_a_late_failure_after_the_condition_cleared_stays_silent() -> None:
+    engine = ladder()
+    (firing,) = engine.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(5))
+    engine.record_result(firing, delivered=False, now=at(9))
+    assert engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(10)) == []
+    assert engine.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(60)) == []
+
+
+def test_a_second_episode_waits_until_the_first_ones_outcome_is_known() -> None:
+    # PagerDuty keys an incident by instance and class, not by episode: a resolution of the
+    # first episode queued after the second one's trigger would close the second incident.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    assert engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5)) == []
+    assert engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(10)) == []
+    assert engine.active()[0].since == at(10)
+    engine.record_result(first, delivered=True, now=at(11))
+    (resolved,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(12))
+    assert (resolved.kind, resolved.since) == (MessageKind.RESOLVED, at(0))
+    # The second episode is announced when the de-duplication window of the first ends.
+    assert run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 910) == []
+    (second,) = run(engine, {AlertClass.LOGIN_FAILED: ACTIVE}, 911)
+    assert (second.kind, second.since) == (MessageKind.FIRING, at(10))
+    (closing,) = run(engine, {AlertClass.LOGIN_FAILED: INACTIVE}, 920)
+    assert (closing.kind, closing.since) == (MessageKind.RESOLVED, at(10))
+
+
+def test_a_second_episode_is_announced_at_once_when_nobody_heard_of_the_first() -> None:
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
     engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))
-    (fresh,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(10))
-    engine.record_result(stale, delivered=True, now=at(11))
+    assert engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(10)) == []
+    engine.record_result(first, delivered=False, now=at(11))
+    (second,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(12))
+    assert (second.kind, second.since, second.attempt) == (MessageKind.FIRING, at(10), 1)
+
+
+def test_a_late_result_belongs_to_the_ended_episode_when_the_next_began_that_instant() -> None:
+    # While an ended episode waits for a result, the current one sends nothing, so a result
+    # that matches the ended one's start and step is always the ended one's.
+    engine = ladder()
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(0))
+    assert engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0)) == []
+    engine.record_result(first, delivered=True, now=at(1))
     assert engine.active()[0].notified is False
-    engine.record_result(fresh, delivered=True, now=at(12))
-    assert engine.active()[0].notified is True
+    assert kinds(engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(2))) == [
+        ("login_failed", "resolved")
+    ]
+
+
+def test_an_escalation_in_flight_when_the_condition_clears_gets_its_resolution_too() -> None:
+    # The announcement was delivered long ago; the escalation to PagerDuty is still out when
+    # the second factor is approved. The pager must not keep an open incident.
+    engine = ladder()
+    run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
+    (escalation,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    assert engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(601)) == []
+    engine.record_result(escalation, delivered=True, now=at(602))
+    (resolved,) = engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(603))
+    assert resolved.channels == ("teams", "pagerduty", "telegram")
+    assert resolved.since == at(0)
+
+
+def test_an_escalation_that_fails_after_the_condition_cleared_resolves_the_primary_only() -> None:
+    engine = ladder()
+    run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
+    (escalation,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(601))
+    engine.record_result(escalation, delivered=False, now=at(602))
+    (resolved,) = engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(603))
+    assert resolved.channels == PRIMARY
 
 
 def test_without_any_channel_alerts_are_tracked_and_nothing_is_emitted() -> None:
@@ -232,7 +327,7 @@ def test_delivered_state_survives_a_restart_without_a_duplicate() -> None:
     before = ladder()
     run(before, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
     saved = json.loads(json.dumps(before.export_state()))
-    assert saved["schema"] == "brokersre.sidecar.notifier-state.v2"
+    assert saved["schema"] == "brokersre.sidecar.notifier-state.v3"
     after = ladder()
     after.import_state(saved)
     assert run(after, {AlertClass.TWOFA_PENDING: ACTIVE}, 30) == []
@@ -267,6 +362,55 @@ def test_an_attempt_in_flight_when_the_sidecar_stopped_counts_as_not_delivered()
     assert kinds(run(after, {AlertClass.NEEDS_HUMAN: ACTIVE}, 5)) == [("needs_human", "firing")]
 
 
+def test_an_announcement_in_flight_when_the_sidecar_stopped_is_resolved_if_it_cleared() -> None:
+    # Whether the message reached anyone is unknown after a restart. A "resolved" that
+    # nobody needed is harmless; an open incident that is never closed is not.
+    before = ladder()
+    before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))  # never answered
+    saved = json.loads(json.dumps(before.export_state()))
+    assert saved["schema"] == "brokersre.sidecar.notifier-state.v3"
+    after = ladder()
+    after.import_state(saved)
+    (resolved,) = run(after, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 5)
+    assert (resolved.kind, resolved.since) == (MessageKind.RESOLVED, at(0))
+
+
+def test_a_clearing_still_waiting_for_its_result_is_resolved_after_a_restart() -> None:
+    before = ladder()
+    before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    assert before.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(5)) == []
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    (resolved,) = run(after, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 10)
+    assert (resolved.kind, resolved.since) == (MessageKind.RESOLVED, at(0))
+    assert run(after, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 11) == []
+
+
+def test_state_saved_by_the_previous_version_is_still_read() -> None:
+    v2 = {
+        "schema": "brokersre.sidecar.notifier-state.v2",
+        "classes": {
+            "twofa_pending": {
+                "active": True,
+                "since": "2026-11-16T01:00:00.000Z",
+                "delivered": True,
+                "escalated": False,
+                "last_announced": "2026-11-16T01:00:00.000Z",
+                "notices": {"0": {"delivered": True, "failed_attempts": 0}},
+            }
+        },
+        "heartbeat_date": None,
+    }
+    engine = ladder()
+    engine.import_state(v2)
+    (alert,) = engine.active()
+    assert (alert.alert_class, alert.notified) == ("twofa_pending", True)
+    assert run(engine, {AlertClass.TWOFA_PENDING: ACTIVE}, 0) == []
+    assert kinds(run(engine, {AlertClass.TWOFA_PENDING: INACTIVE}, 1)) == [
+        ("twofa_pending", "resolved")
+    ]
+
+
 def test_the_dirty_flag_tracks_changes_that_need_saving() -> None:
     engine = ladder()
     seen = [engine.dirty]
@@ -282,8 +426,10 @@ def test_the_dirty_flag_tracks_changes_that_need_saving() -> None:
     assert seen == [False, True, False, True, False]
 
 
-def test_corrupt_or_foreign_saved_state_is_ignored() -> None:
-    schema = "brokersre.sidecar.notifier-state.v2"
+@pytest.mark.parametrize(
+    "schema", ["brokersre.sidecar.notifier-state.v2", "brokersre.sidecar.notifier-state.v3"]
+)
+def test_corrupt_or_foreign_saved_state_is_ignored(schema: str) -> None:
     cases: tuple[object, ...] = (
         None,
         [],
@@ -304,9 +450,16 @@ def test_corrupt_or_foreign_saved_state_is_ignored() -> None:
                 "login_failed": {
                     "active": False,
                     "notices": {"7": {}, "0": "x", "1": {"failed_attempts": "many"}},
+                    "closing": [
+                        "x",
+                        {"since": "not a time", "waiting": [0]},
+                        {"since": "2026-11-16T01:00:00.000Z", "waiting": "0"},
+                        {"since": "2026-11-16T01:00:00.000Z", "waiting": [True, 7, "1"]},
+                    ],
                 }
             },
         },
+        {"schema": schema, "classes": {"login_failed": {"closing": {"since": 1}}}},
     )
     for garbage in cases:
         engine = ladder()
@@ -355,6 +508,22 @@ def test_no_heartbeat_while_an_alert_is_active_but_it_follows_once_things_clear(
     assert kinds(run(engine, {AlertClass.API_UNHEALTHY: INACTIVE}, 41 * 60)) == [
         ("heartbeat", "heartbeat")
     ]
+
+
+def test_no_heartbeat_while_a_cleared_alert_waits_for_its_result_unless_its_class_is_off() -> None:
+    engine = ladder(heartbeat_time=time(0, 0))
+    (firing,) = engine.step({AlertClass.CLOCK_SKEW: ACTIVE}, at(0))
+    engine.step({AlertClass.CLOCK_SKEW: INACTIVE}, at(1))
+    assert engine.step({}, at(2)) == []  # its resolution is still undecided
+    saved = json.loads(json.dumps(engine.export_state()))
+    engine.record_result(firing, delivered=True, now=at(3))
+    assert kinds(engine.step({}, at(4))) == [("clock_skew", "resolved")]
+    assert kinds(engine.step({}, at(5))) == [("heartbeat", "heartbeat")]
+    # Restarted with the class switched off: its owed resolution is never sent, and it must
+    # not hold back the heartbeat for ever.
+    off = ladder(heartbeat_time=time(0, 0), disabled_classes=frozenset({"clock_skew"}))
+    off.import_state(saved)
+    assert kinds(off.step({}, at(6))) == [("heartbeat", "heartbeat")]
 
 
 def test_no_heartbeat_while_the_sidecar_cannot_see_the_gateway() -> None:
@@ -441,3 +610,93 @@ def test_message_volume_is_bounded_for_any_sequence_of_verdicts_and_delivery_out
             episode_heard = False
             delivered_steps = set()
             last_firing_attempt = None
+
+
+LATE_STEP = st.tuples(
+    st.sampled_from(["step", "step", "step", "answer", "answer", "restart"]),
+    # At least a millisecond: two episodes never start at the same instant (one evaluation
+    # per tick), and the state file keeps episode starts to the millisecond.
+    st.floats(min_value=0.001, max_value=1200.0),
+    st.sampled_from([Condition.ACTIVE, Condition.INACTIVE, Condition.UNKNOWN]),
+    st.integers(min_value=0, max_value=7),
+    st.booleans(),
+)
+
+
+@settings(max_examples=400)
+@given(ops=st.lists(LATE_STEP, max_size=80), ladder_class=st.booleans())
+def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
+    ops: list[tuple[str, float, Condition, int, bool]], ladder_class: bool
+) -> None:
+    """Delivery results arrive late, in any order, or never (a restart loses them).
+
+    An episode is named by its start as the state file and the messages write it
+    (``format_utc``, milliseconds): a restart restores it at that resolution.
+    """
+    alert = AlertClass.TWOFA_PENDING if ladder_class else AlertClass.API_UNHEALTHY
+    engine = ladder()
+    now = T0
+    pending: list[Outbound] = []  # sent, result not reported yet
+    heard: set[str] = set()  # episodes with a message a channel accepted
+    lost: set[str] = set()  # episodes with a message whose result a restart lost
+    resolved: list[str] = []
+    announced_at: list[datetime] = []  # when a channel accepted an announcement
+    last_since: str | None = None
+
+    def episode(item: Outbound) -> str:
+        assert item.since is not None
+        return format_utc(item.since)
+
+    def take(due: list[Outbound]) -> None:
+        nonlocal last_since
+        for item in due:
+            assert item.alert_class is alert
+            since = episode(item)
+            # One class, one ordered story: nothing about an episode after the next began
+            # (PagerDuty would resolve the newer incident with the older "resolved").
+            assert last_since is None or since >= last_since
+            last_since = since
+            assert since not in resolved
+            if item.kind is MessageKind.RESOLVED:
+                assert since in heard | lost
+                assert since not in {format_utc(listed.since) for listed in engine.active()}
+                resolved.append(since)
+                continue
+            if item.kind is MessageKind.FIRING:
+                assert not any(out.kind is MessageKind.FIRING for out in pending)
+                assert all(now - accepted >= timedelta(seconds=900) for accepted in announced_at)
+            else:
+                assert ladder_class
+                assert not any(
+                    (out.since, out.escalation_step) == (item.since, item.escalation_step)
+                    for out in pending
+                )
+            pending.append(item)
+
+    for kind, delta, state, pick, accept in ops:
+        if kind == "step":
+            now += timedelta(seconds=delta)
+            take(engine.step({alert: Evaluation(state, "d")}, now))
+        elif kind == "answer" and pending:
+            item = pending.pop(pick % len(pending))
+            engine.record_result(item, delivered=accept, now=now)
+            if accept:
+                heard.add(episode(item))
+                if item.kind is MessageKind.FIRING:
+                    announced_at.append(now)
+        elif kind == "restart":
+            lost.update(episode(item) for item in pending)
+            pending.clear()
+            restarted = ladder()
+            restarted.import_state(json.loads(json.dumps(engine.export_state())))
+            engine = restarted
+    # Every result still out comes back, then the condition clears for good.
+    for item in pending:
+        engine.record_result(item, delivered=True, now=now)
+        heard.add(episode(item))
+    pending.clear()
+    now += timedelta(seconds=1)
+    take(engine.step({alert: INACTIVE}, now))
+    assert heard <= set(resolved)
+    assert engine.active() == ()
+    assert engine.step({alert: INACTIVE}, now + timedelta(seconds=1)) == []

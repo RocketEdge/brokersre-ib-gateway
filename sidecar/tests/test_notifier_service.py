@@ -6,17 +6,21 @@ import asyncio
 import json
 import sys
 import threading
+from collections.abc import Callable
 from datetime import time, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
+from brokersre_sidecar.config import Secret
 from brokersre_sidecar.model import GatewaySnapshot
 from brokersre_sidecar.model.health import ProbeSnapshot
 from brokersre_sidecar.notify import (
     DeliveryError,
     Dispatcher,
+    HttpTransport,
     LadderConfig,
     LadderEngine,
     Message,
@@ -26,9 +30,30 @@ from brokersre_sidecar.notify import (
     RuleConfig,
     RuleEngine,
 )
+from brokersre_sidecar.notify.channels import PagerDutyChannel
 from brokersre_sidecar.redaction import SecretRegistry
 from brokersre_sidecar.vocab import ProbeStatus
 from testkit import FakeClock, RecordingSleep, gateway_snapshot, probe_snapshot
+
+
+class Recorder:
+    """An ``httpx`` mock service that accepts every request (202) and keeps its JSON body."""
+
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, Any]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(json.loads(request.content))
+        return httpx.Response(202, text="ok")
+
+    def transport(self) -> HttpTransport:
+        return HttpTransport(httpx.AsyncClient(transport=httpx.MockTransport(self)))
+
+    def actions(self) -> list[str]:
+        return [str(body["event_action"]) for body in self.bodies]
+
+    def dedup_keys(self) -> list[str]:
+        return [str(body["dedup_key"]) for body in self.bodies]
 
 
 class Collector:
@@ -62,6 +87,7 @@ class World:
         self.gateway: dict[str, Any] = {}
         self.probe: dict[str, Any] = {}
         self.ready = True
+        self.primary: tuple[str, ...] = ("teams",)
         self.teams, self.pager = Collector("teams"), Collector("pagerduty")
         self.dispatcher = Dispatcher(
             {"teams": self.teams, "pagerduty": self.pager},
@@ -76,7 +102,7 @@ class World:
             rules=RuleEngine(RuleConfig()),
             ladder=LadderEngine(
                 LadderConfig(
-                    primary_channels=("teams",),
+                    primary_channels=self.primary,
                     escalation_channels=("pagerduty",),
                     escalate_after_s=600.0,
                     escalate_again_after_s=1800.0,
@@ -157,7 +183,7 @@ async def test_de_duplication_state_survives_a_restart_of_the_sidecar(tmp_path: 
     await before.tick()
     await before.tick(1)  # the delivery result is saved by the next evaluation
     saved = json.loads((tmp_path / "notifier-state.json").read_text(encoding="utf-8"))
-    assert saved["schema"] == "brokersre.sidecar.notifier-state.v2"
+    assert saved["schema"] == "brokersre.sidecar.notifier-state.v3"
     assert saved["classes"]["twofa_pending"]["delivered"] is True
 
     after = World(tmp_path, before.clock)
@@ -313,6 +339,82 @@ async def test_an_alert_that_was_never_delivered_clears_without_a_resolved(tmp_p
     attempts = dead.attempts
     await world.tick(10)
     assert dead.attempts == attempts  # nothing more was sent: no "resolved" into the void
+    assert world.notifier.snapshot().active_alerts == ()
+
+
+class LateFailure:
+    """A channel that hangs until the test releases it and then fails: Teams without a route."""
+
+    name = "teams"
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.attempts = 0
+
+    def wants(self, message: Message) -> bool:
+        return True
+
+    async def send(self, message: Message) -> None:
+        self.attempts += 1
+        await self.gate.wait()
+        raise DeliveryError("connect", retryable=False)
+
+
+async def until(condition: Callable[[], bool]) -> None:
+    """Yield to the channel workers until ``condition`` holds (bounded)."""
+    async with asyncio.timeout(2):
+        while not condition():  # noqa: ASYNC110
+            await asyncio.sleep(0)
+
+
+async def test_a_resolution_is_not_lost_when_a_slow_channel_holds_back_the_result(
+    tmp_path: Path,
+) -> None:
+    """The incident of 2026-11-16 (sidecar 0.2.1), with PagerDuty as a third channel.
+
+    The webhook and PagerDuty accept the announcement at once; Teams is still trying when
+    the gateway comes back. Everyone who heard of the stop must hear that it is over, and
+    PagerDuty must get the resolve event for the incident it opened.
+    """
+    world = World(tmp_path)
+    webhook, teams = Collector("webhook"), LateFailure()
+    pager_events = Recorder()
+    pager = PagerDutyChannel(pager_events.transport(), Secret("hunter2hunter2hunter2hunter2abcd"))
+    world.dispatcher = Dispatcher(
+        {"webhook": webhook, "pagerduty": pager, "teams": teams},
+        world.clock,
+        RecordingSleep(world.clock),
+    )
+    world.primary = ("webhook", "pagerduty", "teams")
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    workers = [
+        asyncio.ensure_future(world.dispatcher.run_channel(name))
+        for name in world.dispatcher.channel_names()
+    ]
+    try:
+        world.gateway = {"phase": "stopped"}
+        await world.notifier.tick()
+        await until(lambda: bool(webhook.sent) and len(pager_events.actions()) == 1)
+        assert teams.attempts == 1  # still out
+        world.gateway = {"phase": "starting"}
+        world.clock.advance(3)
+        await world.notifier.tick()
+        teams.gate.set()
+        await world.dispatcher.drain()
+        world.clock.advance(1)
+        await world.notifier.tick()
+        await world.dispatcher.drain()
+    finally:
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+    assert [(m.alert_class, m.kind) for m in webhook.sent] == [
+        ("gateway_stopped", "firing"),
+        ("gateway_stopped", "resolved"),
+    ]
+    assert pager_events.actions() == ["trigger", "resolve"]
+    assert len(set(pager_events.dedup_keys())) == 1
     assert world.notifier.snapshot().active_alerts == ()
 
 
