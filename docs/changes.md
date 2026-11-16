@@ -10,35 +10,44 @@ Next step.
 - **What changed:** documentation only, no code. The first completed real paper sessions on
   this image (2026-11-15/16 UTC; IB Gateway 10.50.1g, and 10.52.1d in one qualification) are
   recorded in `docs/limitations.md` (L02, L03, L04, L11, L12, L13, L15, L16, L20, L27), in the
-  README's statements about the quick start's events, the Gateway log mirror, the sidecar, the
-  qualification and the upgrade check, in `docs/log-contract.md` (the `jts/` mirror), in
-  `docs/evidence.md` (what is not covered) and in `tasks/todo.md`.
+  README's statements about the quick start's events, the Gateway log mirror, the samples, the
+  sidecar, the qualification and the upgrade check, in `docs/log-contract.md` (the `jts/`
+  mirror), `docs/evidence.md` (what is not covered), `docs/upgrade-check.md` (what was
+  tested), the `resource_alert` runbook (memory) and `tasks/todo.md`. Where the README and the
+  evidence page promised the event `twofa_dialog`, they now repeat the log contract's caveat
+  that Gateway 10.16 and later may log only `twofa_initiated`.
 - **Result:** with a real paper account the image works as designed for a fresh login and a
-  stop. It logged in without a second factor 10 to 17 s after the container start (no prompt
-  in 8 logins); it was healthy; the API answered its handshake (server version 178),
-  `examples/wait-for-gateway.sh` succeeded through 127.0.0.1:4002 and the Python example
-  client received IBKR's server time. The relay stayed closed until `login_completed`, opened
-  16 ms after it (`relay_opened`), closed at a stop and opened again after a container restart
+  stop. Ten logins completed (six qualifications and two in each of two compose sessions) and
+  none asked for a second factor. From the events, `container_start` to `login_completed`
+  took 8.2 to 11.4 s in the qualifications and 8.8 and 9.2 s in one compose session; the
+  qualification's own `login_seconds`, counted from before `docker run` to a `docker exec`
+  poll of the phase file, read 10 to 17 s. The Gateway was healthy; the API answered its
+  handshake (server version 178), `examples/wait-for-gateway.sh` succeeded through
+  127.0.0.1:4002 and the Python example client received IBKR's server time. The relay stayed
+  closed until `login_completed`, opened within 0.7 s of it (`relay_opened`, 16 to 700 ms over
+  the logins recorded), closed at a stop and opened again after a container restart
   (`boots_30m` 2, phase back to `logged-in`). A stop ended in `shutdown_complete` after 1 to 4 s.
   A logged-in Gateway used a working set of 459 to 494 MB and a JVM RSS of 544 to 608 MB, with
-  151 to 156 threads, 72 to 74 open file descriptors and no CLOSE_WAIT socket; the sampler's
-  working set and process count agreed with `docker stats`. `docker diff` shows only Docker's
-  mount point of the secrets (L02); the Gateway's own log is an encrypted
-  `ibgateway.<yyyymmdd>.<hhmmss>.ibgzenc` per start, which the mirror does not copy (L03);
-  `scripts/check-upgrade.sh --container` against this registry answered `up-to-date`, exit 0.
+  151 to 156 JVM threads, 72 to 74 open file descriptors and no CLOSE_WAIT socket; of these
+  only the working set, and the `pids` count of processes and threads, were compared with
+  `docker stats`, and they agreed (L11). `docker diff` shows only Docker's mount point of the
+  secrets (L02); the Gateway's own log is an encrypted `ibgateway.<yyyymmdd>.<hhmmss>.ibgzenc`
+  per start, which the mirror does not copy (L03); `scripts/check-upgrade.sh --container`
+  against this registry answered `up-to-date`, exit 0.
   The shipped files were started as shipped (`compose/docker-compose.example.yml` and
   `compose/docker-compose.sidecar.yml` at `e079462`, plus host ports, the sidecar 0.2.1 pinned
   by digest, a Teams URL that cannot be reached and a local stand-in webhook receiver) on fresh
-  volumes with the published stable gateway `7773ff7`: logged in 12 s after `up -d`, all three
-  containers running with 0 restarts, the log volume owned 1000:1000 with mode 755, no
-  `dirs_not_writable`; the sidecar ready (`/readyz` 200; farms `apachmds`, `hfarm`, `secdefhk`
-  ok; round trip 1.6 ms; `volume_present` true), no alert and no notification while logged in
-  (no false `unknown_window`). `docker compose stop ib-gateway` took 3 s, exit 0; `/readyz`
-  then said 503 `not_measured`, and `gateway_stopped` (info) reached the webhook while the
-  Teams channel failed to connect, as expected. After the start it logged in again. The
-  support bundle of sidecar 0.2.1 held no username and the account id only shortened (`***`
-  and three digits, four times, in window titles). The qualification
-  (`scripts/qualify-paper.sh`, run by hand outside CI):
+  volumes with the published stable gateway `7773ff7`: the phase file read `logged-in` 12 s
+  after `up -d`, all three containers ran with 0 restarts, the log volume was owned 1000:1000
+  with mode 755, no `dirs_not_writable`; the sidecar was ready (`/readyz` 200; farms
+  `apachmds`, `hfarm`, `secdefhk` ok; round trip 1.6 ms; `volume_present` true), with no alert
+  and no notification while logged in (no false `unknown_window`). `docker compose stop
+  ib-gateway` took 3 s, exit 0; `/readyz` then said 503 `not_measured`, and `gateway_stopped`
+  (info) reached the webhook while the Teams channel failed to connect, as expected. After the
+  start it logged in again, and no `resolved` message followed the stop (still none about
+  three minutes later). The support bundle of sidecar 0.2.1 held no username and the account
+  id only shortened (`***` and three digits, four times, in window titles). The qualification
+  (`scripts/qualify-paper.sh`, run by hand outside CI; "login" is its `login_seconds`):
 
   | When (UTC) | Image | Result |
   |---|---|---|
@@ -56,16 +65,22 @@ Next step.
   shipped gateway and sidecar compose pair looped on fresh volumes (`dirs_not_writable`):
   the sidecar image's root-owned `/var/log/ibgateway` was copied onto the empty log volume
   (#30, `e079462`, sidecar 0.2.1). Two things were misleading without being defects: the
-  mirror's `ibgateway.*.log` name came from IB Gateway 10.x documentation, and a completed
-  login never wrote it (L03); the qualification's information check `root_filesystem_writes`
-  reports two paths "changed outside the mounts", which are Docker's mount point of the
-  secrets, not writes by the image (L02). Still open, both fixed in the pull request for
-  sidecar 0.2.2 (branch `fix/sidecar-resolved-and-skew`): no `resolved` message for
-  `gateway_stopped` after the restart, and the whole-second clock-skew reading.
+  mirror's `ibgateway.*.log` name came from IB Gateway 10.x documentation, and it was not
+  seen after a completed login (L03); the qualification's information check
+  `root_filesystem_writes` reports two paths "changed outside the mounts", which are Docker's
+  mount point of the secrets, not writes by the image (L02). One defect is still open: no
+  `resolved` followed the stop of the shipped stack (sidecar 0.2.1). The sidecar records the
+  result of the firing message only when every channel has finished; the message was queued
+  at 01:56:51.842 UTC for the webhook and Teams, the condition cleared at 01:56:54 (phase
+  `starting`), and the unreachable Teams channel gave up only at 01:57:00 after four
+  attempts, so the episode closed as if nobody had been told and no `resolved` was sent. In an
+  earlier session (sidecar 0.2.0, a stop of about 25 s) the `resolved` was delivered. The fix
+  is being prepared for sidecar 0.2.2 on the branch `fix/sidecar-resolved-and-skew`.
 - **Next step:** approve the waiting run 43789700905 of `qualify-paper.yml` for the published
-  stable digest (it has not run); merge sidecar 0.2.2; observe a daily restart, a
-  second-factor prompt, a weekly re-authentication and a competing session (L01, L09, L12);
-  decide what `tail-gateway-logs.sh` does about a name the Gateway does not write (L03).
+  stable digest (it has not run); review the sidecar 0.2.2 pull request from the branch
+  `fix/sidecar-resolved-and-skew` once it is opened; observe a daily restart, a second-factor
+  prompt, a weekly re-authentication and a competing session (L01, L09, L12); decide what
+  `tail-gateway-logs.sh` does about a name that was not seen (L03).
 
 ### 2026-11-16 — The sidecar no longer takes the gateway's log volume away from it
 

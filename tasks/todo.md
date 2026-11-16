@@ -67,7 +67,8 @@
 
 - [x] `sidecar/`: read-only API probe, `/livez` `/readyz` `/status` `/metrics`, notifier with an escalation ladder (seven channels), dead-man ping, own network namespace by default, ADR 0010
 - [x] Workflows: tests + image + smoke + end to end; publish from `main` only (both architectures tested and scanned before the push); weekly rescan
-- [ ] First runs of the three workflows; the first-publish path of `sidecar-publish.yml`
+- [x] First runs of the tests workflow and of `sidecar-publish.yml`, its first-publish path included (run 43183803821, 2026-11-12: pushed, signed, signature verified; four publish runs by 2026-11-16)
+- [ ] First run of `sidecar-rescan.yml` (weekly; it has never run)
 - [x] A paper login with the sidecar attached (L20; 2026-11-15/16 UTC, sidecar 0.2.0 and 0.2.1)
 - [ ] One real message per channel
 - [ ] A person checks the reset-window table against IBKR's system status page (L21)
@@ -123,7 +124,8 @@
 - [x] Publish sidecar 0.2.1 and watch the run through "Verify the signature" (a re-run cannot sign a tag that was already pushed): published, signed and verified by the publish workflow (2026-11-16)
 - [x] Start the shipped stack (reference compose plus sidecar override) with a real paper login once 0.2.1 is published: logged in on fresh volumes, no `dirs_not_writable`, no false alert (2026-11-16)
 - [ ] Decide L33: should a failed preflight keep the container up in a phase of its own instead of exiting into a restart loop?
-- [ ] Approve the waiting run 43789700905 of `qualify-paper.yml` (the published stable digest `7773ff7`; it needs the secrets `PAPER_USERID` and `PAPER_PASSWORD` of the environment `paper-qualification` set) and record its result (L04, L16)
-- [ ] Merge the sidecar 0.2.2 pull request (branch `fix/sidecar-resolved-and-skew`: the `resolved` message for `gateway_stopped` after a restart, the whole-second clock-skew reading)
+- [ ] Approve the waiting run 43789700905 of `qualify-paper.yml` (the published stable digest `7773ff7`; the secrets `PAPER_USERID` and `PAPER_PASSWORD` of the environment `paper-qualification` were set on 2026-11-16 at 02:01 UTC) and record its result (L04, L16)
+- [ ] Review the sidecar 0.2.2 pull request from the branch `fix/sidecar-resolved-and-skew` when it is opened: no `resolved` followed a short stop of the gateway while a second channel (Teams) was unreachable, because the firing message's result is recorded only when every channel has finished
+- [ ] `sidecar/README.md` (about lines 543 to 549) still says "Not verified against a logged-in gateway"; correct it in the sidecar 0.2.2 pull request, which changes that file (L20 has what was seen)
 - [ ] Observe with a real paper login: a daily restart, a second-factor prompt and a competing session (L01, L02, L09, L12)
-- [ ] Decide what `tail-gateway-logs.sh` should do about `ibgateway.*.log`, a name the Gateway did not write (L03)
+- [ ] Decide what `tail-gateway-logs.sh` should do about `ibgateway.*.log`, a name that was not seen (L03), and correct its header (lines 4 to 7, which call the name unverified documentation) with that decision: a change under `rootfs/` rebuilds the image
