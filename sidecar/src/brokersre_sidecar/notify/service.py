@@ -299,8 +299,9 @@ class Notifier:
         anyway: this is the last chance. A write still running (the stop cancelled the
         evaluation that awaited it) is waited for first, else this one would be skipped.
         Each wait is bounded by ``save_timeout_s``; if that write has still not returned,
-        the final save is skipped and the log says so (the next start then sends again or
-        resolves what the file shows in flight).
+        the final save is skipped, and if the final save fails or overruns, the state is
+        not written: either way ``notifier_state_unsaved`` says so (the next start then
+        sends again or resolves what the file shows in flight).
         """
         if not (self._ladder.dirty or self._unsaved):
             return
@@ -317,6 +318,15 @@ class Notifier:
             return
         self._save_retry_at = None
         await self._save()
+        if self._unsaved:
+            # `_save_failed` logs a reason only when it differs from the last one; at the
+            # stop the operator must learn it either way, because nothing writes later.
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "notifier_state_unsaved",
+                f"the state could not be written at stop: {self._persistence_reason}",
+            )
 
     def close(self) -> None:
         """Let the state thread end (called when the sidecar stops)."""

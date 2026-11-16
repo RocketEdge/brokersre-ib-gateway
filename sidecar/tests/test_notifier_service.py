@@ -874,6 +874,31 @@ async def test_a_final_save_behind_a_write_that_never_returns_is_bounded_and_log
         store.release.set()
 
 
+class FullDiskStore(NotifierStore):
+    """A store on a full disk: every save fails the same way."""
+
+    def save(self, state: object) -> None:
+        raise OSError(28, "No space left on device")
+
+
+async def test_a_final_save_that_fails_like_the_one_before_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Review of round 5 of #32 (suggestion 1): the final save failed with the error already
+    # reported, so `_save_failed` stayed silent and the stop logged nothing, although the
+    # documents say `notifier_state_unsaved` tells when the state cannot be written at stop.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    world = world_with(tmp_path, FullDiskStore(tmp_path / "notifier-state.json"))
+    world.gateway = {"phase": "stopped"}
+    await world.tick()  # the write fails: notifier_state_memory once
+    for name in world.dispatcher.channel_names():
+        await world.dispatcher.deliver_pending(name)
+    await world.notifier.save_on_stop()
+    assert levels(caplog, "notifier_state_memory") == ["WARNING"]
+    assert levels(caplog, "notifier_state_unsaved") == ["WARNING"]
+    assert "No space" not in str(events(caplog, "notifier_state_unsaved"))
+
+
 async def test_the_error_of_a_write_the_stop_interrupted_is_collected(tmp_path: Path) -> None:
     # Second review of #32 (S2): asyncio reported "Future exception was never retrieved".
     store = FailingOnceStore(tmp_path / "notifier-state.json")
