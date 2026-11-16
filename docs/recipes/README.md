@@ -55,6 +55,8 @@ From the repository folder, next to a gateway started from `compose/docker-compo
 2. Write the secrets as files, in a folder of the shipper's own. The shipper must not see
    the gateway's IBKR credentials, so not `compose/secrets` itself:
 
+   <!-- tested by tests/bats/ci/doc-commands.bats -->
+
    ```bash
    mkdir -p compose/secrets/vector
    read -r -s -p 'Loki password: ' p && printf '%s' "$p" > compose/secrets/vector/loki_password && echo

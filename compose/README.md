@@ -78,6 +78,8 @@ foreach ($instance in 'live', 'paper') {
 
 Linux, macOS, WSL or Git Bash:
 
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
 ```bash
 for instance in live paper; do
   mkdir -p "compose/secrets/${instance}"

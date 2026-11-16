@@ -87,6 +87,8 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 Linux, macOS, WSL or Git Bash:
 
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
 ```bash
 mkdir -p compose/secrets
 read -r -p 'IBKR username: ' u && printf '%s' "$u" > compose/secrets/ib-username

@@ -53,6 +53,8 @@ The VNC protocol uses the first eight characters of a password, so make those ei
 
 Linux, macOS, WSL or Git Bash:
 
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
 ```bash
 read -r -s -p 'VNC password: ' p && printf '%s' "$p" > compose/secrets/vnc-password && echo
 unset p
