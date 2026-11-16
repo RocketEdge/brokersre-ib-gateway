@@ -124,7 +124,7 @@ class Notifier:
             if due.kind is MessageKind.HEARTBEAT:
                 detail = _not_measured(gateway, probe)
             elif due.cleared_at is not None:
-                detail = _late_resolution(due.cleared_at, due.active_again_since)
+                detail = _late_resolution(due, due.cleared_at)
             else:
                 detail = due.detail
             # A late resolution shows the gateway as it was when the condition cleared:
@@ -290,18 +290,30 @@ def _by_class(item: tuple[AlertClass, datetime]) -> tuple[str, datetime]:
     return item[0].value, item[1]
 
 
-def _late_resolution(cleared_at: datetime, active_again_since: datetime | None) -> str:
-    """Say when a late resolution's condition cleared, and whether it is back.
+def _late_resolution(due: Outbound, cleared_at: datetime) -> str:
+    """Say when a late resolution's condition cleared, why it is late, and whether it is back.
 
-    Fixed words and timestamps only (the message text rules). A late resolution goes out
-    once the announcement's delivery is known, which can be after the condition returned.
+    Fixed words and timestamps only (the message text rules). Every clause must be true of
+    this resolution: the phase and API status shown are the clearing's only when they were
+    kept (``due.moment``), else the current ones, and it is late either because the
+    delivery result of an earlier message (announcement or escalation) came back after the
+    clearing, or because a restart of the sidecar lost that result.
+
+    Args:
+        due: The late ``RESOLVED``.
+        cleared_at: When its condition cleared (``due.cleared_at``, not None).
     """
-    detail = (
-        f"cleared at {format_utc(cleared_at)} (phase and API status as at that time); "
-        "sent once the announcement's delivery was known"
-    )
-    if active_again_since is not None:
-        detail += f"; active again since {format_utc(active_again_since)}"
+    facts = "as at that time" if due.moment is not None else "as at sending"
+    detail = f"cleared at {format_utc(cleared_at)} (phase and API status {facts}); "
+    if due.result_lost:
+        detail += (
+            "sent after a restart of the sidecar, which lost the delivery result of an "
+            "earlier message about it"
+        )
+    else:
+        detail += "sent once the delivery result of an earlier message about it was known"
+    if due.active_again_since is not None:
+        detail += f"; active again since {format_utc(due.active_again_since)}"
     return detail
 
 

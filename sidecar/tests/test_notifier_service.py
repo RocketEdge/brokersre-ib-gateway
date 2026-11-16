@@ -539,10 +539,65 @@ async def test_a_late_resolution_tells_its_own_facts_and_the_new_episode_follows
     assert resolved.api_status == "ready"
     assert resolved.detail == (
         "cleared at 2026-11-12T15:00:03.000Z (phase and API status as at that time); "
-        "sent once the announcement's delivery was known; "
+        "sent once the delivery result of an earlier message about it was known; "
         "active again since 2026-11-12T15:00:05.000Z"
     )
     assert [a.alert_class for a in world.notifier.snapshot().active_alerts] == ["gateway_stopped"]
+
+
+async def test_a_resolution_owed_after_a_restart_says_the_result_was_lost(
+    tmp_path: Path,
+) -> None:
+    # Second review of #32 (B4): the text said "sent once the announcement's delivery was
+    # known", but after a restart that result was lost, not known.
+    before = World(tmp_path)
+    before.notifier.load_state()
+    before.gateway = {"phase": "stopped"}
+    await before.notifier.tick()  # queued and saved as in flight; never delivered
+    before.gateway = {"phase": "logged-in"}
+    before.clock.advance(3)
+    await before.notifier.tick()  # cleared while in flight: saved as closing
+    after = World(tmp_path, before.clock)
+    after.notifier.load_state()
+    await after.tick(5)
+    (resolved,) = after.teams.sent
+    assert (resolved.kind, resolved.phase) == ("resolved", "logged-in")
+    assert resolved.detail == (
+        "cleared at 2026-11-12T15:00:03.000Z (phase and API status as at that time); "
+        "sent after a restart of the sidecar, which lost the delivery result of an "
+        "earlier message about it"
+    )
+
+
+async def test_a_late_resolution_without_its_saved_facts_does_not_claim_them(
+    tmp_path: Path,
+) -> None:
+    # Second review of #32 (B5): a malformed saved moment showed the current facts under
+    # the label "as at that time".
+    state = {
+        "schema": "brokersre.sidecar.notifier-state.v3",
+        "classes": {
+            "gateway_stopped": {
+                "active": False,
+                "closing": [
+                    {
+                        "since": "2026-11-12T14:59:00.000Z",
+                        "waiting": [0],
+                        "cleared_at": "2026-11-12T14:59:30.000Z",
+                        "moment": {"phase": 7, "api_status": "ready"},
+                    }
+                ],
+            }
+        },
+    }
+    (tmp_path / "notifier-state.json").write_text(json.dumps(state), encoding="utf-8")
+    world = World(tmp_path)
+    world.notifier.load_state()
+    await world.tick()
+    (resolved,) = world.teams.sent
+    assert resolved.detail.startswith(
+        "cleared at 2026-11-12T14:59:30.000Z (phase and API status as at sending); "
+    )
 
 
 def events(caplog: pytest.LogCaptureFixture, name: str) -> list[dict[str, object]]:

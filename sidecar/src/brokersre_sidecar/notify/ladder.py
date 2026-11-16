@@ -125,6 +125,9 @@ class Outbound:
             the next episode). None when not known (immediate, or not given to ``step``).
         active_again_since: For a late ``RESOLVED``: the start of the episode of the same
             class that is active when it is sent, if any.
+        result_lost: For a late ``RESOLVED``: it is sent because a restart of the sidecar
+            lost the delivery result of a message about the episode (possibly received),
+            not because a result came back.
     """
 
     kind: MessageKind
@@ -138,6 +141,7 @@ class Outbound:
     cleared_at: datetime | None = None
     moment: Moment | None = None
     active_again_since: datetime | None = None
+    result_lost: bool = False
 
 
 @dataclass(slots=True)
@@ -181,6 +185,9 @@ class _Closing:
         announced_late: Its announcement was accepted after the clearing, which restarted
             the de-duplication window then; only that lets the episode active when the
             resolution goes out through the hold (``_exempt``).
+        result_lost: Loaded from a file in which it still waited: the result went with the
+            stopped process, and the resolution is owed because the message may have been
+            received (not saved; it is decided again at every load).
     """
 
     since: datetime
@@ -191,6 +198,7 @@ class _Closing:
     cleared_at: datetime | None = None
     moment: Moment | None = None
     announced_late: bool = False
+    result_lost: bool = False
 
 
 @dataclass(slots=True)
@@ -549,6 +557,7 @@ class LadderEngine:
                 closing.superseded_by,
                 cleared_at=closing.cleared_at,
                 moment=closing.moment,
+                result_lost=closing.result_lost,
             )
             for closing in heard
         ]
@@ -563,10 +572,11 @@ class LadderEngine:
         *,
         cleared_at: datetime | None = None,
         moment: Moment | None = None,
+        result_lost: bool = False,
     ) -> Outbound:
         """Build the ``RESOLVED`` for one episode: primary channels, escalation ones if told.
 
-        ``cleared_at`` and ``moment`` are given for a late resolution only.
+        ``cleared_at``, ``moment`` and ``result_lost`` are given for a late resolution only.
         """
         channels = list(self._config.primary_channels)
         if escalated:
@@ -579,6 +589,7 @@ class LadderEngine:
             superseded_by=superseded_by,
             cleared_at=cleared_at,
             moment=moment,
+            result_lost=result_lost,
         )
 
     def _heartbeat_due(self, now: datetime) -> bool:
@@ -787,6 +798,7 @@ def _load_closing(raw: object) -> list[_Closing]:
             cleared_at=parse_utc(entry.get("cleared_at")),
             moment=_load_moment(entry.get("moment")),
             announced_late=entry.get("announced_late") is True,
+            result_lost=bool(lost),
         )
         if closing.heard:
             loaded.append(closing)
