@@ -1,7 +1,8 @@
 # Passkeys and this image: what is established and what is not
 
-State of **2026-11-12**. Every statement about IBKR on this page is a quotation from a page
-that IBKR publishes, fetched on that day, or it carries the words "not established". Nothing
+State of **2026-11-12** (row 8 amended 2026-11-17). Every statement about IBKR on this page
+is a quotation from a page that IBKR publishes, fetched on that day (for [S10]: 2026-11-17),
+or it carries the words "not established". Nothing
 here was tested: no test of this repository logs in to IBKR, and no login of this image has
 been made with a passkey.
 
@@ -28,7 +29,7 @@ is. That does not depend on anything below.
 | 5 | A user can hold several second factors and picks one at login | "Multiple Two-Factor allows any client to maintain more than one active security device at the same time." A user can "activate up to 3 Passkeys for the same user." | [S4], [S5] |
 | 6 | The second factors IBKR lists for logins "using our API systems" do not include passkeys, on either list | "Supported 2FA Methods": "IB Key", "Handy Key (Smart Phone applications)", "SMS / Text Messages", "Digital Security Card+ (DSC+)". "Unsupported 2FA Methods": "Security Code Card (Sometimes referred to as Bingo Card)", "Temporary Security Code Card", "Online Code Card". | [S6] |
 | 7 | The login of TWS and IB Gateway is made by a person | "With either application (TWS or IBGW), the user must manually enter their username and password into a login window. For security reasons, a headless session of TWS or IBGW without a GUI is not supported." | [S7] |
-| 8 | About once a week the login has to be made again | "The weekly authentication cycle starts on every Monday." | [S8] |
+| 8 | About once a week the login has to be made again | "This procedure will require manual authentication once a week" and "This security process occurs each Sunday at 1:00 am ET." Another IBKR page names another day: "The weekly authentication cycle starts on every Monday." [S8] | [S10], "Last updated on October 8, 2025" |
 
 Rows 3 and 4 are the centre of this page: IBKR names TWS, with a minimum version, and does
 not name IB Gateway.
@@ -108,7 +109,7 @@ Until one of these exists, treat "IB Gateway with a passkey" as unknown, in both
 
 ## Sources
 
-All fetched on 2026-11-12.
+All fetched on 2026-11-12, except [S10] (2026-11-17).
 
 - [S1] IBKR Guides, "Authentication Using Passkey":
   <https://www.ibkrguides.com/securelogin/sls/authentication-using-passkey.htm>
@@ -128,6 +129,8 @@ All fetched on 2026-11-12.
   <https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication>
 - [S9] IBKR Guides, IBKR Desktop release notes, version 3.4 ("Users can now authenticate with
   passkeys in IBKR Desktop."): <https://www.ibkrguides.com/releasenotes/ntws-v3.4.htm>
+- [S10] IBKR Guides, Trader Workstation, "Auto Restart Considerations":
+  <https://www.ibkrguides.com/traderworkstation/auto-restart-considerations.htm>
 - TWS release notes: `https://www.ibkrguides.com/releasenotes/version-10.44.htm` and the same
   address for 10.45, 10.46, 10.48, 10.49, 10.50 and 10.51.
 - The Client Portal Gateway reply: comment thread of the IBKR Campus lesson "Launching and

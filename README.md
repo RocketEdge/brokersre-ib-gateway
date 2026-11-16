@@ -193,13 +193,17 @@ Paper first. Before the same setup holds a live session, check each line:
 ## The weekly login
 
 IBKR asks for a full login with the second factor about once a week; the daily restart in
-between does not ask again. IBKR's own page puts it as "the weekly authentication cycle
-starts on every Monday"
-([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication));
-IBC's user guide says authentication is required "the first time during the week that TWS or
-Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
-prompt, and no setting of this image changes that: the image never answers, types or bypasses
-a second factor.
+between does not ask again. IBKR's guide to the automatic restart says: "This procedure will
+require manual authentication once a week" and "This security process occurs each Sunday at
+1:00 am ET"
+([Auto Restart Considerations](https://www.ibkrguides.com/traderworkstation/auto-restart-considerations.htm),
+read on 2026-11-17). The sources do not name the same day: IBKR's page for third-party
+integrations says "the weekly authentication cycle starts on every Monday"
+([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication)),
+and IBC's user guide says authentication is required "the first time during the week that
+TWS or Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
+prompt. The image behaves the same whichever day it comes, and no setting of this image
+changes that: the image never answers, types or bypasses a second factor.
 
 What happens: the phase becomes `2fa-pending` and the event `twofa_initiated` appears, with
 `twofa_dialog` only where the Gateway opens a separate dialog (according to IBC's source,
