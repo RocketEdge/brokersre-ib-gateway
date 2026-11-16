@@ -336,7 +336,8 @@ to do, what not to do and when it clears. With
 
 every notification links the page of its class (the compose override sets this). Copy the
 folder to your own wiki and point the variable there to add your contacts; the sidecar only
-appends `/<alert class>` to the base.
+appends `/<alert class>` to the base, and a test message links the base itself (give your
+copy an index page there).
 
 For a stalled login, low disk space and memory pressure the gateway is the single source of
 truth: it reports each as a pair of events (`login_stalled`/`login_resumed`,

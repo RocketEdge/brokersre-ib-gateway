@@ -11,7 +11,8 @@ to do, and when it clears. Set
 in the sidecar's environment and every notification carries the address of its page
 (`runbook: <base>/<alert class>`). To keep the pages in step with the version you run, or to
 add your own names and telephone numbers, copy this folder to your own wiki and point the
-variable there: the sidecar only appends `/<alert class>` to the base.
+variable there: the sidecar only appends `/<alert class>` to the base, and a test message
+(`notify test`) links the base itself, so give your copy an index page there.
 
 ## Table of contents
 
