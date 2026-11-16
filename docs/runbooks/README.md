@@ -36,16 +36,18 @@ variable there: the sidecar only appends `/<alert class>` to the base.
 
 `docker compose ...` stands for your compose command with its files; for the reference setup
 that is `docker compose -f compose/docker-compose.example.yml -f compose/docker-compose.sidecar.yml`.
-The gateway's service is `ib-gateway`, the sidecar's is `sidecar`.
+The gateway's service is `ib-gateway`, the sidecar's is `sidecar`. A path inside the container
+is written with two leading slashes (`//var/log/...`): Git Bash on Windows rewrites a single
+leading `/` into a Windows path, and Linux reads both the same.
 
 | To see | Command |
 |---|---|
-| The gateway's phase | `docker compose ... exec ib-gateway cat /var/log/ibgateway/state/phase` |
+| The gateway's phase | `docker compose ... exec ib-gateway cat //var/log/ibgateway/state/phase` |
 | The gateway's recent events | `docker compose ... logs --since 30m ib-gateway` |
 | Whether the containers run | `docker compose ... ps` |
 | The sidecar's status document | `docker compose ... exec sidecar brokersre-sidecar status`, or `GET http://127.0.0.1:9810/status` on the host |
 | Every preflight check | `docker compose ... run --rm ib-gateway doctor` (starts no login) |
-| The raw IBC log | `docker compose ... exec ib-gateway tail -n 50 /var/log/ibgateway/ibc/ibc.log` |
+| The raw IBC log | `docker compose ... exec ib-gateway tail -n 50 //var/log/ibgateway/ibc/ibc.log` |
 
 The raw IBC log and a screenshot can show the username. Read them on the host; do not paste
 them into a chat, a ticket or an issue. Events, metrics and the status document never

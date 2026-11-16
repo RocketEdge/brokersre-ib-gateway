@@ -20,7 +20,10 @@ pins) and syft 1.54.0 from their container images, GitHub CLI 2.81.0, jq 1.8.1 (
 ships jq: `docker run --rm -i --entrypoint jq <image>`). Trivy ran with the vulnerability
 database of 2026-11-12 already downloaded, so its commands also carried
 `--skip-db-update --skip-java-db-update --scanners vuln`. In the commands, `IMAGE` is the
-image by digest and `C` is the container name:
+image by digest and `C` is the container name. In Git Bash on Windows run
+`export MSYS_NO_PATHCONV=1` first: Git Bash rewrites an argument that starts with `/`, such
+as a path inside the container, into a Windows path (`C:/Program Files/Git/...`), and the
+command fails (checked 2026-11-17 with `docker exec`, and with `docker run -v` and `-e`):
 
 ```bash
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest from digests-<channel>.json>

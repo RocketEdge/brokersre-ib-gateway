@@ -21,7 +21,7 @@ before you conclude anything from the title.
 
 - The phase. `logged-in` means the window did not block anything.
 - The title (on the host only, the log can show the username):
-  `docker compose ... exec ib-gateway grep -a entitled /var/log/ibgateway/ibc/ibc.log`,
+  `docker compose ... exec ib-gateway grep -a entitled //var/log/ibgateway/ibc/ibc.log`,
   last lines.
 - A picture of the screen, when the gateway runs with `SCREENSHOTS=yes`: the event
   `screenshot_saved` names a file under `screens/` on the log volume (XWD format; GIMP and

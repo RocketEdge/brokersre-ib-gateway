@@ -14,7 +14,7 @@ sidecar does not look.
 
 - Does the container run, is it paused: `docker compose ... ps`.
 - Does the gateway still write samples (look at the time `ts` of the last one):
-  `docker compose ... exec ib-gateway tail -n 1 /var/log/ibgateway/metrics/metrics.jsonl`.
+  `docker compose ... exec ib-gateway tail -n 1 //var/log/ibgateway/metrics/metrics.jsonl`.
 - Do both containers use the same volume:
   `docker inspect --format '{{json .Mounts}}' <gateway container>` and the same for the
   sidecar.

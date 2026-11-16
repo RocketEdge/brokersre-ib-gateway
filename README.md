@@ -119,13 +119,18 @@ The image never answers a second factor for you. Stop following the log with Ctr
 ### 3. Check that it is logged in
 
 ```bash
-docker compose -f compose/docker-compose.example.yml exec ib-gateway cat /var/log/ibgateway/state/phase
+docker compose -f compose/docker-compose.example.yml exec ib-gateway cat //var/log/ibgateway/state/phase
 docker compose -f compose/docker-compose.example.yml ps
 ```
 
 You should see `logged-in`, and `(healthy)` in the status column. The API is then reachable on
 `127.0.0.1:4002` (paper) or `127.0.0.1:4001` (live). While the phase is `login` or
 `2fa-pending` the container reports `unhealthy` on purpose.
+
+The two slashes in `//var/log/...` are on purpose: Git Bash on Windows rewrites an argument
+that starts with a single `/` into a Windows path (`C:/Program Files/Git/var/...`) and the
+command fails, while Linux reads `//var` as `/var`. The line works unchanged in bash, zsh,
+Git Bash and PowerShell.
 
 ### 4. If it does not log in
 

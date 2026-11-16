@@ -14,7 +14,7 @@ instead, this alert closes, and [needs_human](../needs_human/README.md) carries 
 - The phase, and how many `login_failed` events there are:
   `docker compose ... logs --since 30m ib-gateway`.
 - The lines around the failure in the raw IBC log (on the host only, it can show the
-  username): `docker compose ... exec ib-gateway tail -n 50 /var/log/ibgateway/ibc/ibc.log`.
+  username): `docker compose ... exec ib-gateway tail -n 50 //var/log/ibgateway/ibc/ibc.log`.
 
 ## What to do
 
