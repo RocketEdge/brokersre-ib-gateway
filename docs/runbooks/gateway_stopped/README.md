@@ -5,7 +5,7 @@ Alert class `gateway_stopped` · default severity info · [all runbooks](../READ
 ## What it means
 
 The gateway's phase is `stopping` or `stopped`: something asked the container to shut down
-(`docker compose stop` or `down`, a host shutdown, a deployment) and the gateway logged
+(`docker compose ... stop` or `down`, a host shutdown, a deployment) and the gateway logged
 `shutdown_requested`. It stays down until someone starts it. The message is information, not
 an alarm: the dead-man ping continues while only this alert is active.
 

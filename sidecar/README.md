@@ -72,6 +72,10 @@ docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml up -d
 curl -s http://127.0.0.1:9810/status
 ```
 
+In the rest of this README, `docker compose ...` stands for your compose command with its
+files; for the quick start (in `compose/`) that is
+`docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml`.
+
 The essential part of [`compose/docker-compose.sidecar.yml`](../compose/docker-compose.sidecar.yml):
 
 ```yaml
@@ -123,8 +127,9 @@ Check a configuration and test the channels without starting the gateway (`--no-
 without it compose starts the gateway first, which logs in):
 
 ```bash
-docker compose run --rm --no-deps sidecar check-config
-docker compose run --rm --no-deps sidecar notify test
+cd compose
+docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar check-config
+docker compose -f docker-compose.example.yml -f docker-compose.sidecar.yml run --rm --no-deps sidecar notify test
 ```
 
 With the shared network namespace (`docker-compose.sidecar-shared.yml`) the sidecar has no

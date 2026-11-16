@@ -498,6 +498,45 @@ def test_the_runbook_index_lists_every_class_and_carries_the_trademark_sentence(
     assert index.rstrip().endswith(TRADEMARK)
 
 
+# `docker compose` not followed by `-f <file>` or by the placeholder `...`. The repository has
+# no compose file of a default name (`compose.yaml`, `docker-compose.yml`), so such a command
+# copied from these documents stops with "no configuration file provided" (seen 2026-11-16
+# with the sidecar README's `docker compose run --rm --no-deps sidecar check-config`).
+_COMPOSE_WITHOUT_FILES = re.compile(r"docker compose(?!\s+(?:-f\s|\.\.\.))")
+_COMPOSE_PLACEHOLDER = "`docker compose ...` stands for your compose command with its files"
+
+
+def _compose_documents() -> list[Path]:
+    """Return the sidecar README and every runbook page: the documents a person copies from."""
+    runbooks = sorted(RUNBOOKS.rglob("*.md")) if RUNBOOKS.is_dir() else []
+    return [SIDECAR_ROOT / "README.md", *runbooks]
+
+
+@pytest.mark.parametrize(
+    "document",
+    _compose_documents(),
+    ids=[path.relative_to(REPOSITORY_ROOT).as_posix() for path in _compose_documents()],
+)
+def test_every_compose_command_names_its_files_or_the_placeholder(document: Path) -> None:
+    text = document.read_text(encoding="utf-8")
+    bare = [
+        f"line {number}: {line.strip()}"
+        for number, line in enumerate(text.splitlines(), start=1)
+        if _COMPOSE_WITHOUT_FILES.search(line)
+    ]
+    assert bare == [], f"{document.name}: compose commands without their files: {bare}"
+
+
+def test_every_document_that_uses_the_compose_placeholder_says_what_it_stands_for() -> None:
+    # The runbook pages share the index's definition; the README is read on its own. Blanks
+    # and line breaks are folded, so a rewrapped paragraph still counts.
+    index = " ".join((RUNBOOKS / "README.md").read_text(encoding="utf-8").split())
+    readme = " ".join(README.split())
+    assert _COMPOSE_PLACEHOLDER in index
+    assert "docker compose ..." in readme
+    assert _COMPOSE_PLACEHOLDER in readme
+
+
 def test_the_readme_and_the_compose_file_name_the_runbook_base_of_this_repository() -> None:
     compose = (REPOSITORY_ROOT / "compose" / "docker-compose.sidecar.yml").read_text(
         encoding="utf-8"
