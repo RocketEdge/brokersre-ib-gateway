@@ -580,7 +580,9 @@ def _runbook_links_of_messages() -> list[tuple[str, str | None]]:
     _runbook_links_of_messages(),
     ids=[source for source, _ in _runbook_links_of_messages()],
 )
-def test_every_runbook_link_a_message_carries_leads_to_a_page(source: str, link: str | None) -> None:
+def test_every_runbook_link_a_message_carries_leads_to_a_page(
+    source: str, link: str | None
+) -> None:
     # A person taps the link in the notification. `notify test` is the first message most
     # people see, and its link led to docs/runbooks/test, which does not exist (GitHub 404,
     # seen 2026-11-17 with sidecar 0.2.1 and a local ntfy server).
