@@ -146,7 +146,9 @@ class Notifier:
             stopping = True
             raise
         finally:
-            if due_now and self._unsaved and self._store is not None and self._can_save:
+            # Only ``_save`` sets ``_unsaved``, and only with a writable state file: memory
+            # mode (reported once at the start) never logs here.
+            if due_now and self._unsaved:
                 self._log_queued_unsaved(len(due_now), stopping=stopping)
             self._queue(due_now, gateway, probe, current, now)
 
