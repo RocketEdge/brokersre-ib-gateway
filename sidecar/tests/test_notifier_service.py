@@ -888,6 +888,122 @@ async def test_the_error_of_a_write_the_stop_interrupted_is_collected(tmp_path: 
     assert notice["delivered"] is True  # the flush's acceptance reached the file
 
 
+class KilledMidWrite(NotifierStore):
+    """A store whose write stalls (an fsync in progress) and dies with the process if killed."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.slow = False
+        self.killed = False
+        self.release = threading.Event()
+
+    def save(self, state: object) -> None:
+        if self.slow:
+            self.release.wait(10)
+            if self.killed:
+                return  # the process died before the rename: the old file stays
+        super().save(state)
+
+
+async def test_no_announcement_goes_out_before_its_in_flight_mark_is_written(
+    tmp_path: Path,
+) -> None:
+    # Third review of #32 (P1): the evaluation queued the announcement and then saved; a
+    # fast channel accepted it while the write was still on the state thread, a hard kill
+    # left the old file, and the person who got "firing" never got "resolved".
+    store = KilledMidWrite(tmp_path / "notifier-state.json")
+    before = world_with(tmp_path, store)
+    worker = asyncio.ensure_future(before.dispatcher.run_channel("teams"))
+    store.slow = True
+    before.gateway = {"phase": "stopped"}
+    tick = asyncio.ensure_future(before.notifier.tick())
+    try:
+        await asyncio.sleep(0.2)  # the write is still on the state thread
+        assert before.teams.sent == []  # nothing goes out ahead of its mark
+    finally:
+        store.killed = True  # hard kill: the write never lands
+        store.release.set()
+        tick.cancel()
+        worker.cancel()
+        await asyncio.gather(tick, worker, return_exceptions=True)
+    assert before.teams.sent == []
+    after = World(tmp_path, before.clock)  # nothing on disk, and nobody was told: none owed
+    after.notifier.load_state()
+    after.gateway = {"phase": "logged-in"}
+    await after.tick(5)
+    assert after.teams.sent == []
+
+
+async def test_an_announcement_goes_out_once_its_in_flight_mark_is_written(
+    tmp_path: Path,
+) -> None:
+    store = StuckStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store)
+    worker = asyncio.ensure_future(world.dispatcher.run_channel("teams"))
+    store.block = True
+    world.gateway = {"phase": "stopped"}
+    tick = asyncio.ensure_future(world.notifier.tick())
+    try:
+        await asyncio.sleep(0.2)
+        assert world.teams.sent == []
+        store.release.set()
+        await tick
+        await until(lambda: bool(world.teams.sent))
+    finally:
+        store.release.set()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    assert [(m.alert_class, m.kind) for m in world.teams.sent] == [("gateway_stopped", "firing")]
+    notice = saved_state(tmp_path)["classes"]["gateway_stopped"]["notices"]["0"]
+    assert notice["in_flight"] is True  # what a hard kill from now on leaves: it gets resolved
+
+
+async def test_an_escalation_goes_out_only_once_its_in_flight_mark_is_written(
+    tmp_path: Path,
+) -> None:
+    store = StuckStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store)
+    world.gateway = {"phase": "2fa-pending"}
+    await world.tick()  # announced and accepted
+    await world.tick(1)  # its result saved
+    worker = asyncio.ensure_future(world.dispatcher.run_channel("pagerduty"))
+    store.block = True
+    world.clock.advance(600)
+    tick = asyncio.ensure_future(world.notifier.tick())
+    try:
+        await asyncio.sleep(0.2)
+        assert world.pager.sent == []
+        store.release.set()
+        await tick
+        await until(lambda: bool(world.pager.sent))
+    finally:
+        store.release.set()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    assert [(m.kind, m.escalation_step) for m in world.pager.sent] == [("escalation", 1)]
+    notice = saved_state(tmp_path)["classes"]["twofa_pending"]["notices"]["1"]
+    assert notice["in_flight"] is True
+
+
+async def test_messages_go_out_after_the_save_timeout_when_the_state_cannot_be_written(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The wait for the write is bounded: an alert is delayed by at most the save timeout.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    store = StuckStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store, save_timeout_s=0.2)
+    store.block = True
+    world.gateway = {"phase": "stopped"}
+    try:
+        await world.tick()
+        assert [(m.alert_class, m.kind) for m in world.teams.sent] == [
+            ("gateway_stopped", "firing")
+        ]
+        assert len(events(caplog, "notify_queued_unsaved")) == 1
+    finally:
+        store.release.set()
+
+
 async def test_the_final_save_is_tried_even_right_after_a_failed_one(tmp_path: Path) -> None:
     # Second review of #32 (R11): within 30 s of a failed save no save is started, except
     # the one at the stop.

@@ -111,7 +111,18 @@ class Notifier:
             log_event(_LOGGER, logging.WARNING, "notifier_state_memory", self._persistence_reason)
 
     async def tick(self) -> None:
-        """Evaluate once: queue due notifications and persist a changed state."""
+        """Evaluate once: persist a changed state, then queue the due notifications.
+
+        The order matters. A channel may accept a message the moment it is queued, and
+        after a hard kill only a message the state file shows in flight gets its
+        resolution; so the step's state (with its in-flight marks) is written first and the
+        messages are queued after the write returned. The wait is bounded by
+        ``save_timeout_s``: a write that fails or does not return in time delays nothing
+        further, the messages are queued anyway, and ``notify_queued_unsaved`` says so.
+        When the sidecar stops during the wait (the evaluation is cancelled), the messages
+        are still queued, so the flush at the stop delivers them and the save after it
+        records the outcomes.
+        """
         if not self._ready():
             return
         now = self._clock.now()
@@ -123,7 +134,41 @@ class Notifier:
         # Results that came back since the last tick decided waits: say so before the
         # "resolved" they owe is queued; waits that begin in this step are logged after it.
         self._log_waiting()
-        for due in self._ladder.step(evaluations, now, can_see=can_see, moment=current):
+        due_now = self._ladder.step(evaluations, now, can_see=can_see, moment=current)
+        self._log_waiting()
+        try:
+            if self._ladder.dirty or self._unsaved:
+                await self._save()
+        finally:
+            if due_now and self._unsaved and self._store is not None and self._can_save:
+                log_event(
+                    _LOGGER,
+                    logging.WARNING,
+                    "notify_queued_unsaved",
+                    "queued although the state with these messages could not be written "
+                    "first: after a hard kill now they would count as never sent",
+                    count=len(due_now),
+                )
+            self._queue(due_now, gateway, probe, current, now)
+
+    def _queue(
+        self,
+        due_now: list[Outbound],
+        gateway: GatewaySnapshot,
+        probe: ProbeSnapshot,
+        current: Moment,
+        now: datetime,
+    ) -> None:
+        """Render the due notifications and hand them to the dispatcher (never blocks).
+
+        Args:
+            due_now: What the ladder's step returned.
+            gateway: The gateway snapshot of this evaluation.
+            probe: The probe snapshot of this evaluation.
+            current: Phase and API status of this evaluation.
+            now: Time of this evaluation (UTC).
+        """
+        for due in due_now:
             if due.kind is MessageKind.HEARTBEAT:
                 detail = _not_measured(gateway, probe)
             elif due.cleared_at is not None:
@@ -158,9 +203,6 @@ class Notifier:
                 channels=list(due.channels),
                 attempt=due.attempt,
             )
-        self._log_waiting()
-        if self._ladder.dirty or self._unsaved:
-            await self._save()
 
     def _log_waiting(self) -> None:
         """Log when a cleared alert starts and stops waiting for a message's result.
