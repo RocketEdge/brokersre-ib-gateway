@@ -120,10 +120,10 @@ class Notifier:
         resolution; so the step's state (with its in-flight marks) is written first and the
         messages are queued after the write returned. The wait is bounded by
         ``save_timeout_s``: a write that fails or does not return in time delays nothing
-        further, the messages are queued anyway, and ``notify_queued_unsaved`` says so.
-        When the sidecar stops during the wait (the evaluation is cancelled), the messages
-        are still queued, so the flush at the stop delivers them and the save after it
-        records the outcomes.
+        further, the messages are queued anyway, and ``notify_queued_unsaved`` (a warning)
+        says so. When the sidecar stops during the wait (the evaluation is cancelled), the
+        messages are still queued, so the flush at the stop delivers them and the save
+        after it records the outcomes; ``notify_queued_at_stop`` (information) says so.
         """
         if not self._ready():
             return
@@ -137,20 +137,52 @@ class Notifier:
         # Waits decided since the last tick and waits begun in this step are logged here,
         # before anything of this step is queued: "decided" precedes the "resolved" it owes.
         self._log_waiting()
+        stopping = False
         try:
             if self._ladder.dirty or self._unsaved:
                 await self._save()
+        except asyncio.CancelledError:
+            # Only the stop cancels an evaluation (the supervisor then cancels every task).
+            stopping = True
+            raise
         finally:
             if due_now and self._unsaved and self._store is not None and self._can_save:
-                log_event(
-                    _LOGGER,
-                    logging.WARNING,
-                    "notify_queued_unsaved",
-                    "queued although the state with these messages could not be written "
-                    "first: after a hard kill now they would count as never sent",
-                    count=len(due_now),
-                )
+                self._log_queued_unsaved(len(due_now), stopping=stopping)
             self._queue(due_now, gateway, probe, current, now)
+
+    def _log_queued_unsaved(self, count: int, *, stopping: bool) -> None:
+        """Say that messages were queued before the state that holds them was written.
+
+        At a stop (the evaluation was cancelled while it waited for the write) that is the
+        expected course, so it is information: the write goes on, the flush delivers the
+        messages and the save after it records the outcomes (``notifier_state_unsaved``
+        says when it cannot). Otherwise the write failed, did not return within
+        ``save_timeout_s``, or was not started (an earlier one still runs, or one failed
+        less than ``_SAVE_RETRY_S`` ago): a hard kill now would leave these messages
+        counted as never sent, so it is a warning.
+
+        Args:
+            count: Number of messages queued.
+            stopping: True when the stop interrupted the wait for the write.
+        """
+        if stopping:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "notify_queued_at_stop",
+                "queued while the sidecar stops, before the state write returned; the save "
+                "after the stop flush records them",
+                count=count,
+            )
+            return
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "notify_queued_unsaved",
+            "queued although the state with these messages could not be written first: "
+            "after a hard kill now they would count as never sent",
+            count=count,
+        )
 
     def _queue(
         self,

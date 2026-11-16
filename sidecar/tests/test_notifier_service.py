@@ -610,6 +610,15 @@ def events(caplog: pytest.LogCaptureFixture, name: str) -> list[dict[str, object
     ]
 
 
+def levels(caplog: pytest.LogCaptureFixture, name: str) -> list[str]:
+    """The level names of every structured log record of event ``name``."""
+    return [
+        record.levelname
+        for record in caplog.records
+        if record.__dict__.get("sidecar_event") == name
+    ]
+
+
 async def test_a_resolution_that_waits_for_a_result_is_logged_and_so_is_its_end(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -999,9 +1008,54 @@ async def test_messages_go_out_after_the_save_timeout_when_the_state_cannot_be_w
         assert [(m.alert_class, m.kind) for m in world.teams.sent] == [
             ("gateway_stopped", "firing")
         ]
-        assert len(events(caplog, "notify_queued_unsaved")) == 1
+        assert levels(caplog, "notify_queued_unsaved") == ["WARNING"]
+        assert events(caplog, "notify_queued_unsaved")[0]["count"] == 1
     finally:
         store.release.set()
+
+
+async def test_messages_queued_after_a_failed_write_are_logged_as_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    store = FailingOnceStore(tmp_path / "notifier-state.json")
+    store.gate.set()
+    world = world_with(tmp_path, store)
+    store.fail_next = True
+    world.gateway = {"phase": "stopped"}
+    await world.tick()
+    assert [(m.alert_class, m.kind) for m in world.teams.sent] == [("gateway_stopped", "firing")]
+    assert levels(caplog, "notify_queued_unsaved") == ["WARNING"]
+    assert events(caplog, "notify_queued_at_stop") == []
+
+
+async def test_a_stop_during_the_write_queues_the_messages_without_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Review of round 4 of #32 (S-c, probe P8): a graceful stop that interrupts the write
+    # logged "would count as never sent" as a warning, yet the write lands and the save
+    # after the stop flush records the outcome.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    store = StuckStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store, save_timeout_s=2.0)
+    store.block = True
+    world.gateway = {"phase": "stopped"}
+    try:
+        task = asyncio.ensure_future(world.notifier.tick())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        store.release.set()  # the interrupted write lands
+    for name in world.dispatcher.channel_names():
+        await world.dispatcher.deliver_pending(name)
+    await world.notifier.save_on_stop()
+    assert [(m.alert_class, m.kind) for m in world.teams.sent] == [("gateway_stopped", "firing")]
+    assert saved_state(tmp_path)["classes"]["gateway_stopped"]["notices"]["0"]["delivered"]
+    assert events(caplog, "notify_queued_unsaved") == []
+    assert levels(caplog, "notify_queued_at_stop") == ["INFO"]
+    assert events(caplog, "notify_queued_at_stop")[0]["count"] == 1
 
 
 @pytest.mark.parametrize("state_dir", [None, "missing-directory"], ids=["no-store", "read-only"])
@@ -1023,6 +1077,7 @@ async def test_without_a_state_file_messages_are_queued_without_an_unsaved_warni
     ]
     assert world.notifier.snapshot().state_persistence == "memory"
     assert events(caplog, "notify_queued_unsaved") == []
+    assert events(caplog, "notify_queued_at_stop") == []
 
 
 async def test_the_final_save_is_tried_even_right_after_a_failed_one(tmp_path: Path) -> None:
