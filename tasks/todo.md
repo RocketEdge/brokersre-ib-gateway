@@ -136,5 +136,6 @@
 - [x] Secret blocks exact and portable in bash, zsh and sh (D1, D2); typed into through a pty by `tests/bats/ci/doc-commands.bats` in the lint job
 - [x] Container paths of documented exec commands in the `//` form that Git Bash passes unchanged (D3); `docs/evidence.md` carries the `MSYS_NO_PATHCONV=1` note
 - [x] The C# client and `examples/compose-with-client.yml` recorded as run against a paper Gateway (D5); the weekly login cited from IBKR's auto-restart guide
-- [ ] D4 (`sidecar/README.md`, `docker compose run` without `-f`) in pull request #32
-- [ ] Not covered: pasting a secret block into an interactive shell (a terminal without bracketed paste feeds the next lines to `read`) and a run on macOS (bash 3.2, zsh)
+- [x] D4 (`sidecar/README.md`, `docker compose run` without `-f`) fixed in pull request #32 (merged 2026-11-16)
+- [x] Review of #37: each secret block is one subshell with `trap 'stty echo; exit 130' INT`; tested pasted into interactive bash and zsh (bracketed paste off and on) and sh, and with Ctrl-C at the password prompt; bash 3.2 and busybox sh checked by hand in containers
+- [ ] Not covered: a run on a Mac (Terminal.app or iTerm2 with its own paste behaviour)

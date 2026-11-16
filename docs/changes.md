@@ -5,6 +5,40 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #37: pasted secret blocks, Ctrl-C, the C# wording
+
+- **What changed:** the independent review of pull request #37 pasted each secret block in
+  one write into an interactive shell and then typed the answers. Each of the four blocks
+  (README quick start, `compose/README.md`, `docs/console.md`, `docs/recipes/README.md`) is
+  now one subshell `( ... )` whose first line is `trap 'stty echo; exit 130' INT`; `unset`
+  is gone (the variables live in the subshell). `pty-answers.py` gained a paste mode (an
+  interactive shell with its own start-up file, the block in one write, the bracketed-paste
+  markers only while the shell has that mode on, Enter when nothing runs), an `interrupt`
+  answer (Ctrl-C), a history check and a `stty -a` check at the shell's prompt;
+  `doc-commands.bats` pastes each block into bash and zsh with bracketed paste off and on
+  and into sh, and presses Ctrl-C at the first password prompt. The README and
+  `examples/csharp` now both say the `CSharpAPI.dll` was built locally from IBKR's TWS API
+  10.48.01 source. `origin/main` (#32) was merged in.
+- **Result:** on the blocks of the first review round the new cases failed as the review
+  found: pasted without bracketed paste (bash and zsh with it off, dash) 12 of 12 failed
+  (the first `read` took the next pasted line; the typed password was shown and saved in
+  the history), Ctrl-C at the password prompt left echo off (4 of 4 failed), and the 4
+  cases with bracketed paste on passed. With the subshells all 39 tests of
+  `doc-commands.bats` pass (Ubuntu 24.04: bash 5, zsh 5.9, dash), and the whole
+  `tests/bats/ci` 310 of 310 after the merge. By hand, outside CI: in the `bash:3.2` image
+  (macOS's bash version; busybox sh) every block pasted and answered gave the exact bytes,
+  and Ctrl-C wrote no password file and left echo on (16 of 16).
+- **What did NOT work / root cause:** without bracketed paste (dash, busybox sh, bash 3.2,
+  or bash and zsh with it switched off) a shell reads and runs a pasted block line by line,
+  so the lines not yet run wait in the terminal's input and the first `read` takes one;
+  a compound command is read whole before it runs. The first round tested each block as a
+  script only, where that cannot happen. Rejected: braces with a note to run `stty echo`
+  after Ctrl-C (bash and dash left echo off), and braces with `trap 'stty echo' INT` (after
+  the trap the shell went on and wrote the password file: 7 bytes of the next typed line in
+  bash and zsh, an empty file in dash). A subshell confines the trap and its `exit`.
+- **Next step:** a Mac with Terminal.app or iTerm2 was not used; their paste settings are
+  not modelled beyond bracketed paste on and off.
+
 ### 2026-11-17 — The README's examples, run as written: the secret blocks, Git Bash paths and the C# record
 
 - **What changed:** on 2026-11-16 UTC the README's examples were run as written, on a Windows
