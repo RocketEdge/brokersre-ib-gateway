@@ -345,6 +345,39 @@ async def test_a_notification_queued_just_before_stopping_is_still_delivered(
     assert harness.kinds() == [("twofa_pending", "firing")]
 
 
+class FirstSendHangs(Harness):
+    """A webhook whose first request hangs until the sidecar stops; later ones are refused."""
+
+    calls = 0
+
+    async def _receive(self, request: httpx.Request) -> httpx.Response:  # type: ignore[override]
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.Event().wait()  # cancelled when the sidecar stops
+        self.received.append(json.loads(request.content))
+        return httpx.Response(404)
+
+
+async def test_what_the_flush_at_stopping_learns_is_saved(tmp_path: Path) -> None:
+    # Review of #32 (P2): the flush at shutdown learned that no channel accepted, but the
+    # file kept "in flight", so the restarted sidecar resolved an alert nobody received.
+    harness = FirstSendHangs(tmp_path, {}, webhook=True)
+    try:
+        await harness.start()
+        harness.volume.phase("2fa-pending")
+        await until(lambda: harness.calls == 1)
+    finally:
+        await harness.shutdown()
+    assert harness.calls == 2  # the flush sent it once more and the webhook refused it
+    saved = json.loads((tmp_path / "state" / "notifier-state.json").read_text(encoding="utf-8"))
+    notice = saved["classes"]["twofa_pending"]["notices"]["0"]
+    assert (notice["delivered"], notice["in_flight"], notice["failed_attempts"]) == (
+        False,
+        False,
+        1,
+    )
+
+
 TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 
 

@@ -167,6 +167,18 @@ class Notifier:
                 attempt=due.attempt,
             )
 
+    async def save_on_stop(self) -> None:
+        """Write the state once more, after the outboxes were flushed at shutdown.
+
+        The flush reports delivery outcomes to the ladder after the last evaluation; without
+        this write they are lost, and the next start resends a delivered announcement or
+        resolves one that no channel accepted. A save that failed a moment ago is tried
+        anyway: this is the last chance. Bounded like every save (``save_timeout_s``).
+        """
+        if self._ladder.dirty or self._unsaved:
+            self._save_retry_at = None
+            await self._save()
+
     def close(self) -> None:
         """Let the state thread end (called when the sidecar stops)."""
         self._saver.close()
