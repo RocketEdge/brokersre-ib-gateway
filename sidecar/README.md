@@ -384,7 +384,11 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   condition lasts; `/status` shows `notified: false` and the number of failed attempts.
 - When a notified condition clears, a `resolved` message goes to every channel that heard
   about it (`NOTIFY_CHANNELS`, and the escalation channels once an escalation was
-  accepted). A condition nobody was told about clears silently.
+  accepted). It is sent once and not tracked: a stop or a kill of the sidecar while it is
+  still queued, or a failure of every attempt on every channel, loses it, and the
+  incident stays open (it fails safe: nothing goes silent; see
+  [Limitations](#limitations)). A condition nobody was told about clears silently, except
+  after a restart: what the state file shows in flight then counts as possibly received.
 - The first channel that accepts a message is enough to count it as delivered; a slow or
   unreachable channel does not hold that back. A condition that clears while a message
   about it is still being sent waits for that result: if a channel accepted the message,
@@ -416,10 +420,12 @@ holds half-closed sockets; those are local faults at any time of day. `/status` 
   accepted a moment before; an open incident is worse than a `resolved` nobody needed.
   When the file cannot be written the state is kept in memory, `/status` says so, and the
   write is tried again every 30 seconds. Its format is
-  `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read. A
-  sidecar older than 0.2.2 ignores a v3 file: after a downgrade it announces the active
-  alerts again and forgets resolutions that were still owed. The v3 file stays on the
-  volume, so a later 0.2.2 reads it again; at worst that repeats a `resolved`.
+  `brokersre.sidecar.notifier-state.v3`; the v2 file of an earlier sidecar is read (a
+  message it shows not delivered counts as possibly received: up to 0.2.1 the sidecar did
+  not save after its stop flush). A sidecar older than 0.2.2 ignores a v3 file: after a
+  downgrade it announces the active alerts again and forgets resolutions that were still
+  owed. The v3 file stays only until the older sidecar writes its own state under the same
+  name; a 0.2.2 started before that reads it again, at worst repeating a `resolved`.
 
 ## Dead-man ping (recommended)
 
@@ -590,6 +596,14 @@ cosign verify ghcr.io/rocketedge/brokersre-ib-gateway-sidecar@sha256:<digest> \
   1100/1101/1102, the second-factor timeline with a real prompt, error 326 for a client id
   that is in use, and the clock offset against IBKR's answer. Channel payloads are tested
   against local receivers, not against the real services.
+- **A resolution is sent once.** A `resolved` is queued once and not tracked: a stop or a
+  kill of the sidecar while it is still queued, or a failure of every attempt on every
+  channel, loses it. The alert then stays open where it was announced (a PagerDuty
+  incident, for example) until a person closes it. Tracking owed resolutions until a
+  channel accepts them is planned (`docs/limitations.md` L34).
+- **A class switched off loses its resolution.** A class added to `NOTIFY_DISABLE_CLASSES`
+  while one of its alerts was announced is never resolved after the restart, and its
+  open episode holds back the daily heartbeat (L34).
 - **One gateway per sidecar.**
 
 ## Development

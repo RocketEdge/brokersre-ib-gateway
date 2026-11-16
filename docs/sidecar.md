@@ -209,10 +209,14 @@ Four rules about what counts:
 - **Notified means a channel accepted it.** The dispatcher reports each delivery back, at
   the first channel that accepts (a slow or dead channel does not delay that). An alert
   nobody received is sent again (30 s doubling to 5 minutes), is kept as "not delivered" in
-  the state file across restarts, and is never followed by a "resolved".
-- **Whoever heard of it hears that it is over.** A condition that clears while a message
+  the state file across restarts, and is not followed by a "resolved", except after a
+  restart (below). The state is written before the messages of an evaluation are queued,
+  so a message a channel can accept is on disk as in flight.
+- **Whoever is told it is over is told once.** A condition that clears while a message
   about it is still out ends at once, and the late result decides: a channel accepted it,
-  the "resolved" follows; none did, nothing follows. While such a result is outstanding
+  the "resolved" follows; none did, nothing follows. The "resolved" itself is sent once
+  and not tracked: a stop or kill while it is queued, or a failure of every attempt, loses
+  it and the incident stays open (`docs/limitations.md` L34). While such a result is outstanding
   nothing new is sent for that class, so its messages never overtake each other (PagerDuty
   keys an incident by instance and class: an older resolve after a newer trigger would close
   the new incident); the log shows the wait (`notify_resolution_waiting`). The late

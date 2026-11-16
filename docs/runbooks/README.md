@@ -74,7 +74,10 @@ contain it.
 
 A message of the kind `resolved` closes an alert that was announced. A message that says
 "Superseded" closes it too, but names the alert that took over: nothing recovered, follow
-the page of that alert. When and how alerts are repeated is described under
+the page of that alert. A `resolved` is sent once: a stop of the sidecar at the wrong
+moment or a channel that fails every attempt can lose it, so an alert that stays open
+needs a look at the current phase (`brokersre-sidecar status`) before it is acted on
+([limitations](../limitations.md), L34). When and how alerts are repeated is described under
 [Escalation and de-duplication](../../sidecar/README.md#escalation-and-de-duplication).
 
 ## What these pages are based on

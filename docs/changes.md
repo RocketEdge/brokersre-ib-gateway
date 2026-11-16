@@ -32,8 +32,13 @@ Next step.
   `notifier_state_unsaved` when it cannot, and collects the error of an interrupted write;
   the log shows a resolution that waits for a result (`notify_resolution_waiting`, then
   `notify_resolution_decided` before the "resolved" is queued). A rule of the first round
-  was reverted in the second, see (7). Also an end-to-end check that raced (it read the
-  phase once right after `docker stop`) now waits for `stopped`.
+  was reverted in the second, see (7). A third round added: the state of an evaluation is
+  written before its messages are queued (bounded by the save timeout; queued anyway, and
+  logged as `notify_queued_unsaved`, when the write fails or the stop interrupts it); a
+  message a v2 file of 0.2.1 shows not delivered counts as possibly received; both
+  sidecar compose files give the sidecar `stop_grace_period: 20s`. Also an end-to-end
+  check that raced (it read the phase once right after `docker stop`) now waits for
+  `stopped`.
 - **Result:** the tests added for defect 1, as first committed, measured against the 0.2.1
   source: 15 fail (13 new tests, and 2 existing ones whose state schema string changed),
   56 pass. End to end, 0.2.1 gave the webhook `firing` only and PagerDuty `trigger` only,
@@ -48,7 +53,17 @@ Next step.
   first run left them alive; M7 once a redundant second guard was removed), and M12
   mutated that guard, which no longer exists. Of the second review's 21, all 15 that still
   apply are killed (R3, R5 and R11 by new tests); the other 6 mutated the reverted
-  "begun" machinery. Sidecar suite 879 to 928 passed (2 skipped).
+  "begun" machinery. Of the third review's 15, 14 are killed by the suite; the 15th
+  dropped a log call that writing the state before queueing had made redundant, and that
+  call is gone. The 6 mutants of the third round's own changes are each killed. Sidecar
+  suite 879 to 945 passed (2 skipped). Against a real paper login (2026-11-16, 06:32 to
+  06:34 UTC, a local build of this branch at `773d21f`, the stable gateway `7773ff7`,
+  fresh volumes, Teams unreachable, a local webhook): a graceful stop and start of the
+  gateway queued `firing` at 06:32:51.083 and `resolved` at 06:32:53.100 while Teams
+  still retried (it gave up at 06:32:58.120), and the webhook got both; with the sidecar
+  killed (SIGKILL) 0.5 s after the webhook got `firing` and the gateway restarted, the
+  restarted sidecar queued `resolved` at 06:33:55.550 to the webhook and Teams, and the
+  webhook got it. Neither run put a username or an account-shaped value in any output.
   Clock skew: the reported case (host 0.3 s ahead of a correct IBKR clock, truncated
   readings in (−1.3, −0.3]) and the session's readings (−0.92, −1.77, 0.124 s) never
   alert; with the comparison the report assumed (`|reading| > 1 s + RTT/2`) eight of the
@@ -96,16 +111,27 @@ Next step.
   so every message in flight at a restart counts as possibly received again. The property
   test had not seen it because it restarted from a live export of the state, which still
   held marks no save would have written; it restarts from the last saved snapshot now.
+  (8) *Third review:* the evaluation queued its messages before it saved, so a fast
+  channel could accept an announcement whose in-flight mark was not on disk yet, and a
+  hard kill then lost its resolution; it saves first now. Moving the save first broke
+  delivery at a stop (the stop cancels the evaluation while it waits for the write, and
+  the due messages were never queued); they are queued in any case now. 0.2.1 saved
+  nothing after its stop flush, so its v2 file can show a delivered announcement as not
+  delivered; 0.2.2 read that as never sent. The property test's random search reached
+  "announce, clear while out, accept after the save, kill" only at about 3000 examples;
+  that case is an explicit example now. Stopping takes up to 13 s against Docker's
+  default 10 s.
 - **Next step:** publish 0.2.2 and watch `sidecar-publish.yml` through the signature check
   (a rollback to 0.2.1 does not read the v3 state file: it announces the active alerts
-  again and forgets resolutions still owed; the file stays on the volume, and a later
-  0.2.2 reads it again, at worst repeating a "resolved"); repeat the stop and start with
-  one failing channel under 0.2.2 against a paper login and confirm the resolution on
-  every channel that heard. A millisecond time request exists from TWS API
-  10.34.01 (`reqCurrentTimeInMillis`, IBKR changelog) and would remove the whole-second
-  band; whether the gateway and ib_async offer it is not checked. Open from the review,
-  older than this change: a `resolved` whose own delivery fails is not sent again, and a
-  class disabled after a restart while active blocks the heartbeat.
+  again and forgets resolutions still owed; the file stays only until 0.2.1 writes its own
+  state under the same name, and a 0.2.2 started before that reads it again, at worst
+  repeating a "resolved"). A millisecond time request exists from TWS API 10.34.01
+  (`reqCurrentTimeInMillis`, IBKR changelog) and would remove the whole-second band;
+  whether the gateway and ib_async offer it is not checked. Open, older than this change
+  and recorded as L34: a `resolved` is sent once and not tracked, so a stop or kill while
+  it is queued, or every attempt failing, loses it (the alert stays open; nothing goes
+  silent); and a class switched off before a restart leaves its announced alert
+  unresolved and holds back the heartbeat. Tracking owed resolutions is planned for 0.2.3.
 
 ### 2026-11-16 — What the first completed paper sessions established
 

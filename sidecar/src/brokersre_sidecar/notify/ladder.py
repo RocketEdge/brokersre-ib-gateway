@@ -19,10 +19,12 @@ Rules of the ladder:
   escalation channels ``escalate_after_s`` and ``escalate_again_after_s`` after the
   condition BEGAN (the first prompt), whether or not the announcement got through: when the
   primary channel is down, the escalation channel is the one that still can tell someone.
-* When a condition clears, ``RESOLVED`` goes to the channels that heard about it. A
-  condition nobody was told about clears silently: no "resolved" for an alert that no
-  channel ever received.
-* **A person who received a message about an episode receives its resolution**, also when
+* When a condition clears, ``RESOLVED`` goes to the channels that heard about it. It is
+  emitted once and not tracked (``record_result`` is not called for it): a stop or kill
+  of the sidecar while it is queued, or a failure on every channel, loses it, and the
+  incident stays open. A condition nobody was told about clears silently, except after a
+  restart: what the file shows in flight then counts as possibly received (below).
+* **A person who received a message about an episode is sent its resolution**, also when
   the condition clears while that message is still out. The episode then ends at once, and
   its resolution is decided when the outstanding results are in: sent if any message of the
   episode was accepted, dropped if none was. Until then nothing new is sent for that class

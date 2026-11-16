@@ -33,7 +33,9 @@ class Notifier:
     """One evaluation step per call of ``tick`` (about once a second).
 
     ``tick`` does no network I/O: it only queues messages on the dispatcher, whose workers
-    deliver them and report back whether a channel accepted each one. The state file is
+    deliver them and report back whether a channel accepted each announcement and
+    escalation. A resolution or heartbeat is queued once and not tracked: a stop or kill
+    while it is queued, or a failure on every channel, loses it. The state file is
     written only when the ladder state changed, on a thread of its own, with a time
     bound: a save that hangs or fails neither stalls the alerts nor is repeated behind
     itself; the state is then kept in memory (``/status`` says so) and the save is tried
@@ -189,7 +191,8 @@ class Notifier:
                 superseded_by=due.superseded_by,
             )
             # Announcements and escalations report back: the alert counts as notified only
-            # when a channel accepted the message.
+            # when a channel accepted the message. A resolution does not (docs/limitations.md
+            # L34): it is sent once.
             on_done = functools.partial(self._delivered, due) if due.kind in _TRACKED else None
             self._dispatcher.enqueue(message, due.channels, on_done)
             log_event(

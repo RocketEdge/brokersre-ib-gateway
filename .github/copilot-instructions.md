@@ -420,9 +420,13 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   between saves ("a channel has begun") is lost by a hard kill, and a rule built on it
   dropped the resolution of a message accepted just before the kill (second review of
   #32, reverted). Test restarts from the snapshot saved after the last step, never from a
-  live `export_state()`. The state is saved again after the shutdown flush
-  (`Notifier.save_on_stop`). A change to the ladder state bumps `notifier-state.vN` and
-  keeps reading the previous version.
+  live `export_state()`. `Notifier.tick` writes the state before it queues the step's
+  messages (a channel may accept a message the moment it is queued); keep that order. The
+  state is saved again after the shutdown flush (`Notifier.save_on_stop`; compose gives
+  the sidecar `stop_grace_period: 20s`). A `resolved` is sent once and not tracked: a
+  stop or kill while it is queued, or every attempt failing, loses it (L34, planned for
+  0.2.3). A change to the ladder state bumps `notifier-state.vN` and keeps reading the
+  previous version.
 - Sidecar `clock_skew`: IBKR's time request is whole seconds and IBKR documents neither
   truncation nor rounding. `skew_exceeds` counts a reading only when it is beyond the limit
   under both (above +1.5 s, below −2 s, plus RTT/2); do not tighten a side without evidence
