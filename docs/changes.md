@@ -74,6 +74,24 @@ Next step.
   upper case only, anywhere after a character that is not a capital letter; the Azure pack
   matches any case, but only a word of its own, an id in upper case glued to a lower-case
   word, or one after an escaped line break (L32).
+  (6) *The tests did not pin what the comments claimed.* The review ran mutants: rules 2
+  and 3 of `redact.vrl` had no test of their own (rule 3 was only reached by ids that rule
+  2 catches first, because after `\n`, `\r` or `\t` the letter is a lower-case lead), and
+  nothing tied `redact.vrl` to the two label patterns. With this repository's own mutant set
+  (one change each, run against the real checks): `redact.vrl` 29 of 49 killed before, 51
+  of 51 after (two mutants of the new escape added); label pattern, changed alike in both
+  shell files, 16 of 28 killed before, 28 of 28 after (each earlier survivor by
+  `label_verdicts`). Each rule now has a test at every bound of the shape, and
+  `label_verdicts` decides 43 boundary labels with all three engines.
+  (7) *Smaller holes the same review found, each fixed with a test that failed first:*
+  `\d` in `redact.vrl` took any script's digits, and `slice!` cut such a match inside a
+  character; a text that already held U+E000 skipped the underscore swap, so
+  `acct_DUR123456` in it was shipped in full (now escaped and restored exactly); the
+  end-to-end canaries were old-shape ids only (now `DUQ864209` beside each; red against the
+  old redaction and the published sidecar 0.2.0). The VM's host label is `<namePrefix>-vm`
+  and cannot change, and a `namePrefix` such as `ib10001` (accepted before this change) now
+  makes `apply-config.sh` refuse the configuration; the refusals name the shape and the
+  remedy, never the value.
 - **Next step:** release the sidecar as 0.2.1 in a pull request of its own (this change
   leaves the version alone); compare the shape with a live, an advisor and a broker id when
   one is at hand (the shape only, never the id) and change the four places together.
