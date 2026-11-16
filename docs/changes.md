@@ -22,9 +22,10 @@ Next step.
 - **Result:** the real log through a pipe that stays open past the grace period gives
   exactly `ibc_version`, `login_dialog`, `login_completed` per start and no
   `unknown_window` (three before the change); with IBC's "closed" lines for the warning
-  removed, the warning of the running Gateway is reported. One real qualification with a
-  paper account passed on a local build of the stable image with these scripts (L16). The
-  unit suite in the image passes in full (counts in the pull request). `login_completed` is
+  removed, the warning of the running Gateway is reported. The real qualification with a
+  paper account passed on a local build of the stable image with these scripts, once per
+  revision, the last with the scripts as merged (login 10 s, stop 2 s; L16). The unit
+  suite in the image passes in full (counts in the pull request). `login_completed` is
   now confirmed against real IBC output, and so is IBC's stop message that must not count
   as a login (L01). No key, event or phase of the log contract changed.
 - **What did NOT work / root cause:** (1) *A title cannot tell a window nobody handles from
@@ -51,16 +52,21 @@ Next step.
   newest counts now. Time came from the wall clock (a step could report a closed window or
   delay a stuck one); it comes from the kernel's uptime now. After a pause of the process,
   a window was reported although its "closed" line was already in the pipe; a due window
-  is reported only once no line is waiting (at most 1,000 lines later). The family rule for
+  is reported only once no line is waiting (lines are read first for at most one second,
+  counted from the first postponement: counted from the due time, a pause would defeat it,
+  as a test showed). The family rule for
   titles with an ellipsis applied to dialogs too, which can wait for an answer; it is
   limited to frames. In a UTF-8 locale bash can drop bytes when a timed read ends inside a
   character; the classifier runs with `LC_ALL=C`. (6) *Tests that replay a file cannot see a
   waiting window:* the input ends within milliseconds and every wait ends with it, so the
   first real-log test passed whatever the classifier did with the warning. Every
   grace-period test now keeps the pipe open past the grace period, and the real-log test has
-  a counterpart without the "closed" lines. A mutation run (19 deliberate breakages) kills
-  17; the two survivors are equivalent (a redundant `break`, and the clock source, which no
-  test can see without a clock step).
+  a counterpart without the "closed" lines. (7) *Mutation runs found tests that could not
+  fail* (a glob title compare, the cap's drop order, a default of 5 s, `LC_ALL=C`, a report
+  a second early, the pause bound); each now has a test that fails without it (the
+  `LC_ALL` test in 5 of 5 runs). What still survives changes timing by under a second
+  (uptime hundredths ignored, whole-second time limits), cannot be seen without a clock
+  step (the clock source), or is equivalent (a redundant `break`).
 - **Next step:** a qualification of the published image; watch real sessions for windows
   that stay open and are harmless (L10); the automatic picture of a real blocking dialog
   (L25).

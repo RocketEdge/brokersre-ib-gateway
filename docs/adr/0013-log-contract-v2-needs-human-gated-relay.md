@@ -98,5 +98,6 @@ line), or when IBC's output ends; of several waiting windows with one title the 
 counts as the one that closed, so a window that stays open keeps its time; time is the
 kernel's uptime, so a clock step changes nothing; and a due window is reported only once no
 further line of IBC is waiting to be read, because after a pause of the process its
-"closed" line may already be in the pipe. A frame whose title ends with an ellipsis is a
+"closed" line may already be in the pipe. Lines are read first for at most one second,
+counted from the first postponement, so that a stream of lines cannot hide a window. A frame whose title ends with an ellipsis is a
 start-up step; a dialog with such a title is not.

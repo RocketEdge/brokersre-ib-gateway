@@ -347,8 +347,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - `unknown_window` means a window that STAYS open (`UNKNOWN_WINDOW_GRACE_S`, 10 s), decided in
   the read loop of `classify-ibc-log.sh`: the `read` has a time limit only while a window
   waits, and what bash hands back of an unfinished line at the limit is kept (`LC_ALL=C`, or
-  bash can drop bytes there). Time is `/proc/uptime`, never the wall clock. A due window is
-  reported only once no line of IBC is waiting (its "closed" line may be in the pipe). A new
+  bash can drop bytes there). Time is `/proc/uptime` (bash's `SECONDS` only where it cannot
+  be read at start; a failed read later keeps the last value). A due window is reported
+  only once no line of IBC is waiting (its "closed" line may be in the pipe), for at most
+  one second counted from the first postponement, never from the due time (after a pause
+  the window is long overdue and its "closed" line is what waits). A new
   IBC (`ibc_version`) empties the waiting list: `ibcstart.sh` relaunches the Gateway inside
   one classifier run and the old process writes no "closed" line. Never put a title that
   says nothing about the content (`Warning`) on `known-windows.txt`: the grace period covers

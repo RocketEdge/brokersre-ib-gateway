@@ -17,9 +17,9 @@ new contract version, announced in `docs/changes.md` before an image carrying it
 **Refined on 2026-11-16 without a new version** (no key, event or phase changed):
 `unknown_window` is raised when an unknown window has stayed open for
 `UNKNOWN_WINDOW_GRACE_S` seconds, no longer the moment it opens. A reader that reacts to
-the event gets it about 10 seconds later by default (later only while lines of IBC that
-are already waiting are read first), and no longer for a window that IBC or the Gateway
-dealt with.
+the event gets it about 10 seconds later by default (up to a second later while lines of
+IBC that are already waiting are read first), and no longer for a window that IBC or the
+Gateway dealt with.
 
 ## Events: one JSON object per line, on stdout and in `events/events.jsonl`
 
