@@ -436,6 +436,7 @@ def test_an_escalation_out_when_the_sidecar_stopped_is_resolved_on_the_pager_aft
     run(before, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
     (escalation,) = before.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
     assert escalation.kind is MessageKind.ESCALATION  # out when the sidecar stops
+    before.record_started(escalation)
     after = ladder()
     after.import_state(json.loads(json.dumps(before.export_state())))
     (resolved,) = run(after, {AlertClass.TWOFA_PENDING: INACTIVE}, 605)
@@ -445,7 +446,8 @@ def test_an_escalation_out_when_the_sidecar_stopped_is_resolved_on_the_pager_aft
 def test_a_clearing_waiting_on_an_escalation_resolves_the_pager_after_restart() -> None:
     before = ladder()
     run(before, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
-    before.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    (escalation,) = before.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    before.record_started(escalation)
     assert before.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(601)) == []
     after = ladder()
     after.import_state(json.loads(json.dumps(before.export_state())))
@@ -454,10 +456,11 @@ def test_a_clearing_waiting_on_an_escalation_resolves_the_pager_after_restart() 
 
 
 def test_an_announcement_in_flight_when_the_sidecar_stopped_is_resolved_if_it_cleared() -> None:
-    # Whether the message reached anyone is unknown after a restart. A "resolved" that
-    # nobody needed is harmless; an open incident that is never closed is not.
+    # A channel had started sending it; whether it reached anyone is unknown after a
+    # restart. A "resolved" that nobody needed is harmless; an open incident is not.
     before = ladder()
-    before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))  # never answered
+    (firing,) = before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))  # never answered
+    before.record_started(firing)
     saved = json.loads(json.dumps(before.export_state()))
     assert saved["schema"] == "brokersre.sidecar.notifier-state.v3"
     after = ladder()
@@ -466,9 +469,49 @@ def test_an_announcement_in_flight_when_the_sidecar_stopped_is_resolved_if_it_cl
     assert (resolved.kind, resolved.since) == (MessageKind.RESOLVED, at(0))
 
 
-def test_a_clearing_still_waiting_for_its_result_is_resolved_after_a_restart() -> None:
+def test_an_announcement_no_channel_had_started_when_the_sidecar_stopped_clears_silently() -> None:
+    # Review of #32 (P1): the ladder marks a message in flight when it emits it, and the
+    # same evaluation saves that. Killed before any channel took it, nobody can have
+    # received it: after the restart it is sent again while the condition lasts, and
+    # its clearing is not told.
     before = ladder()
     before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    saved = json.loads(json.dumps(before.export_state()))
+    gone = ladder()
+    gone.import_state(saved)
+    assert run(gone, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 5) == []
+    still = ladder()
+    still.import_state(saved)
+    assert kinds(run(still, {AlertClass.GATEWAY_STOPPED: ACTIVE}, 5)) == [
+        ("gateway_stopped", "firing")
+    ]
+
+
+def test_only_the_attempt_out_at_the_stop_can_have_been_received_not_an_earlier_one() -> None:
+    before = ladder()
+    (first,) = before.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(0))
+    before.record_started(first)
+    before.record_result(first, delivered=False, now=at(1))  # refused everywhere
+    (retry,) = before.step({AlertClass.API_UNHEALTHY: ACTIVE}, at(31))
+    assert retry.attempt == 2  # emitted, not started when the sidecar stops
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    assert run(after, {AlertClass.API_UNHEALTHY: INACTIVE}, 40) == []
+
+
+def test_a_clearing_waiting_on_a_message_no_channel_started_is_silent_after_a_restart() -> None:
+    before = ladder()
+    before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    assert before.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(5)) == []
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    assert run(after, {AlertClass.GATEWAY_STOPPED: INACTIVE}, 10) == []
+
+
+def test_a_clearing_still_waiting_for_its_result_is_resolved_after_a_restart() -> None:
+    before = ladder()
+    (firing,) = before.step({AlertClass.GATEWAY_STOPPED: ACTIVE}, at(0))
+    before.record_started(firing)
     assert before.step({AlertClass.GATEWAY_STOPPED: INACTIVE}, at(5)) == []
     after = ladder()
     after.import_state(json.loads(json.dumps(before.export_state())))
@@ -704,7 +747,7 @@ def test_message_volume_is_bounded_for_any_sequence_of_verdicts_and_delivery_out
 
 
 LATE_STEP = st.tuples(
-    st.sampled_from(["step", "step", "step", "answer", "answer", "restart"]),
+    st.sampled_from(["step", "step", "step", "start", "answer", "answer", "restart"]),
     # At least a millisecond: two episodes never start at the same instant (one evaluation
     # per tick), and the state file keeps episode starts to the millisecond.
     st.floats(min_value=0.001, max_value=1200.0),
@@ -764,25 +807,40 @@ def test_results_that_come_back_late_never_lose_a_resolution_nor_invent_one(
                 )
             pending.append(item)
 
+    started: set[int] = set()  # id() of pending messages a channel has begun to send
+
+    def start(item: Outbound) -> None:
+        if id(item) not in started:
+            engine.record_started(item)
+            started.add(id(item))
+
     for kind, delta, state, pick, accept in ops:
         if kind == "step":
             now += timedelta(seconds=delta)
             take(engine.step({alert: Evaluation(state, "d")}, now))
+        elif kind == "start" and pending:
+            start(pending[pick % len(pending)])
         elif kind == "answer" and pending:
             item = pending.pop(pick % len(pending))
+            if accept:
+                start(item)  # a channel accepts only what it began to send
             engine.record_result(item, delivered=accept, now=now)
+            started.discard(id(item))
             if accept:
                 heard.add(episode(item))
                 if item.kind is MessageKind.FIRING:
                     announced_at.append(now)
         elif kind == "restart":
-            lost.update(episode(item) for item in pending)
+            # Only a message some channel had begun to send can have reached anyone.
+            lost.update(episode(item) for item in pending if id(item) in started)
             pending.clear()
+            started.clear()
             restarted = ladder()
             restarted.import_state(json.loads(json.dumps(engine.export_state())))
             engine = restarted
     # Every result still out comes back, then the condition clears for good.
     for item in pending:
+        start(item)
         engine.record_result(item, delivered=True, now=now)
         heard.add(episode(item))
     pending.clear()

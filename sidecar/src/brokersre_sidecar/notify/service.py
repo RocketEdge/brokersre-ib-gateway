@@ -135,8 +135,10 @@ class Notifier:
             )
             # Announcements and escalations report back: the alert counts as notified only
             # when a channel accepted the message.
-            on_done = functools.partial(self._delivered, due) if due.kind in _TRACKED else None
-            self._dispatcher.enqueue(message, due.channels, on_done)
+            tracked = due.kind in _TRACKED
+            on_done = functools.partial(self._delivered, due) if tracked else None
+            on_start = functools.partial(self._ladder.record_started, due) if tracked else None
+            self._dispatcher.enqueue(message, due.channels, on_done, on_start)
             log_event(
                 _LOGGER,
                 logging.INFO,

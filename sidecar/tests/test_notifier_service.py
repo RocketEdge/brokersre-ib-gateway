@@ -418,6 +418,47 @@ async def test_a_resolution_is_not_lost_when_a_slow_channel_holds_back_the_resul
     assert world.notifier.snapshot().active_alerts == ()
 
 
+async def test_an_announcement_no_channel_took_before_a_crash_is_not_resolved_after_it(
+    tmp_path: Path,
+) -> None:
+    # Review of #32 (P1): queued and saved as in flight by the same evaluation, then the
+    # process died before a channel worker took it. Nobody can have received it.
+    before = World(tmp_path)
+    before.notifier.load_state()
+    before.gateway = {"phase": "stopped"}
+    await before.notifier.tick()  # queued and saved; no channel worker runs
+    assert before.teams.sent == []
+    after = World(tmp_path, before.clock)
+    after.notifier.load_state()
+    after.gateway = {"phase": "logged-in"}
+    await after.tick(5)
+    assert after.teams.sent == []
+
+
+async def test_an_announcement_a_channel_had_begun_before_a_crash_is_resolved_after_it(
+    tmp_path: Path,
+) -> None:
+    before = World(tmp_path)
+    teams = LateFailure()  # takes the message, then the process dies before an answer
+    before.dispatcher = Dispatcher({"teams": teams}, before.clock, RecordingSleep(before.clock))
+    before.notifier = before.build_notifier(tmp_path)
+    before.notifier.load_state()
+    before.gateway = {"phase": "stopped"}
+    await before.notifier.tick()
+    worker = asyncio.ensure_future(before.dispatcher.run_channel("teams"))
+    try:
+        await until(lambda: teams.attempts == 1)
+        await before.notifier.tick()  # the next evaluation saves that a channel began
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    after = World(tmp_path, before.clock)
+    after.notifier.load_state()
+    after.gateway = {"phase": "logged-in"}
+    await after.tick(5)
+    assert [(m.alert_class, m.kind) for m in after.teams.sent] == [("gateway_stopped", "resolved")]
+
+
 async def test_the_heartbeat_says_what_it_cannot_vouch_for(tmp_path: Path) -> None:
     world = World(tmp_path, heartbeat=time(0, 0))
     world.gateway = {"phase": "login", "feeds_seen": False, "quiet_for_s": None}

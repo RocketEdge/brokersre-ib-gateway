@@ -252,6 +252,27 @@ async def test_the_first_acceptance_is_reported_without_waiting_for_a_slow_chann
     assert outcome.reported == [True]  # once: the later failure of Teams changes nothing
 
 
+async def test_the_caller_learns_once_when_a_channel_begins_to_send_not_when_it_is_queued() -> None:
+    teams, slack = ScriptedChannel("teams"), ScriptedChannel("slack")
+    dispatcher, _ = dispatcher_for(teams, slack)
+    began: list[str] = []
+    dispatcher.enqueue(make_message(), ["teams", "slack"], None, lambda: began.append("begun"))
+    assert began == []  # queued only: no channel has it yet
+    await dispatcher.deliver_pending("teams")
+    await dispatcher.deliver_pending("slack")
+    assert began == ["begun"]
+
+
+async def test_a_message_dropped_before_any_channel_began_is_never_reported_as_begun() -> None:
+    channel = ScriptedChannel("teams")
+    dispatcher, _ = dispatcher_for(channel, outbox_size=1)
+    began: list[str] = []
+    dispatcher.enqueue(make_message("old"), ["teams"], None, lambda: began.append("old"))
+    dispatcher.enqueue(make_message("new"), ["teams"], None, lambda: began.append("new"))
+    await dispatcher.deliver_pending("teams")
+    assert began == ["new"]
+
+
 async def test_the_caller_learns_that_no_channel_accepted_the_message() -> None:
     first = ScriptedChannel("teams", *[DeliveryError("connect", retryable=True)] * 4)
     second = ScriptedChannel("slack", DeliveryError("http_404", retryable=False))
