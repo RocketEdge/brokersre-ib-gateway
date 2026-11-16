@@ -438,11 +438,16 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - Documented commands are tested (`tests/bats/ci/doc-commands.bats`, lint job). A block in
   which a person types a secret into a POSIX shell is marked with the HTML comment that names
   that file and runs under bash, zsh (the macOS default) and sh through a pty
-  (`pty-answers.py`): exact file bytes, no password on the screen. Write it with a `printf`
-  prompt, `stty -echo` around `IFS= read -r`, and `printf '%s'`: zsh has no `read -p` (`-p:
-  no coprocess`), dash no `read -s`, and `read` without `IFS=` drops the blanks at both ends
-  (all three found with the README's block on 2026-11-16). A new marked block needs its own
-  test there. A path inside the container in a documented `docker exec` or `docker compose
+  (`pty-answers.py`), as a script, pasted into an interactive shell (bracketed paste off and
+  on) and with Ctrl-C at the password prompt: exact file bytes, no password on the screen or
+  in the history, echo on afterwards. Write it as one subshell `( ... )` whose first line is
+  `trap 'stty echo; exit 130' INT`, with a `printf` prompt, `stty -echo` around `IFS= read
+  -r`, and `printf '%s'`: zsh has no `read -p` (`-p: no coprocess`), dash no `read -s`, and
+  `read` without `IFS=` drops the blanks at both ends (all three found with the README's
+  block on 2026-11-16); without bracketed paste (dash, busybox, macOS's bash 3.2) a shell
+  reads a pasted block line by line and the first `read` takes the next pasted line unless
+  the block is one compound command, and braces with that trap go on after Ctrl-C and write
+  the password file (review of #37). A new marked block needs its own tests there. A path inside the container in a documented `docker exec` or `docker compose
   ... exec` command starts with `//` (`cat //var/log/...`): Git Bash, which the README names
   for Windows, rewrites a single leading `/` into `C:/Program Files/Git/...`, Linux reads
   `//var` as `/var`. Keep such a command on one line and outside a PowerShell fence, or the
