@@ -80,6 +80,7 @@ class Notifier:
         self._ready = ready
         self._save_timeout_s = save_timeout_s
         self._saver = SerialWorker("sidecar-state")
+        self._write: asyncio.Future[None] | None = None  # the latest write started
         self._can_save = False
         self._unsaved = False
         self._save_retry_at: float | None = None
@@ -173,11 +174,16 @@ class Notifier:
         The flush reports delivery outcomes to the ladder after the last evaluation; without
         this write they are lost, and the next start resends a delivered announcement or
         resolves one that no channel accepted. A save that failed a moment ago is tried
-        anyway: this is the last chance. Bounded like every save (``save_timeout_s``).
+        anyway: this is the last chance. A write still running (the stop cancelled the
+        evaluation that awaited it) is waited for first, else this one would be skipped.
+        Each wait is bounded by ``save_timeout_s``.
         """
-        if self._ladder.dirty or self._unsaved:
-            self._save_retry_at = None
-            await self._save()
+        if not (self._ladder.dirty or self._unsaved):
+            return
+        if self._saver.busy and self._write is not None:
+            await asyncio.wait({self._write}, timeout=self._save_timeout_s)
+        self._save_retry_at = None
+        await self._save()
 
     def close(self) -> None:
         """Let the state thread end (called when the sidecar stops)."""
@@ -200,6 +206,7 @@ class Notifier:
         if self._save_retry_at is not None and mono < self._save_retry_at:
             return
         write = self._saver.start(functools.partial(self._store.save, self._ladder.export_state()))
+        self._write = write
         done, _ = await asyncio.wait({write}, timeout=self._save_timeout_s)
         if not done:
             # Collect the late outcome so that a late error is not reported as "never retrieved".
