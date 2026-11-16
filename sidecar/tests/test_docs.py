@@ -309,7 +309,8 @@ def _duration_s(text: str) -> float:
     """Return a Go duration as compose prints it (``20s``, ``1m30s``, ``500ms``) in seconds."""
     units = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001, "us": 1e-6, "ns": 1e-9}
     parts = re.findall(r"([0-9]+(?:\.[0-9]+)?)(ms|us|ns|h|m|s)", text)
-    assert parts and "".join(f"{n}{u}" for n, u in parts) == text, text
+    assert parts, text
+    assert "".join(f"{n}{u}" for n, u in parts) == text, text
     return sum(float(number) * units[unit] for number, unit in parts)
 
 
