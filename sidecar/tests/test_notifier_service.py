@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import sys
@@ -779,3 +780,112 @@ async def test_a_failed_state_save_is_retried_and_persistence_recovers(
     assert attempts == 2
     assert world.notifier.snapshot().state_persistence == "file"
     assert saved_state(tmp_path)["classes"]["twofa_pending"]["active"] is True
+
+
+class StuckStore(NotifierStore):
+    """A store whose saves block while ``block`` is set, until ``release`` (a stuck disk)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.release = threading.Event()
+        self.block = False
+
+    def save(self, state: object) -> None:
+        if self.block:
+            self.release.wait(30)
+        super().save(state)
+
+
+class FailingOnceStore(NotifierStore):
+    """A store whose next save fails (disk full) once ``gate`` is set; later ones work."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.fail_next = False
+        self.gate = threading.Event()
+
+    def save(self, state: object) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            self.gate.wait(5)
+            raise OSError(28, "No space left on device")
+        super().save(state)
+
+
+def world_with(tmp_path: Path, store: NotifierStore, save_timeout_s: float = 5.0) -> World:
+    """A world whose notifier writes through ``store``."""
+    world = World(tmp_path, save_timeout_s=save_timeout_s)
+    world.store = store
+    world.notifier = world.build_notifier(tmp_path)
+    world.notifier.load_state()
+    return world
+
+
+async def stop_during_a_save(world: World) -> None:
+    """Start an evaluation whose save does not return, cancel it (the stop), then flush."""
+    task = asyncio.ensure_future(world.notifier.tick())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for name in world.dispatcher.channel_names():
+        await world.dispatcher.deliver_pending(name)
+
+
+async def test_a_final_save_behind_a_write_that_never_returns_is_bounded_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Second review of #32 (S1): the final save was skipped without a word.
+    caplog.set_level(logging.INFO, logger="brokersre_sidecar")
+    store = StuckStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store, save_timeout_s=0.3)
+    store.block = True
+    world.gateway = {"phase": "stopped"}
+    try:
+        await stop_during_a_save(world)
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        await world.notifier.save_on_stop()
+        assert loop.time() - began < 1.0
+        assert len(events(caplog, "notifier_state_unsaved")) == 1
+    finally:
+        store.release.set()
+
+
+async def test_the_error_of_a_write_the_stop_interrupted_is_collected(tmp_path: Path) -> None:
+    # Second review of #32 (S2): asyncio reported "Future exception was never retrieved".
+    store = FailingOnceStore(tmp_path / "notifier-state.json")
+    world = world_with(tmp_path, store, save_timeout_s=2.0)
+    store.fail_next = True
+    world.gateway = {"phase": "stopped"}
+    await stop_during_a_save(world)
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        store.gate.set()  # the interrupted write fails now
+        await world.notifier.save_on_stop()
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+    assert [context.get("message") for context in reported] == []
+    notice = saved_state(tmp_path)["classes"]["gateway_stopped"]["notices"]["0"]
+    assert notice["delivered"] is True  # the flush's acceptance reached the file
+
+
+async def test_the_final_save_is_tried_even_right_after_a_failed_one(tmp_path: Path) -> None:
+    # Second review of #32 (R11): within 30 s of a failed save no save is started, except
+    # the one at the stop.
+    store = FailingOnceStore(tmp_path / "notifier-state.json")
+    store.gate.set()
+    world = world_with(tmp_path, store)
+    store.fail_next = True
+    world.gateway = {"phase": "stopped"}
+    await world.notifier.tick()  # its save fails: the next one only in 30 s
+    assert world.notifier.snapshot().state_persistence == "memory"
+    for name in world.dispatcher.channel_names():
+        await world.dispatcher.deliver_pending(name)
+    await world.notifier.save_on_stop()
+    assert saved_state(tmp_path)["classes"]["gateway_stopped"]["notices"]["0"]["delivered"]

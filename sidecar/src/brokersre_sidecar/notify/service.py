@@ -214,12 +214,23 @@ class Notifier:
         resolves one that no channel accepted. A save that failed a moment ago is tried
         anyway: this is the last chance. A write still running (the stop cancelled the
         evaluation that awaited it) is waited for first, else this one would be skipped.
-        Each wait is bounded by ``save_timeout_s``.
+        Each wait is bounded by ``save_timeout_s``; if that write has still not returned,
+        the final save is skipped and the log says so (the next start then sends again or
+        resolves what the file shows in flight).
         """
         if not (self._ladder.dirty or self._unsaved):
             return
         if self._saver.busy and self._write is not None:
             await asyncio.wait({self._write}, timeout=self._save_timeout_s)
+        if self._saver.busy:
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "notifier_state_unsaved",
+                "the state could not be written at stop: an earlier write has not returned "
+                f"within {self._save_timeout_s:g} s",
+            )
+            return
         self._save_retry_at = None
         await self._save()
 
@@ -244,11 +255,13 @@ class Notifier:
         if self._save_retry_at is not None and mono < self._save_retry_at:
             return
         write = self._saver.start(functools.partial(self._store.save, self._ladder.export_state()))
+        # Collect every outcome, also one nobody awaits any more (a stop cancelled this
+        # evaluation, or the wait below timed out), so a late error is not reported as
+        # "Future exception was never retrieved".
+        write.add_done_callback(lambda finished: finished.exception())
         self._write = write
         done, _ = await asyncio.wait({write}, timeout=self._save_timeout_s)
         if not done:
-            # Collect the late outcome so that a late error is not reported as "never retrieved".
-            write.add_done_callback(lambda finished: finished.exception())
             self._save_failed(
                 f"saving the state did not finish within {self._save_timeout_s:g} s", mono
             )
