@@ -254,10 +254,11 @@ a compose file with the strategy on a private network, and a Python and a C# cli
 `wait-for-gateway.sh` and the Python client ran against a logged-in paper Gateway
 (2026-11-15/16 UTC). The C# client and the compose file with the strategy did too on
 2026-11-16 UTC, with IB Gateway 10.50.1g in the published stable image `7773ff7`: the C#
-client, built with IBKR's `CSharpAPI.dll`, logged `connected to 127.0.0.1:4002, client id
-101` and then IBKR's server time every 30 s (08:18:58 to 08:20:09 UTC); with the compose file
-the gateway was healthy after 12 s, then the strategy logged `ready: ib-gateway:4004 answered
-the API handshake (server version 178) after 0 s`.
+client, compiled against a `CSharpAPI.dll` built locally from IBKR's TWS API 10.48.01
+source, logged `connected to 127.0.0.1:4002, client id 101` and then IBKR's server time
+every 30 s (08:18:58 to 08:20:09 UTC); with the compose file the gateway was healthy after
+12 s, then the strategy logged `ready: ib-gateway:4004 answered the API handshake (server
+version 178) after 0 s`.
 
 ## Environment variables
 

@@ -127,9 +127,9 @@ socket closes, as in the daily restart; the client reconnects) or `quit`.
   against the stand-in gateway: connect, server time, 1100, 1101, 1102, farm codes, a closed
   socket followed by a reconnect, a refused port.
 - On 2026-11-16 it ran against a logged-in paper IB Gateway 10.50.1g (the published stable
-  image `7773ff7`), compiled against a `CSharpAPI.dll` of TWS API 10.48.01 built locally:
-  it logged `connected to 127.0.0.1:4002, client id 101`, then IBKR's server time every 30 s,
-  from 08:18:58 to 08:20:09 UTC. The notices 1100, 1101 and 1102, the farm codes and a
+  image `7773ff7`), compiled against a `CSharpAPI.dll` built locally from IBKR's TWS API
+  10.48.01 source: it logged `connected to 127.0.0.1:4002, client id 101`, then IBKR's
+  server time every 30 s, from 08:18:58 to 08:20:09 UTC. The notices 1100, 1101 and 1102, the farm codes and a
   reconnect were seen against the stand-in only.
 - It was not compiled against any other API release. Releases before the error callback
   gained its `errorTime` parameter do not compile with `IbApiSession.cs` as it is.
