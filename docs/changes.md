@@ -5,6 +5,53 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — The README's examples, run as written: the secret blocks, Git Bash paths and the C# record
+
+- **What changed:** on 2026-11-16 UTC the README's examples were run as written, on a Windows
+  11 host with Docker Desktop, against a logged-in paper Gateway (the published stable image
+  `7773ff7`, IB Gateway 10.50.1g). Five defects were found (D1 to D5); four are fixed here
+  on 2026-11-17, and D4, `docker compose run` without `-f` in `sidecar/README.md`, is handled
+  in pull request #32. D1, D2: the blocks in which a person types a secret into a POSIX
+  shell (the quick start, `compose/README.md`, the console's VNC password, the Loki recipe)
+  now print the prompt with `printf`, wrap `IFS= read -r` in `stty -echo` / `stty echo` and
+  write with `printf '%s'`. D3: every documented `docker exec` / `docker compose ... exec`
+  command writes the container path as `//var/...`, with a note in the README,
+  `compose/README.md` and the runbooks' command table; `docs/evidence.md` keeps its recorded
+  commands and tells Git Bash users to `export MSYS_NO_PATHCONV=1`. D5: the README and
+  `examples/csharp` record that the C# client (`connected to 127.0.0.1:4002, client id 101`, IBKR's server time every
+  30 s, 08:18:58 to 08:20:09 UTC) and `examples/compose-with-client.yml` (gateway healthy
+  after 12 s, then the strategy's handshake answered, server version 178) ran against that
+  Gateway. The README and `docs/passkeys.md` cite IBKR's "Auto Restart Considerations" for
+  the weekly login ("each Sunday at 1:00 am ET"), keeping the "every Monday" page and IBC's
+  guide as the disagreeing sources. New test `tests/bats/ci/doc-commands.bats` (with
+  `pty-answers.py`, `doc-block.awk`, `doc-exec-paths.awk`), run by the lint job, which now
+  installs zsh.
+- **Result:** before the fixes, 12 of the 12 secret-block cases failed in Ubuntu 24.04 (bash:
+  the blanks at both ends of the typed value were dropped; zsh 5.9: `read: -p: no coprocess`,
+  no file; dash: `read: Illegal option -s`) and the exec-path check reported 13 paths in the
+  README, `compose/README.md` and the runbooks; after them all 19 tests pass, under gawk and
+  under mawk. `//` was checked on 2026-11-17 with throwaway containers: from Git Bash
+  (`docker exec` and `docker compose exec` with cat, tail, grep and df; the single-slash form
+  failed there), PowerShell 7, and busybox sh running the docker CLI in `docker:29-cli`; GNU
+  coreutils of ubuntu 26.04, the gateway's base, read the paths. `export MSYS_NO_PATHCONV=1`
+  was checked for `docker exec` and for `docker run -v "$PWD/...:/run/secrets:ro" -e
+  NAME=/run/...` in Git Bash.
+- **What did NOT work / root cause:** D1: `read` without `IFS=` strips IFS whitespace at both
+  ends of the line, and no check had typed a value with blanks at either end. D2: `read -p`
+  means "read from the coprocess" in zsh, and dash has no `-s`; the block was bash-only and
+  had only been run in bash, although the README offers it for macOS, whose default shell is
+  zsh. D3: Git Bash's MSYS layer converts an argument that starts with one `/` (and
+  `NAME=/...`) to a Windows path before `docker` sees it; the commands had been run on Linux
+  and in PowerShell only. Rejected for D3: a `MSYS_NO_PATHCONV=1` prefix in the command
+  (PowerShell cannot run it), a note alone (Git Bash readers still copy the failing line),
+  `sh -c '...'` around the command (works, but longer and needs quoting in every shell). D5:
+  the "stand-ins only" sentence was true when written and was not updated when the run
+  happened: a statement about what was verified needs revisiting after each real session.
+- **Next step:** the test runs each block as a script through a pty, not as an interactive
+  paste: a terminal without bracketed paste would feed the following lines of a pasted block
+  to `read`, and no Mac (bash 3.2, zsh) was used. The exec-path check reads one line at a
+  time and does not look at `docker run`; `docs/evidence.md` relies on its note.
+
 ### 2026-11-16 — What the first completed paper sessions established
 
 - **What changed:** documentation only, no code. The first completed real paper sessions on

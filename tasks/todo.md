@@ -129,3 +129,11 @@
 - [ ] `sidecar/README.md` (about lines 543 to 549) still says "Not verified against a logged-in gateway"; correct it in the sidecar 0.2.2 pull request, which changes that file (L20 has what was seen)
 - [ ] Observe with a real paper login: a daily restart, a second-factor prompt and a competing session (L01, L02, L09, L12)
 - [ ] Decide what `tail-gateway-logs.sh` should do about `ibgateway.*.log`, a name that was not seen (L03), and correct its header (lines 4 to 7, which call the name unverified documentation) with that decision: a change under `rootfs/` rebuilds the image
+
+## The README's examples, run as written (2026-11-16/17, branch `docs/readme-examples-checked`)
+
+- [x] Secret blocks exact and portable in bash, zsh and sh (D1, D2); typed into through a pty by `tests/bats/ci/doc-commands.bats` in the lint job
+- [x] Container paths of documented exec commands in the `//` form that Git Bash passes unchanged (D3); `docs/evidence.md` carries the `MSYS_NO_PATHCONV=1` note
+- [x] The C# client and `examples/compose-with-client.yml` recorded as run against a paper Gateway (D5); the weekly login cited from IBKR's auto-restart guide
+- [ ] D4 (`sidecar/README.md`, `docker compose run` without `-f`) in pull request #32
+- [ ] Not covered: pasting a secret block into an interactive shell (a terminal without bracketed paste feeds the next lines to `read`) and a run on macOS (bash 3.2, zsh)
