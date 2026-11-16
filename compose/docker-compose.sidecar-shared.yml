@@ -54,8 +54,10 @@ services:
       # - deadman-ping-url
     volumes:
       # The gateway's log volume, read-only. nocopy matters on a fresh volume: without it
-      # Docker gives an empty volume the owner of this mount point in the LAST image created
-      # on it (the sidecar's), and the gateway could then not write its own logs.
+      # Docker gives an empty volume the owner of the mount point in the image of a container
+      # created on it. Sidecar images up to 0.2.0 have that directory root-owned, and the
+      # gateway could then not write its own logs; from 0.2.1 the image has no such
+      # directory. nocopy keeps an older or another image from doing it.
       - type: volume
         source: ibgw-logs
         target: /var/log/ibgateway

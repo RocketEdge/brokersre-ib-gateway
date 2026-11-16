@@ -354,8 +354,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   Two protections, keep both: no image other than the gateway's has `/var/log/ibgateway`
   (the sidecar since 0.2.1; the Vector image never had it), and every shipped compose
   file mounts the log volume into another container read-only with `volume.nocopy`, in
-  the long syntax (`sidecar/tests/test_docs.py` lists the files and fails on a new
-  read-only mount that is not on the list). Containers started one after the other with
+  the long syntax. `sidecar/tests/test_docs.py` resolves every shipped compose file with
+  `docker compose config --no-interpolate` (so spelling, key order and a trailing slash
+  do not matter) and fails when a service other than the gateway mounts a gateway log
+  volume, or any volume at `/var/log/ibgateway`, without `read_only` and `nocopy`, and when
+  a compose file is not in its list. Containers started one after the other with
   `docker run` never show this: test with `docker compose up` or `docker create` on fresh
   volumes (`sidecar/tests/e2e/fresh-volumes.sh`). A stack already in the loop is repaired
   only by creating the gateway container again (`down` then `up -d`, or `up -d

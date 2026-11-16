@@ -126,6 +126,13 @@ docker compose run --rm --no-deps sidecar check-config
 docker compose run --rm --no-deps sidecar notify test
 ```
 
+With the shared network namespace (`docker-compose.sidecar-shared.yml`) the sidecar has no
+network of its own: while the gateway container does not exist, these commands stop with
+"cannot share network namespace with service ib-gateway". Do not drop `--no-deps` then
+(compose would start the gateway, and it would log in): run the check with the default
+override (`-f docker-compose.example.yml -f docker-compose.sidecar.yml`), which reads the
+same settings, or wait until the gateway runs.
+
 ## Network modes
 
 ### Own network namespace (default, recommended)

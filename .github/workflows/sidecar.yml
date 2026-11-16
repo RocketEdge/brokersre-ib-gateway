@@ -15,6 +15,10 @@ on:
       - sidecar/**
       - Dockerfile
       - rootfs/**
+      - versions.json
+      - docker-bake.hcl
+      - scripts/bake-env.sh
+      - scripts/prefetch-installers.sh
       - compose/docker-compose.example.yml
       - compose/docker-compose.azure.yml
       - docs/recipes/docker-compose.vector.yml
@@ -30,6 +34,10 @@ on:
       - sidecar/**
       - Dockerfile
       - rootfs/**
+      - versions.json
+      - docker-bake.hcl
+      - scripts/bake-env.sh
+      - scripts/prefetch-installers.sh
       - compose/docker-compose.example.yml
       - compose/docker-compose.azure.yml
       - docs/recipes/docker-compose.vector.yml
