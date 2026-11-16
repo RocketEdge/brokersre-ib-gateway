@@ -292,6 +292,36 @@ def test_a_late_result_belongs_to_the_ended_episode_when_the_next_began_that_ins
     ]
 
 
+def test_a_result_the_ladder_cannot_place_changes_nothing() -> None:
+    engine = ladder()
+    stray = Outbound(MessageKind.FIRING, AlertClass.DISK_LOW, PRIMARY, since=at(0))
+    engine.record_result(stray, delivered=True, now=at(0))  # a class it never saw
+    (first,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(0))
+    engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(5))
+    never_sent = Outbound(
+        MessageKind.ESCALATION,
+        AlertClass.LOGIN_FAILED,
+        ESCALATION,
+        escalation_step=1,
+        since=at(0),
+    )
+    engine.record_result(never_sent, delivered=True, now=at(6))
+    assert engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(7)) == []  # still waiting
+    engine.record_result(first, delivered=False, now=at(8))
+    engine.record_result(first, delivered=True, now=at(9))  # a duplicate, after it settled
+    assert engine.step({AlertClass.LOGIN_FAILED: INACTIVE}, at(10)) == []
+    (again,) = engine.step({AlertClass.LOGIN_FAILED: ACTIVE}, at(20))
+    other_step = Outbound(
+        MessageKind.ESCALATION,
+        AlertClass.LOGIN_FAILED,
+        ESCALATION,
+        escalation_step=2,
+        since=again.since,
+    )
+    engine.record_result(other_step, delivered=True, now=at(21))
+    assert engine.active()[0].notified is False
+
+
 def test_an_escalation_in_flight_when_the_condition_clears_gets_its_resolution_too() -> None:
     # The announcement was delivered long ago; the escalation to PagerDuty is still out when
     # the second factor is approved. The pager must not keep an open incident.
