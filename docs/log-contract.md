@@ -194,7 +194,7 @@ fires. Decide "a person is needed" from the events: a `twofa_initiated` without 
 | `metrics/metrics.jsonl` | `sampler.sh` | one resource sample per line (below) |
 | `screens/<UTC time>-<reason>.xwd` | `screenshot.sh`, only with `SCREENSHOTS=yes` | pictures of the Gateway's virtual screen in XWD format, mode 0600, the newest `SCREENSHOT_KEEP` kept. They can show the username and account information: a consumer must not ship or publish them |
 | `ibc/ibc.log` | `rotating-append.sh` behind IBC's stdout | raw IBC log, appended across restarts |
-| `jts/ibgateway.current.log`, `jts/launcher.log` | `tail-gateway-logs.sh` | mirror of the Gateway's own logs from the settings volume (`launcher.log` seen with 10.50.1g; the `ibgateway.*.log` source name is unverified, L03) |
+| `jts/ibgateway.current.log`, `jts/launcher.log` | `tail-gateway-logs.sh` | mirror of the Gateway's own logs from the settings volume. Only `launcher.log` is mirrored in practice (seen with 10.50.1g): after a completed login the Gateway writes its own log as `<profile dir>/ibgateway.<yyyymmdd>.<hhmmss>.ibgzenc`, encrypted by IBKR, and the `ibgateway.*.log` name the mirror looks for was not seen, so `ibgateway.current.log` was not written (2026-11-15/16 UTC, L03) |
 | `events/.seq`, `events/.lock`, `jts/.mirror/` | internal | not part of the contract |
 
 Every `*.jsonl` and `*.log` file above is size-capped: before a line would take it past

@@ -241,10 +241,11 @@ removing a file of the base layer is a change of its own.
 
 Read [limitations.md](limitations.md) in full; the points an auditor should not miss:
 
-- **No release has completed a real login yet.** The one real attempt reached IBKR's
-  "Unrecognized Username or Password" dialog. The patterns for the second factor, a completed
-  login, the daily restart and a competing session are unconfirmed (L01 to L03), and no test
-  in CI ever logs in (L04).
+- **Only fresh paper logins have been observed.** The published `stable` (10.50.1g) and
+  `latest` (10.52.1d) images completed real paper logins and passed the qualification on
+  2026-11-16, run by hand outside CI (L16). The patterns for the second factor, the daily
+  restart and a competing session are unconfirmed (L01), no session has run through a daily
+  restart or a weekly re-authentication, and no test in CI ever logs in (L04).
 - **This is not an IBKR-supported way to run IB Gateway.** IB Gateway is a desktop
   application with a login window; this image runs it under a virtual display and lets IBC
   type the credentials. IBKR can change the window in any release, and the upstream of IBC is
