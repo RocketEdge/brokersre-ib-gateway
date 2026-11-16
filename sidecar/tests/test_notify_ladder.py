@@ -392,6 +392,67 @@ def test_an_attempt_in_flight_when_the_sidecar_stopped_counts_as_not_delivered()
     assert kinds(run(after, {AlertClass.NEEDS_HUMAN: ACTIVE}, 5)) == [("needs_human", "firing")]
 
 
+def test_a_hand_over_keeps_its_successor_on_the_immediate_path() -> None:
+    engine = ladder()
+    run(engine, {AlertClass.LOGIN_STALLED: ACTIVE}, 0)
+    handed_over = Evaluation(Condition.INACTIVE, superseded_by=AlertClass.GATEWAY_STOPPED)
+    (closing,) = run(engine, {AlertClass.LOGIN_STALLED: handed_over}, 5)
+    assert (closing.kind, closing.superseded_by) == (
+        MessageKind.RESOLVED,
+        AlertClass.GATEWAY_STOPPED,
+    )
+
+
+def test_a_late_resolution_keeps_its_hand_over() -> None:
+    engine = ladder()
+    (firing,) = engine.step({AlertClass.LOGIN_STALLED: ACTIVE}, at(0))
+    handed_over = Evaluation(Condition.INACTIVE, superseded_by=AlertClass.GATEWAY_STOPPED)
+    assert engine.step({AlertClass.LOGIN_STALLED: handed_over}, at(5)) == []
+    engine.record_result(firing, delivered=True, now=at(6))
+    (resolved,) = engine.step({AlertClass.LOGIN_STALLED: INACTIVE}, at(7))
+    assert resolved.superseded_by is AlertClass.GATEWAY_STOPPED
+
+
+def test_an_earlier_escalation_still_resolves_the_pager_when_an_announcement_retry_is_out() -> None:
+    engine = ladder()
+    (firing,) = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(0))
+    engine.record_result(firing, delivered=False, now=at(1))
+    retry, escalation = engine.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    assert [(retry.kind, retry.attempt), (escalation.kind, escalation.attempt)] == [
+        (MessageKind.FIRING, 2),
+        (MessageKind.ESCALATION, 1),
+    ]
+    engine.record_result(escalation, delivered=True, now=at(601))  # the pager opened one
+    assert engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(602)) == []  # retry still out
+    engine.record_result(retry, delivered=False, now=at(603))
+    (resolved,) = engine.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(604))
+    assert resolved.channels == ("teams", "pagerduty", "telegram")
+
+
+def test_an_escalation_out_when_the_sidecar_stopped_is_resolved_on_the_pager_after_restart() -> (
+    None
+):
+    before = ladder()
+    run(before, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
+    (escalation,) = before.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    assert escalation.kind is MessageKind.ESCALATION  # out when the sidecar stops
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    (resolved,) = run(after, {AlertClass.TWOFA_PENDING: INACTIVE}, 605)
+    assert resolved.channels == ("teams", "pagerduty", "telegram")
+
+
+def test_a_clearing_waiting_on_an_escalation_resolves_the_pager_after_restart() -> None:
+    before = ladder()
+    run(before, {AlertClass.TWOFA_PENDING: ACTIVE}, 0)
+    before.step({AlertClass.TWOFA_PENDING: ACTIVE}, at(600))
+    assert before.step({AlertClass.TWOFA_PENDING: INACTIVE}, at(601)) == []
+    after = ladder()
+    after.import_state(json.loads(json.dumps(before.export_state())))
+    (resolved,) = run(after, {AlertClass.TWOFA_PENDING: INACTIVE}, 605)
+    assert resolved.channels == ("teams", "pagerduty", "telegram")
+
+
 def test_an_announcement_in_flight_when_the_sidecar_stopped_is_resolved_if_it_cleared() -> None:
     # Whether the message reached anyone is unknown after a restart. A "resolved" that
     # nobody needed is harmless; an open incident that is never closed is not.
