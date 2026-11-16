@@ -97,5 +97,8 @@ Watching the releases is the other way to be told, without running anything:
   reported exit 2, not "up to date". The raw request is one request and went through. The
   PowerShell wrapper passed all three exit statuses through under Windows PowerShell 5.1 and
   PowerShell 7.
+- Against this repository's registry, in the paper sessions of 2026-11-15/16 UTC:
+  `--container` on a gateway running a published image answered `up-to-date`, exit 0
+  ([limitations](limitations.md), L27).
 - Not tested: the crontab line and the `schtasks` registration on a real schedule, a private
-  registry, and `shasum` in place of `sha256sum`.
+  registry, a mirror, and `shasum` in place of `sha256sum`.

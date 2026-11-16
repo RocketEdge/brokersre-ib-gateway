@@ -37,9 +37,10 @@ One of two things, both reported by the gateway itself:
 
 - Do not remove the memory limit to silence the alert: the pressure then moves to the host
   and to everything else on it.
-- Do not set the heap as large as the limit: the Gateway needs memory beyond its heap. How
-  much a logged-in Gateway needs has not been measured with this image
-  ([limitations](../../limitations.md), L13).
+- Do not set the heap as large as the limit: the Gateway needs memory beyond its heap.
+  Without load (short paper sessions, test clients only) a logged-in Gateway used a working
+  set of 459 to 494 MB and a JVM RSS of 544 to 608 MB; how much it needs under load has not
+  been measured with this image ([limitations](../../limitations.md), L13).
 
 ## When it clears
 
