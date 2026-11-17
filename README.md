@@ -1094,7 +1094,7 @@ The build is [Build the image](#build-the-image) (`scripts/build-image.sh`, `.ps
 options in short: `--channel stable|latest`, `--strict`, `--installer FILE`,
 `--platform linux/amd64|linux/arm64`, `--tag NAME`, `--no-smoke` (skip the offline IBC test),
 `--cache-dir DIR`, `--print-plan`, `--help`. Exit codes: `0` built, `1` download, check, build
-or smoke test failed, `2` usage, `3` IBKR unreachable and nothing usable cached, `4` `--strict`
+or smoke test failed, `2` usage, `3` IBKR unreachable and no usable cached installer, `4` `--strict`
 and IBKR serves another version. The decision is
 [ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the interface is in
 [the spec](docs/specs/2026-11-17-private-image-public-recipe.md).

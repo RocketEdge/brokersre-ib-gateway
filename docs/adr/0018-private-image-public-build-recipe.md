@@ -47,7 +47,8 @@ curl and jq); the wrappers run `docker buildx build` and the offline IBC smoke t
 
 - IBKR serves the pinned version and the installer has the pinned SHA-256 (the label
   `com.rocketedge.brokersre.qualified=yes`); or
-- by default, IBKR serves another version: the installer is downloaded over HTTPS, IBKR's
+- by default, IBKR serves another version (newer, or older when IBKR rolls a channel back):
+  the installer is downloaded over HTTPS (redirects too), IBKR's
   `version.json` must be the same before and after the download (retried once when it
   changed), the installer's own stamp must equal it, and the Dockerfile checks the installed
   stamp and version again (`fetch-installer.sh --check-stamp`); the image is labelled
@@ -55,11 +56,16 @@ curl and jq); the wrappers run `docker buildx build` and the offline IBC smoke t
 - or the user supplied the installer (`--installer`): its stamp names the version, channel
   and architecture; its SHA-256 is recorded.
 
-Every accepted installer is cached by version with its SHA-256; with IBKR unreachable the
-cached pin is built, else (without `--strict`) the newest cached version of the channel, else
-the build exits 3. The image carries `com.rocketedge.brokersre.ibkr.version`,
-`.ibkr.build_stamp`, `.installer.sha256` (per platform) and `.qualified`. The bake path passes
-the pinned stamp too, so CI and publish builds get the same post-install check.
+Every accepted installer is cached by version and SHA-256 with its source (`ibkr`,
+`installer`, or `override` for the tests' server). A cached version other than the pin is
+reused only from the origin the build talks to, so bytes a user gave with `--installer` never
+stand in for IBKR's; they serve only as the pin, when their SHA-256 is the pin's. With IBKR
+unreachable the cached pin is built, else (without `--strict`) the newest cached version of
+the channel that came from IBKR, else the build exits 3 (no usable cached installer). The image
+carries `com.rocketedge.brokersre.ibkr.version`, `.ibkr.build_stamp`, `.installer.sha256` (per
+platform), `.installer.source` and `.qualified`. The bake path passes the pinned stamp too, so
+CI and publish builds get the same post-install check. The wrappers never overwrite or remove
+an installer the user keeps in `downloads/`.
 
 **Amends ADR 0007.** "IBKR binaries never redistributed from here" now covers the image: no
 public image once Phase 4 is done. The private archive stays RocketEdge's; a public user

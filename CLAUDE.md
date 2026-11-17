@@ -7,7 +7,7 @@ derived from gnzsnz/ib-gateway-docker and consumed by RocketEdge BrokerSRE. This
 ## THE COMMANDS
 
 ```bash
-scripts/build-image.sh [--channel stable|latest] [--strict] [--installer FILE] [--platform linux/amd64|linux/arm64] [--tag NAME] [--no-smoke] [--cache-dir DIR] [--print-plan]   # THE build (only Docker needed; ADR 0018): exit 0 built, 1 failed, 2 usage, 3 IBKR unreachable + nothing cached, 4 --strict and IBKR serves another version; last 7 stdout lines `key: value`
+scripts/build-image.sh [--channel stable|latest] [--strict] [--installer FILE] [--platform linux/amd64|linux/arm64] [--tag NAME] [--no-smoke] [--cache-dir DIR] [--print-plan]   # THE build (only Docker needed; ADR 0018): exit 0 built, 1 failed, 2 usage, 3 IBKR unreachable and no usable cached installer, 4 --strict and IBKR serves another version; last 7 stdout lines `key: value`
 pwsh -NoProfile -File scripts/build-image.ps1 [-Channel ...] [-Strict] [-Installer FILE] [-Platform ...] [-Tag ...] [-NoSmoke] [-CacheDir DIR] [-PrintPlan]   # the same from PowerShell 7 or Windows PowerShell 5.1
 pwsh -NoProfile -Command "Invoke-Pester scripts/tests" ; powershell -NoProfile -Command "Invoke-Pester scripts/tests"   # build-image.ps1, Pester 6.2.0, both editions (docker mocked)
 pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # 0 findings
@@ -182,8 +182,17 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - The build helper runs as the calling user on Linux (`--user uid:gid`, so the cache and
   `downloads/` stay the user's) and creates the cache directory before mounting it (Docker
   would create a missing one as root). It writes into `downloads/` only for the duration of a
-  build. `build-image.sh` must stay bash 3.2-safe (macOS): no empty-array expansion under
-  `set -u`, no `${x,,}`, no `mapfile`.
+  build, and never touches a file that was there before (same bytes: used and kept,
+  `context_owned: no`; other bytes: exit 1). `build-image.sh` must stay bash 3.2-safe (macOS):
+  no empty-array expansion under `set -u`, no `${x,,}`, no `mapfile`.
+- The helper's cache is keyed by version AND SHA-256 (`installers/<v>/<arch>/<sha256>/`) and
+  records each entry's source (`ibkr`, `installer`, `override`); a non-pinned version is reused
+  only from the origin of the current run, so a test server's or a user's bytes never stand in
+  for IBKR's (review of #39). Every trust check has a bats test that fails when the check is
+  weakened; when you touch `resolve-installer.sh`, mutate the check you changed and watch a
+  test fail (the review's ten mutations are listed in `docs/changes.md`). Redirects must lead
+  to HTTPS also under `BROKERSRE_TEST_IBKR_BASE_URL`; a docker failure of the helper run
+  (125-127) is exit 1.
 - PowerShell's parameter binder ends a script with exit 1 before it runs when a parameter is
   given without its value; `build-image.ps1` therefore parses `$args` itself to keep exit 2
   for usage errors. In Pester, `$script:` inside a function defined in `BeforeAll` does not

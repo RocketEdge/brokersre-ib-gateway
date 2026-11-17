@@ -330,7 +330,13 @@ function Invoke-BuildImage {
     if ($settings.Installer -ne '') { $resolve += @('--installer', ('/installer/' + (Split-Path -Leaf $installerPath))) }
     if ($settings.PrintPlan) { $resolve += '--print-plan' }
     $resolved = Invoke-BiDockerCapture -ArgumentList ($helperPrefix + $resolve)
-    if ($resolved.ExitCode -ne 0) { return [int]$resolved.ExitCode }
+    if (@(1, 2, 3, 4) -contains $resolved.ExitCode) { return [int]$resolved.ExitCode }
+    if ($resolved.ExitCode -ne 0) {
+        # Not the helper's answer: docker itself failed (125 daemon or mount error, 126/127 the
+        # command could not run). The contract has no such code; it is a failed build.
+        Write-BiMessage -Message ('the helper container did not run (docker exit {0})' -f $resolved.ExitCode)
+        return 1
+    }
     $plan = @($resolved.Lines)
 
     $version = Get-BiPlanValue -Plan $plan -Key 'version'
@@ -365,7 +371,10 @@ function Invoke-BuildImage {
         }
     }
     finally {
-        if ($contextFile -ne '' -and (Test-Path -LiteralPath $contextPath)) { Remove-Item -LiteralPath $contextPath -Force }
+        # Only the installer this run put into downloads/; a file that was there before (the
+        # user's, context_owned: no) is never removed.
+        $owned = (Get-BiPlanValue -Plan $plan -Key 'context_owned') -eq 'yes'
+        if ($owned -and $contextFile -ne '' -and (Test-Path -LiteralPath $contextPath)) { Remove-Item -LiteralPath $contextPath -Force }
     }
 
     if ($settings.Smoke) {

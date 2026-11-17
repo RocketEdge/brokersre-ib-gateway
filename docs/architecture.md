@@ -36,13 +36,13 @@ flowchart TB
   vj["versions.json: pin, build_datetime, SHA-256"] --> resolve
   vjson["IBKR channel version.json"] --> resolve
   resolve -->|"IBKR serves the pin"| pin["cache or download; SHA-256 must equal the pin<br/>qualified=yes"]
-  resolve -->|"IBKR serves another version"| ff["--strict: exit 4<br/>else cache (same stamp) or download;<br/>version.json equal before and after (one retry);<br/>installer stamp equals it; qualified=no"]
+  resolve -->|"IBKR serves another version"| ff["--strict: exit 4<br/>else cache (same stamp, same origin) or download (HTTPS, redirects too);<br/>version.json equal before and after (one retry);<br/>installer stamp equals it; qualified=no"]
   resolve -->|"--installer FILE"| own["stamp in the installer names version, channel, arch;<br/>SHA-256 recorded; qualified only if both equal the pin"]
-  resolve -->|"IBKR unreachable"| off["cached pin, else newest cached version of the channel<br/>(not with --strict), else exit 3"]
-  pin & ff & own & off --> ctx["installer -> downloads/ of the build context<br/>plan + build arguments -> the wrapper"]
-  ctx --> build["docker buildx build --load<br/>Dockerfile: SHA-256 check, install, --check-stamp<br/>labels ibkr.version, ibkr.build_stamp, installer.sha256, qualified"]
+  resolve -->|"IBKR unreachable"| off["cached pin (its SHA-256), else newest cached version of the channel<br/>from the same origin (not with --strict), else exit 3"]
+  pin & ff & own & off --> ctx["installer -> downloads/ of the build context (a file the user keeps there is never<br/>overwritten or removed); plan + build arguments -> the wrapper"]
+  ctx --> build["docker buildx build --load<br/>Dockerfile: SHA-256 check, install, --check-stamp<br/>labels ibkr.version, ibkr.build_stamp, installer.sha256, installer.source, qualified"]
   build --> smoke["tests/container/run.sh --only ibc-smoke<br/>(.ps1: in the helper container via the Docker socket)"]
-  smoke --> accept["resolve-installer.sh accept: installer -> cache/installers/&lt;version&gt;/&lt;arch&gt;/<br/>warning when not qualified; summary lines"]
+  smoke --> accept["resolve-installer.sh accept: installer -> cache/installers/&lt;version&gt;/&lt;arch&gt;/&lt;sha256&gt;/ with its source<br/>warning when not qualified; summary lines"]
   accept --> out["last lines: version, channel, qualified_by_project,<br/>installer_sha256, ibkr_build_stamp, image, image_id"]
 ```
 

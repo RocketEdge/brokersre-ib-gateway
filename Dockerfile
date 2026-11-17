@@ -72,6 +72,10 @@ ARG IB_GATEWAY_BUILD_STAMP
 # "yes" only when the version and the installer's SHA-256 are the pins of versions.json (the
 # bake targets, or scripts/build-image.sh on the pinned build); anything else is "no".
 ARG IB_GATEWAY_QUALIFIED=no
+# Where the installer's bytes came from: ibkr (IBKR's channel URL; the bake targets, and the
+# build helper's downloads), installer (a file given with --installer), override (a test
+# server, BROKERSRE_TEST_IBKR_BASE_URL); unknown when a build passes nothing.
+ARG IB_GATEWAY_INSTALLER_SOURCE=unknown
 ARG IBC_VERSION
 ARG IBC_RELEASE_TAG
 ARG TARGETARCH
@@ -159,6 +163,7 @@ LABEL org.opencontainers.image.title="brokersre-ib-gateway" \
       com.rocketedge.brokersre.ibkr.version="${IB_GATEWAY_VERSION}" \
       com.rocketedge.brokersre.ibkr.build_stamp="${IB_GATEWAY_BUILD_STAMP}" \
       com.rocketedge.brokersre.qualified="${IB_GATEWAY_QUALIFIED}" \
+      com.rocketedge.brokersre.installer.source="${IB_GATEWAY_INSTALLER_SOURCE}" \
       com.rocketedge.brokersre.ibc.version="${IBC_VERSION}" \
       com.rocketedge.brokersre.ibc.release="${IBC_RELEASE_TAG}"
 
