@@ -380,7 +380,8 @@ bytes for arm64, measured 2026-11-17). Where it is:
 |---|---|
 | `scripts/build-image.sh` on Linux, macOS, WSL | `${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway` |
 | `scripts/build-image.sh` in Git Bash on Windows | `%USERPROFILE%\.cache\brokersre-ib-gateway` (Git Bash's `~`) |
-| `scripts/build-image.ps1`, and the Windows kit's `setup.ps1` | `%LOCALAPPDATA%\brokersre-ib-gateway` |
+| `scripts/build-image.ps1`, and the Windows kit's `setup.ps1` with Docker Desktop | `%LOCALAPPDATA%\brokersre-ib-gateway` |
+| the Windows kit's `setup.ps1` with Docker Engine in WSL (option B) | `~/.cache/brokersre-ib-gateway` of the distribution's user (setup runs `build-image.sh` there) |
 | either script with `--cache-dir DIR` (`-CacheDir DIR`) | `DIR` |
 
 So on Windows the bash and the PowerShell script keep two caches. Inside, an entry is a
