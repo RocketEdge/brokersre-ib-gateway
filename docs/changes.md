@@ -5,6 +5,39 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Build polish: stopped Docker, shell proxies, OCI labels, host paths
+
+- **What changed:** both build wrappers ask the daemon for its version before anything else
+  and, when it does not answer, say "the Docker daemon is not reachable" with the Docker
+  context (exit 1). They pass `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lower-case
+  forms, when set, to the helper container (`-e NAME`) and to the build (`--build-arg NAME`),
+  names only. A helper build is labelled `org.opencontainers.image.created` (UTC, to the
+  second) and `.revision` (the commit, `unknown` outside a git work tree), and the
+  Dockerfile's `org.opencontainers.image.url` points at the README's "Build the image". The
+  helper's messages name the cache and the `--installer` file by the host's paths
+  (`BROKERSRE_HOST_CACHE`, `BROKERSRE_HOST_INSTALLER`), not by its mounts.
+- **Result:** red first for each, in bats and Pester (daemon down with and without
+  `--platform`; proxy values in the helper's environment and names in the build arguments, no
+  value in any call or output; created and revision labels; host paths in three messages). End
+  to end on Windows 11, Docker 29.9.3: through a local Squid proxy with a user name and
+  password in the shell's proxy URL and a fresh BuildKit builder, `build-image.sh` built
+  10.50.1h in 6 min 15 s; Squid logged 263 requests (IBKR, Ubuntu's archives, GitHub), and the
+  password was in neither the output nor `docker history --no-trunc` nor `docker image
+  inspect`; the full container suite passed on that image (89 checks, incl. the new OCI label
+  check, which failed on the image built before). From a fresh clone, cache hits: the `.sh`
+  build in 1 min 13 s and the `.ps1` build (PowerShell 7) in 1 min 6 s, both labelled with
+  the commit, both smoke tests passed. With `DOCKER_HOST=tcp://127.0.0.1:1` both wrappers say
+  the daemon is not reachable, exit 1; offline `--strict` with an empty cache names the cache
+  as `/c/Users/.../empty cache` (Git Bash) and `C:\Users\...\empty cache` (PowerShell), exit 3.
+- **What did NOT work / root cause:** the first real Git Bash build labelled a clone with
+  revision `unknown`: the script exports `MSYS_NO_PATHCONV=1` for docker's container paths, so
+  `git -C /c/...` got a POSIX path Windows git cannot open; it now runs `git rev-parse HEAD`
+  inside the checkout (a stand-in git in bats guards it; Linux never showed it). A Bash
+  heredoc on this host halved the backslashes of a new test line, which then compared against
+  `\${NEWER_X64}` unexpanded; the line was rewritten with the Edit tool and `bs='\'`.
+- **Next step:** a proxy that requires authentication (Squid here accepted the credentials
+  without checking them) and a real corporate proxy remain untested.
+
 ### 2026-11-17 — Re-review of #41: no credentials in the WSL copy or the build context
 
 - **What changed:** the Windows kit's WSL build packs a named list of what

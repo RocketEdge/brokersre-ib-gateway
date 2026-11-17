@@ -567,3 +567,14 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   check does not see it. `docker run` lines with `-v`/`-e`/`-w` container paths (in
   `docs/evidence.md`, and the bats-in-the-image line of this file) need
   `MSYS_NO_PATHCONV=1` in Git Bash.
+- Build wrappers (`scripts/build-image.sh`, `.ps1`): a value that may hold a secret (a proxy
+  URL) travels to Docker by name only, `-e NAME` and `--build-arg NAME`, so it is in no
+  argument list and no output; proxy names are predefined build arguments, which Docker keeps
+  out of `docker history` and the image configuration unless the Dockerfile declares them
+  (it must not: `build-image.bats` checks). Probe the daemon with `docker version --format
+  '{{.Server.Version}}'` before anything else (`buildx version` answers without a daemon) and
+  do not echo Docker's error (it can carry `DOCKER_HOST`). The helper names host paths, not
+  its mounts: a new message about the cache or the `--installer` file goes through `shown`
+  (`BROKERSRE_HOST_CACHE`, `BROKERSRE_HOST_INSTALLER`). A test string with a backslash goes
+  in through the Edit tool or `bs='\'`: a Bash heredoc on this host halves backslashes, and
+  `"\${X}"` then stops expanding.

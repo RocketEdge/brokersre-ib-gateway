@@ -300,9 +300,18 @@ Windows), next to the keys already there:
 }
 ```
 
-and the same proxy into the daemon's settings. **`HTTPS_PROXY` set in your shell does not
-reach the build**: the script does not pass it into the helper container (checked: with
-`HTTPS_PROXY` pointing at a closed port the helper still reached IBKR directly).
+and the same proxy into the daemon's settings. **Or set it in your shell**: when
+`HTTPS_PROXY`, `HTTP_PROXY` or `NO_PROXY` (or their lower-case forms) are set, both scripts pass
+them to the helper container and to the build, where they take precedence over `config.json`.
+Only their names are on Docker's command line: the values, which may hold a user name and
+password, are not printed, and Docker keeps these build arguments out of `docker history` and
+the image's configuration. The daemon still takes its own proxy for pulls.
+
+Checked on 2026-11-17 with the shell variables and a local Squid proxy, with a user name and
+password in the proxy URL and a fresh BuildKit builder (so every step ran): the proxy logged
+all 263 requests of `scripts/build-image.sh` (IBKR's `version.json` and installer, Ubuntu's
+archives, IBC from GitHub), the build passed its smoke test, and the password was in neither
+the script's output, nor `docker history --no-trunc`, nor `docker image inspect`.
 
 Checked on 2026-11-17 with a local Squid proxy standing in for a corporate one: with
 `proxies` in `config.json`, `scripts/build-image.sh --print-plan` reached IBKR through it (the
@@ -438,7 +447,9 @@ What a build used is written down in three places:
 
 - **The image's labels**: `com.rocketedge.brokersre.ibkr.version`, `.ibkr.channel`,
   `.ibkr.build_stamp`, `.installer.sha256`, `.installer.source` (`ibkr` or `installer`),
-  `.qualified`, `.ibc.version`, `.ibc.release`.
+  `.qualified`, `.ibc.version`, `.ibc.release`, and the OCI labels
+  `org.opencontainers.image.revision` (the commit you built from, `unknown` outside a git
+  clone) and `org.opencontainers.image.created` (the build time, UTC).
 - **[versions.json](versions.json)** of the commit you built from: the Ubuntu base image by
   digest, IBC by release and SHA-256, and the pinned Gateway versions with their SHA-256 and
   build stamps. The helper image is pinned by digest in `scripts/build-helper/Dockerfile`.
@@ -668,8 +679,7 @@ leave it out, or name the copy in your own registry. Details:
 | `build-image: ... needs a value`, `unknown option` | 2 | A typing error | `scripts/build-image.sh --help` |
 | `IBKR is unreachable (...version.json), and no installer of the stable channel (x64) is in the cache` | 3 | No connection to IBKR and nothing cached | Check the connection or the [proxy](#behind-a-corporate-proxy); or build with `--installer` |
 | `--strict: IBKR's stable channel serves 10.50.1h; versions.json pins 10.50.1g` | 4 | `--strict` and IBKR moved on | Build without `--strict` and qualify the image, or use the cache |
-| `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running` (Windows), `Cannot connect to the Docker daemon` (Linux, macOS) | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it) | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group |
-| PowerShell, below Docker's line above: `the Docker host's architecture '' is not supported; pass -Platform` | 1 | The same: the script could not ask the daemon for its architecture | Start Docker Desktop (passing `-Platform` does not help) |
+| `the Docker daemon is not reachable (Docker context 'desktop-linux')` | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it); with `DOCKER_HOST is set`, that address does not answer | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group; check `docker context ls` and `DOCKER_HOST` |
 | `docker buildx is required` | 1 | Docker without the buildx plugin (an old Docker Engine) | Install `docker-buildx-plugin` from Docker's repository, or Docker Desktop |
 | `no space left on device` in the build output | 1 | The Docker disk is full (Docker Desktop: its virtual disk) | `docker builder prune`, `docker image prune`; Docker Desktop: Settings, Resources, Disk usage limit |
 | `$'\r': command not found` or `/usr/bin/env: 'bash\r'` | 1 | The scripts have Windows line endings: the files were copied or edited with a tool that wrote CRLF (a clone keeps LF, `.gitattributes` says so) | Clone again with git; do not convert the files |
