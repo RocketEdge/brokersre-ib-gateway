@@ -5,6 +5,41 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #43: malformed proxy values refused, every proxy value masked
+
+- **What changed:** both wrappers check every set proxy variable before anything runs (no
+  docker call). `HTTPS_PROXY`, `HTTP_PROXY` and their lower-case forms must be
+  `scheme://[user[:password]@]host[:port][/]`: scheme http, https, socks4, socks4a, socks5 or
+  socks5h; a host name, an IPv4 address or an IPv6 address in brackets; port 1 to 65535; in
+  the user information only RFC 3986's unreserved and sub-delims characters, the rest
+  percent-encoded; no whitespace. `NO_PROXY` and `no_proxy` must hold no control character. A
+  failure exits 2 and names the variable, never its value. The helper's `hide_proxy_values`
+  replaces each proxy value (as written and percent-decoded), its `user:password` and its
+  password with `***` in curl's errors, then applies the old URL pattern. README: the accepted
+  form, the percent-encoding rule, a troubleshooting row; both contract files.
+- **Result:** red first. bats: the reviewer's four values (no scheme; a `/`, a space, a second
+  `@` in the password) and six more (scheme, ports 0 and 65536, no host, a broken escape, a
+  final line break), each as `HTTPS_PROXY` and `http_proxy`, exited 0 instead of 2; a tab in
+  `NO_PROXY` likewise; the helper showed `Unsupported proxy syntax in '...'` with the
+  password; a stand-in curl quoting the decoded value, `user:password` and the password leaked
+  all three. Pester: 11 failing. Then green: `build-image.bats` 72/72 on Linux, Pester 62/62
+  in PowerShell 7 and 5.1; the bash and PowerShell checks agree on 23 further edge cases. End
+  to end: the real wrapper with a space in the password exited 2 with the name only; through
+  Squid (fresh docker-container builder, helper image removed, percent-encoded password in all
+  four variables) the build passed its smoke test in 211 s, Squid logged 262 requests
+  (Alpine, IBKR, Ubuntu's archives, GitHub), the password was in neither the output nor
+  `docker history`/`inspect`, and the two named build records held it four times each until
+  removed.
+- **What did NOT work / root cause:** the previous round masked `://user:password@` with a
+  pattern and tested it with a value of exactly that shape. The values curl cannot parse are
+  the ones whose shape differs, and curl quotes them in full. A pattern cannot know which part
+  is the password; the values themselves can. Masking only covered the helper: the
+  Dockerfile's apt-get and curl received the same values, which only the check up front keeps
+  out.
+- **Next step:** proxies from Docker's `config.json` reach the build without passing the
+  wrappers, so they are not checked; `ALL_PROXY` is not forwarded. A proxy that requires
+  authentication, and a real corporate proxy, remain untested.
+
 ### 2026-11-17 — An unchanged rebuild keeps its image id: deterministic `created`, no provenance
 
 - **What changed:** both wrappers label `org.opencontainers.image.created` with the checkout's

@@ -588,8 +588,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   argument's value (`docker buildx history inspect`, `history export`, Docker Desktop's Builds
   view) until `docker buildx history rm <ref>`: the wrappers name those records when a proxy
   value holds `@` (`--metadata-file`, deleted at once). The helper image's build gets the
-  proxy names too (its `apk add`), and the helper's curl errors are shown with `//user:pw@`
-  redacted. PowerShell 5.1 turns a trailing backslash before its closing quote into an
+  proxy names too (its `apk add`). curl quotes a proxy value it cannot parse in full, so the
+  wrappers refuse a malformed one before anything runs (exit 2, the name only;
+  `proxy_url_valid` and `Test-BiProxyUrl` must accept the same values), and the helper's
+  `hide_proxy_values` masks each value as written and decoded, its `user:password` and its
+  password in curl's errors; never match proxy URLs with a pattern alone. PowerShell 5.1 turns a trailing backslash before its closing quote into an
   escaped quote: no argument may end in a separator (`ConvertTo-BiTrimmedPath`). Probe the
   daemon with `docker version --format '{{.Server.Version}}'` before anything else (`buildx
   version` answers without a daemon) and do not echo Docker's error (it can carry

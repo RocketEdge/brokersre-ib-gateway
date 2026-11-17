@@ -309,6 +309,15 @@ and the same proxy into the daemon's settings. **Or set it in your shell**: when
 them to the helper image's build, the helper container and the image build, where they take
 precedence over `config.json`. The daemon still takes its own proxy for pulls.
 
+- **The form the scripts accept**: `scheme://[user[:password]@]host[:port][/]`, the scheme
+  `http`, `https`, `socks4`, `socks4a`, `socks5` or `socks5h`, the host a name, an IPv4 address
+  or an IPv6 address in brackets, the port 1 to 65535. In a user name or password,
+  **percent-encode** every character other than letters, digits and `-._~!$&'()*+,;=`: `@` is
+  `%40`, `/` is `%2F`, `:` (in a user name) is `%3A`, `%` is `%25`, `#` is `%23`, `?` is `%3F`, a
+  space is `%20`; for example `http://alice:p%40ss%2Fword@proxy.example.com:3128`. Anything
+  else stops the script before it runs anything, with exit 2 and the variable's name, never its
+  value: curl and apt quote a value they cannot read in their errors, password included.
+  `NO_PROXY` is a comma-separated list of hosts and must not hold a tab or a line break.
 - **Where a proxy's password ends up.** Only the variables' names are on Docker's command
   line, and the scripts print no value. The image keeps none either (`docker history`, the
   image's configuration). But **Docker's build records keep every build argument**, so a
@@ -331,7 +340,9 @@ too): the proxy logged every request of `scripts/build-image.sh` (Alpine's index
 helper, IBKR, Ubuntu's archives, IBC from GitHub), the build passed its smoke test, and the
 password was in neither the script's output, nor `docker history --no-trunc`, nor `docker
 image inspect`. It was in the two build records the script named at the end (four times
-each), until `docker buildx history rm` with those two refs deleted them.
+each), until `docker buildx history rm` with those two refs deleted them. The helper also
+replaces every proxy value, as written and percent-decoded, its `user:password` part and its
+password, with `***` in curl's error messages.
 
 Checked on 2026-11-17 with a local Squid proxy standing in for a corporate one: with
 `proxies` in `config.json`, `scripts/build-image.sh --print-plan` reached IBKR through it (the
@@ -717,6 +728,7 @@ leave it out, or name the copy in your own registry. Details:
 | `IBKR's stable channel changed during the download again` | 1 | IBKR published a build while the script downloaded, twice | Run again |
 | `the image build failed; nothing was cached` or `the IBC smoke test failed` | 1 | Docker's build or the offline IBC test failed; the lines above say which step | Read the lines above; see the rows below for disk and network |
 | `build-image: ... needs a value`, `unknown option` | 2 | A typing error | `scripts/build-image.sh --help` |
+| `HTTPS_PROXY is not a valid proxy URL (expected scheme://host:port; ...)` | 2 | The proxy variable is not `scheme://[user[:password]@]host[:port]`, or its user name or password holds `@`, `/`, a space or another character that must be percent-encoded | Fix the variable as in [Behind a corporate proxy](#behind-a-corporate-proxy) (`@` is `%40`, `/` is `%2F`, a space is `%20`) |
 | `IBKR is unreachable (...version.json), and no installer of the stable channel (x64) is in the cache` | 3 | No connection to IBKR and nothing cached | Check the connection or the [proxy](#behind-a-corporate-proxy); or build with `--installer` |
 | `--strict: IBKR's stable channel serves 10.50.1h; versions.json pins 10.50.1g` | 4 | `--strict` and IBKR moved on | Build without `--strict` and qualify the image, or use the cache |
 | `the Docker daemon is not reachable (Docker context 'desktop-linux')` | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it); with `DOCKER_HOST is set`, that address does not answer | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group; check `docker context ls` and `DOCKER_HOST` |
