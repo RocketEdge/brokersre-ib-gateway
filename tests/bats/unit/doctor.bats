@@ -1290,16 +1290,18 @@ record_rejection() {
 }
 
 @test "the TCP probe is true for a listening local port and false for a closed one" {
-  socat TCP-LISTEN:47631,bind=127.0.0.1,fork,reuseaddr /dev/null >/dev/null 2>&1 3>&- &
+  # Both ports below 32768, outside Linux's ephemeral range: no earlier client can hold the
+  # listener's port, and the connect to the closed one never gets it as its own source port.
+  socat TCP-LISTEN:17631,bind=127.0.0.1,fork,reuseaddr /dev/null >/dev/null 2>&1 3>&- &
   LISTENER_PID=$!
   for _ in $(seq 1 50); do
-    if fn doctor_tcp_connect 127.0.0.1 47631; then break; fi
+    if fn doctor_tcp_connect 127.0.0.1 17631; then break; fi
     sleep 0.1
   done
-  run fn doctor_tcp_connect 127.0.0.1 47631
+  run fn doctor_tcp_connect 127.0.0.1 17631
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  run fn doctor_tcp_connect 127.0.0.1 47632
+  run fn doctor_tcp_connect 127.0.0.1 17632
   [ "$status" -ne 0 ]
   [ -z "$output" ]
 }

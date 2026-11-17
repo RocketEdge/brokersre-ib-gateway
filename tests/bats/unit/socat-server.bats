@@ -72,6 +72,19 @@ teardown() {
   [ "${reply}" == "alive" ]
 }
 
+@test "no unit suite uses a fixed port inside Linux's ephemeral range" {
+  # Hardening (review of #47): serve() takes port 0. A suite with a fixed listener port, or a
+  # port it expects to be closed, keeps it below 32768, where ip_local_port_range
+  # (32768-60999) never hands it to a client: no earlier client can hold it, and a connect to
+  # it never picks it as its own source port (a self-connection would look like a listener).
+  found="$(grep -o -n -E '(TCP-LISTEN:|PORT=|/dev/tcp/[^/" ]+/|127\.0\.0\.1[: ])[0-9]+' "${BATS_TEST_DIRNAME}"/*.bats |
+    awk -F'[^0-9]+' '{ if ($NF >= 32768 && $NF <= 60999) print }')"
+  if [ -n "${found}" ]; then
+    printf 'fixed ports inside 32768-60999:\n%s\n' "${found}"
+    false
+  fi
+}
+
 @test "a socat that cannot listen is reported at once, in its own words" {
   mkdir "${WORK}/bin"
   printf '%s\n' '#!/usr/bin/env bash' \
