@@ -245,10 +245,14 @@ Describe 'The gateway image on this computer' {
             $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false
             $result.Ran | Should -BeTrue
             $result.ExitCode | Should -Be 0
+            $inputs = @(
+                'Dockerfile', '.dockerignore', 'versions.json', 'rootfs', 'scripts/build-image.sh', 'scripts/resolve-installer.sh',
+                'scripts/fetch-installer.sh', 'scripts/build-helper', 'tests/container/run.sh'
+            ) -join '|'
             @($script:wslCalls) | Should -Be @(
                 '-d|Ubuntu-24.04|--exec|mktemp|-d I=False'
                 ('-d|Ubuntu-24.04|--exec|wslpath|-a|{0} I=False' -f $script:repositoryRoot)
-                '-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|-cf|/tmp/tmp.k1T/source.tar|Dockerfile|.dockerignore|versions.json|rootfs|scripts/build-image.sh|scripts/resolve-installer.sh|scripts/fetch-installer.sh|scripts/build-helper|tests/container/run.sh I=False'
+                ('-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|-cf|/tmp/tmp.k1T/source.tar|{0} I=False' -f $inputs)
                 '-d|Ubuntu-24.04|--exec|mkdir|/tmp/tmp.k1T/source I=False'
                 '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False'
                 '-d|Ubuntu-24.04|--exec|rm|-f|/tmp/tmp.k1T/source.tar I=False'
