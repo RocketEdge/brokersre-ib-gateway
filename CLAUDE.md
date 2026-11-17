@@ -17,11 +17,11 @@ docker buildx bake --print stable latest > /dev/null                 # bake defi
 docker buildx bake stable --set '*.platform=linux/amd64' --load      # maintainer build of the PINNED version (fails when IBKR moved past it and no archived copy is in downloads/)
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
 git clone --config core.autocrlf=false --config core.eol=lf --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image (core.eol too: bats-core says `* text=auto`)
-tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
+tests/bats/run-in-image.sh brokersre-ib-gateway:stable                                  # unit suite, inside the image (the image scripts/build-image.sh built)
 tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table, documented commands, build helper against a fake IBKR server, Dockerfile stamp check), on the host (needs jq; doc-commands.bats needs python3, zsh and sh; build-image.bats needs curl and python3; dockerfile-stamp.bats and bake-env.bats need Docker)
 scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json                     # VEX document valid (add Trivy `--pkg-types library --list-all-pkgs --format json` reports to compare)
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy, console override); offline
+IMAGE=brokersre-ib-gateway:stable tests/container/run.sh                                 # offline container tests (incl. the reference compose as shipped)
+IMAGE=brokersre-ib-gateway:stable tests/compose/run.sh                                   # compose files as shipped (several gateways, gateway + strategy, console override); offline
 tests/recipes/run.sh                                                                     # docs/recipes: vector validate, then an offline run against a stand-in receiver (needs only Docker)
 scripts/check-upgrade.sh --container <name>                                              # channel tag vs running digest; one JSON document; exit 0/10/2; asks only
 (cd examples/python && uv sync --locked && uv run ruff check . && uv run black --check . && uv run mypy && uv run pytest)
@@ -236,7 +236,7 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   once; and `pgrep -f <path>` inside `bash -c "..."` matches that very shell.
 - The unit suite reads the worktree live through a read-only mount: do not edit scripts or
   tests while it runs. Remove test containers by name, never by image.
-- A temporary image for local iteration (the published image plus `COPY rootfs/ /`) is enough
+- A temporary image for local iteration (an image you built plus `COPY rootfs/ /`) is enough
   for the unit and container suites; the full build from the Dockerfile is what CI proves.
 - A pattern row must be checked against every place IBC writes similar text, in its Java
   source and in `ibcstart.sh` (whose `echo` lines carry no timestamp and no `IBC:` prefix).
@@ -263,6 +263,22 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - `docker-compose.multi.yml`: `docker compose down` without the profiles stops nothing; `exec
   <service>` and `ps` work without them. Docker mounts a compose tmpfs `noexec`: run a script
   placed there with `bash <file>`.
+- No public image (ADR 0018): every shipped gateway service defaults to
+  `brokersre-ib-gateway:stable` with a literal `pull_policy: never` (a missing image fails with
+  "No such image" instead of a Docker Hub lookup; `pull --policy missing` and `up --pull
+  missing` override it, compose 5.7.0). Never interpolate `pull_policy`: compose validates the
+  key against its pattern even under `config --no-interpolate`, which
+  `sidecar/tests/test_docs.py` uses for every shipped file (the Windows kit's template keeps
+  the literal line and `ConvertTo-GwComposeText` replaces it with `missing` for a name with a
+  registry path). The Azure VM overlay (`apply-config.sh`) sets `pull_policy: missing` for the
+  digest its userData names. `setup.ps1` builds a missing `brokersre-ib-gateway:stable` or
+  `:latest` with `scripts/build-image.ps1` (`Invoke-GwImageBuild`); `start.ps1` never builds.
+- Proxies reach a build only through the Docker CLI's `config.json` (`proxies`): the CLI
+  passes them into the helper container and as build arguments; `HTTPS_PROXY` in the calling
+  shell is not forwarded by `build-image.sh`/`.ps1` (checked with a local Squid, 2026-11-17).
+  Windows PowerShell 5.1 drops inner double quotes of a native argument
+  (`--format '{{index .Config.Labels "x"}}'` fails); document `{{json .Config.Labels}}` with
+  `ConvertFrom-Json` for PowerShell.
 - `gitleaks dir examples` and markdownlint over `examples/**/*.md` also scan
   `examples/python/.venv` and the C# `bin`/`obj` folders: scan a clean checkout or a
   `git archive` export.

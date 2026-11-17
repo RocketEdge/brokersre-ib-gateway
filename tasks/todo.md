@@ -139,3 +139,14 @@
 - [x] D4 (`sidecar/README.md`, `docker compose run` without `-f`) fixed in pull request #32 (merged 2026-11-16)
 - [x] Review of #37: each secret block is one subshell with `trap 'stty echo; exit 130' INT`; tested pasted into interactive bash and zsh (bracketed paste off and on) and sh, and with Ctrl-C at the password prompt; bash 3.2 and busybox sh checked by hand in containers
 - [ ] Not covered: a run on a Mac (Terminal.app or iTerm2 with its own paste behaviour)
+
+## Private image, public build recipe: phase 2 (2026-11-17, branch `docs/build-recipe`, stacked on #39)
+
+- [x] README "Build the image": prerequisites per host, measured time and disk, one command per shell with its output, the seven result lines and `qualified_by_project: no`, latest channel, arm64 under emulation, proxies, cache and `--installer`, pinning, private registries, a CI example (actionlint), upgrade and rollback, troubleshooting; quick start starts with the build; verifying, notification and upgrade-check sections rewritten for a self-built image
+- [x] Compose files and the client example default to `brokersre-ib-gateway:stable` with `pull_policy: never` (tests in `tests/compose/run.sh`); the Azure VM overlay pulls its digest (`pull_policy: missing`)
+- [x] Windows kit: `setup.ps1` builds a missing `brokersre-ib-gateway:stable` or `:latest` with `scripts/build-image.ps1` (Pester under 5.1 and 7, one real build)
+- [x] Azure pack documents the operator's own registry; evidence, upgrade check, upgrade policy, SECURITY, NOTICE and the gnzsnz table no longer point at a public image
+- [ ] L37: give the Azure VM a registry login (`AcrPull` for its identity and a token exchange before the pull)
+- [ ] L38: an option to hand the build a CA bundle for a TLS-inspecting proxy
+- [ ] Report to #39 (not fixed here): the PowerShell wrapper says "architecture '' is not supported; pass -Platform" when Docker is not running; neither wrapper forwards `HTTPS_PROXY` from the shell; a helper build carries the base image's `org.opencontainers.image.created` and no revision; the helper's messages name the container path `/cache`
+- [ ] Not covered: a build on macOS (Intel, Apple silicon), on arm64 hardware, in WSL 2, behind a real corporate proxy, pushes to GHCR, ACR, ECR and Docker Hub, the CI example on GitHub, the kit's build through Docker Engine in WSL

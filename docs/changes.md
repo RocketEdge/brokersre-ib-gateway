@@ -5,6 +5,63 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — The build recipe and local defaults (ADR 0018, phase 2)
+
+- **What changed:** the README starts with "Build the image", a recipe for every host (what
+  you need, measured time and disk, one command per shell and what it prints, the seven
+  result lines and `qualified_by_project: no`, the latest channel, arm64, proxies, the
+  installer cache and `--installer`, pinning, private registries, a GitHub Actions example,
+  upgrade and rollback, troubleshooting); the quick start starts with the build, and the
+  verifying, notification and upgrade-check sections describe a self-built image. The
+  reference compose, the multi-gateway file and the client example default to
+  `brokersre-ib-gateway:stable` with a literal `pull_policy: never`; the Azure VM overlay pulls
+  the digest its userData names (`pull_policy: missing`). The Windows kit's `setup.ps1`
+  defaults to the same tag and builds a missing `stable` or `latest` image with
+  `scripts/build-image.ps1` (Docker Engine in WSL: `bash scripts/build-image.sh`) before it
+  starts anything. `docs/evidence.md`, `docs/upgrade-check.md`, `docs/upgrade-policy.md`,
+  `SECURITY.md`, `NOTICE.md`, the gnzsnz table, `azure/README.md` and the `gatewayImage`
+  descriptions no longer send a reader to a public image. L37, L38.
+- **Result:** every documented command ran on Windows 11 with Docker Desktop 29.9.3 (Git Bash,
+  PowerShell 7.6, Windows PowerShell 5.1), from a clone of the pushed branch where it says so
+  in the pull request. A first build with nothing cached (a new buildx builder, an empty
+  installer cache) took 9 min 1 s, about 3 min of it downloading IBKR's 360,312,436-byte
+  installer; a rebuild with both caches warm 1 min 14 s; the image is 1,622,526,158 bytes,
+  the build cache 3.55 GB, an installer 344 MiB. IBKR's `stable` served 10.50.1h against the
+  pin 10.50.1g (`qualified_by_project: no`), `latest` served the pinned 10.52.1d (`yes`).
+  arm64 under emulation built and passed the IBC test in 8 min 53 s. A local Squid proxy
+  showed that the Docker CLI's `config.json` proxies reach the helper's download and the
+  build's `RUN` steps, and that `HTTPS_PROXY` in the shell reaches neither. Tests: the compose
+  suite 76 checks (8 new: defaults, `--no-interpolate`, a missing image fails without a
+  pull), the Azure pack's bicep, lint, compose and secrets groups 120 (2 new), Pester 646
+  under both editions (33 new cases), PSScriptAnalyzer 0 findings, sidecar `test_docs.py`
+  238, markdownlint clean, actionlint 1.7.12 on the CI example, a local registry (`registry:2`)
+  for the push, `pull --policy missing` and `up --pull missing`.
+- **What did NOT work / root cause:** `pull_policy: ${IBGW_PULL_POLICY:-never}` (a variable,
+  so RocketEdge's digest deployments could pull) fails `docker compose config
+  --no-interpolate`, which `sidecar/tests/test_docs.py` runs on every shipped file: compose
+  validates the key's pattern before interpolation. The policy is a literal, and a pull is an
+  explicit `pull --policy missing` / `up --pull missing`, which override it (compose 5.7.0).
+  The Windows template's first form, a `__PULL_POLICY__` placeholder, failed the same test
+  for the same reason; the template keeps the literal line and the renderer replaces it.
+  Before the change `up` with a missing local name tried to pull it (`Pulling`, then a Docker
+  Hub error), which the new compose test caught red. In Windows PowerShell 5.1,
+  `--format '{{index .Config.Labels "x"}}'` reaches docker without its inner quotes
+  (`function "com" not defined`); the PowerShell commands read the labels as JSON. The first
+  registry recipe read the digest to pin as `{{index .RepoDigests 0}}`, which printed the
+  local name's digest on Docker Desktop (its containerd image store lists one repo digest per
+  repository name); it is taken from the push output now. Removing a digest reference of the
+  local repository in the test (`docker rmi brokersre-ib-gateway@sha256:...`) took the
+  `stable` tag with it on that store; the test removes only registry names now. Found
+  while documenting, not fixed here (scope of #39): the PowerShell wrapper reports "the Docker
+  host's architecture '' is not supported; pass -Platform" when Docker is not running; neither
+  wrapper forwards `HTTPS_PROXY`; a helper build carries the Ubuntu base image's
+  `org.opencontainers.image.created` and no revision label; messages name the helper's
+  `/cache` path. The optional Azure VM cannot log in to a private registry (L37), and a
+  TLS-inspecting proxy cannot be given a CA certificate (L38).
+- **Next step:** phase 3 (private publishing, hourly detection, CI without anonymous pulls,
+  workflows re-enabled), phase 4 (delete the public package); L37 before anyone deploys the VM
+  with a private image; a paper login with a self-built 10.50.1h image (L35).
+
 ### 2026-11-17 — A build that survives IBKR replacing its installers (ADR 0018, phase 1)
 
 - **What changed:** `scripts/build-image.sh` and `scripts/build-image.ps1` build the image on
