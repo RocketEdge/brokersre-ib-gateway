@@ -126,16 +126,27 @@ function Invoke-BiDockerCapture {
     Runs docker with the given arguments and captures its standard output.
     .DESCRIPTION
     The one place that runs docker and keeps its output; Pester mocks it. Standard error goes
-    to the console. Arguments with spaces are quoted by PowerShell; none may contain a double
-    quote (Windows PowerShell 5.1 and PowerShell 7 pass embedded quotes differently).
+    to the console, or nowhere with -Quiet. Arguments with spaces are quoted by PowerShell;
+    none may contain a double quote (Windows PowerShell 5.1 and PowerShell 7 pass embedded
+    quotes differently).
     .PARAMETER ArgumentList
     The docker arguments.
+    .PARAMETER Quiet
+    Discard docker's standard error (a probe whose failure this script explains itself). The
+    error preference is lowered in this function only: Windows PowerShell 5.1 turns a
+    redirected native standard error line into an error, terminating under 'Stop'.
     .OUTPUTS
     An object with ExitCode (int) and Lines (string[]).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string[]]$ArgumentList)
-    $lines = @(& docker @ArgumentList)
+    param([Parameter(Mandatory = $true)][string[]]$ArgumentList, [switch]$Quiet)
+    if ($Quiet) {
+        $ErrorActionPreference = 'Continue'
+        $lines = @(& docker @ArgumentList 2>$null)
+    }
+    else {
+        $lines = @(& docker @ArgumentList)
+    }
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Lines = [string[]]@($lines | ForEach-Object { [string]$_ }) }
 }
 
@@ -176,6 +187,170 @@ function Get-BiUserArgument {
         return [string[]]@('--user', ('{0}:{1}' -f (& id -u), (& id -g)))
     }
     return [string[]]@()
+}
+
+function Get-BiProxyName {
+    <#
+    .SYNOPSIS
+    The names of the proxy variables set in this process's environment.
+    .DESCRIPTION
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY and their lower-case forms, as the caller's shell set
+    them. Only the names are passed on ('-e NAME', '--build-arg NAME'); docker reads the values
+    from its environment, so a value, which may hold a password, is never in an argument list
+    or in the output. On Windows the names are case-insensitive, so a set HTTPS_PROXY also
+    answers for https_proxy; both are passed, with the same value.
+    .OUTPUTS
+    System.String[].
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+    $names = @()
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')) {
+        if ([Environment]::GetEnvironmentVariable($name)) { $names += $name }
+    }
+    return [string[]]$names
+}
+
+function Test-BiProxyUrl {
+    <#
+    .SYNOPSIS
+    Whether Value is a proxy URL that curl, apt and the helper read the same way.
+    .DESCRIPTION
+    scheme://[user[:password]@]host[:port][/], as build-image.sh's proxy_url_valid: the scheme
+    one of http, https, socks4, socks4a, socks5, socks5h; the host a name, an IPv4 address or a
+    bracketed IPv6 address; the port 1 to 65535; in the user name and password only RFC 3986's
+    unreserved and sub-delims characters, anything else percent-encoded (@, /, :, %, ?, #,
+    spaces); no whitespace anywhere. Why: curl's error for a value it cannot parse quotes the
+    value in full, password included (review of #43), and the Dockerfile's apt-get and curl get
+    the same value. \A and \z, not ^ and $: .NET's $ also matches before a final line break.
+    .PARAMETER Value
+    The variable's value.
+    .OUTPUTS
+    System.Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([AllowEmptyString()][string]$Value)
+    $userChar = '(?:[A-Za-z0-9._~!$&''()*+,;=-]|%[0-9A-Fa-f]{2})'
+    $pattern = '\A(?:http|https|socks4|socks4a|socks5|socks5h)://(?:' + $userChar + '*(?::' + $userChar + '*)?@)?' +
+    '(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(?::(?<port>[0-9]{1,5}))?/?\z'
+    $match = [regex]::Match($Value, $pattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) { return $false }
+    $port = $match.Groups['port'].Value
+    if ($port -ne '' -and ([int]$port -lt 1 -or [int]$port -gt 65535)) { return $false }
+    return $true
+}
+
+function Get-BiProxyProblem {
+    <#
+    .SYNOPSIS
+    The usage error for the first malformed proxy variable, or an empty string.
+    .DESCRIPTION
+    HTTPS_PROXY, HTTP_PROXY and their lower-case forms must pass Test-BiProxyUrl; NO_PROXY and
+    no_proxy (lists of hosts) must not hold a control character. The message names the
+    variable, never its value, which may hold a password.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value -and -not (Test-BiProxyUrl -Value $value)) {
+            return ('{0} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)' -f $name)
+        }
+    }
+    foreach ($name in @('NO_PROXY', 'no_proxy')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value -and $value -match '[\x00-\x1F\x7F]') {
+            return ('{0} holds a control character (a tab or a line break); expected host names separated by commas' -f $name)
+        }
+    }
+    return ''
+}
+
+function Get-BiRevision {
+    <#
+    .SYNOPSIS
+    The commit of the checkout at RepoRoot, or 'unknown'.
+    .DESCRIPTION
+    Labels the image (org.opencontainers.image.revision). 'unknown' when git is not installed or
+    RepoRoot is not a git work tree (a downloaded archive). The error preference is lowered in
+    this function only: Windows PowerShell 5.1 turns git's redirected standard error into an
+    error, terminating under 'Stop'.
+    .PARAMETER RepoRoot
+    The repository root.
+    .OUTPUTS
+    System.String: lower-case hex, or 'unknown'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) { return 'unknown' }
+    $ErrorActionPreference = 'Continue'
+    $revision = (@(& git -C $RepoRoot rev-parse HEAD 2>$null) -join '').Trim()
+    if ($LASTEXITCODE -eq 0 -and $revision -match '^[0-9a-f]+$') { return $revision }
+    return 'unknown'
+}
+
+function Get-BiCreated {
+    <#
+    .SYNOPSIS
+    The image's org.opencontainers.image.created: the same for the same inputs, never the clock.
+    .DESCRIPTION
+    The commit time of the checkout at RepoRoot in UTC; outside a git work tree (or without git)
+    IBKR's build time of the installer, the buildDateTime of Stamp as ISO 8601 (IBKR names no
+    time zone; it is written as UTC). An unchanged rebuild on the same builder then keeps its
+    image id, so 'docker compose up -d' does not start the gateway again with a new login.
+    The error preference is lowered in this function only (Windows PowerShell 5.1 and git's
+    redirected standard error).
+    .PARAMETER RepoRoot
+    The repository root.
+    .PARAMETER Stamp
+    The plan's ibkr_build_stamp, '(.<suffix>) <yyyyMMdd HH:mm:ss>'.
+    .OUTPUTS
+    System.String: yyyy-MM-ddTHH:mm:ssZ, or empty when neither source gives a time.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [AllowEmptyString()][string]$Stamp = '')
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    if ($null -ne (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        $ErrorActionPreference = 'Continue'
+        $iso = (@(& git -C $RepoRoot log -1 --format=%cI 2>$null) -join '').Trim()
+        $parsed = [DateTimeOffset]::MinValue
+        if ($LASTEXITCODE -eq 0 -and $iso -and [DateTimeOffset]::TryParse($iso, $invariant, [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+            return $parsed.UtcDateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", $invariant)
+        }
+    }
+    if ($Stamp -match ' (\d{4})(\d{2})(\d{2}) (\d{2}:\d{2}:\d{2})$') {
+        return ('{0}-{1}-{2}T{3}Z' -f $Matches[1], $Matches[2], $Matches[3], $Matches[4])
+    }
+    return ''
+}
+
+function ConvertTo-BiTrimmedPath {
+    <#
+    .SYNOPSIS
+    A directory path without trailing separators (a drive root such as C:\ is kept).
+    .DESCRIPTION
+    Windows PowerShell 5.1 wraps a native argument that contains a space in double quotes
+    without doubling a final backslash, so "...\ps cache dir\" reaches docker as an escaped
+    quote and the rest of the command line shifts ("Unable to find image 'cache:latest'").
+    A path this script builds an argument from must therefore not end in a separator.
+    .PARAMETER Path
+    The path.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $trimmed = $Path.TrimEnd([char]92, [char]47)
+    if ($trimmed -eq '' -or $trimmed.EndsWith(':')) { return $Path }
+    return $trimmed
 }
 
 function Get-BiPlanValue {
@@ -257,14 +432,49 @@ function ConvertFrom-BiArgument {
     return $settings
 }
 
+function Write-BiBuildRecordReminder {
+    <#
+    .SYNOPSIS
+    After a run whose proxy value carried credentials: name the build records that keep it.
+    .DESCRIPTION
+    Docker's build records keep every build argument's value (docker buildx history inspect,
+    history export, Docker Desktop's Builds view) until they are removed. The builds of such a
+    run wrote metadata files into $script:BiMetadataDir; this reads each record's ref from them,
+    deletes the directory (the files can hold the provenance, build arguments included) and
+    says which records to remove. Never prints the value. Does nothing for other runs.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param()
+    if (-not $script:BiMetadataDir) { return }
+    $records = @()
+    foreach ($name in @('helper.json', 'image.json')) {
+        $file = Join-Path $script:BiMetadataDir $name
+        if (Test-Path -LiteralPath $file) {
+            $ref = ''
+            try { $ref = [string]((Get-Content -LiteralPath $file -Raw | ConvertFrom-Json).'buildx.build.ref') }
+            catch { $ref = '' }
+            if ($ref) { $records += ($ref -split '/')[-1] }
+        }
+    }
+    Remove-Item -LiteralPath $script:BiMetadataDir -Recurse -Force -ErrorAction SilentlyContinue
+    $script:BiMetadataDir = ''
+    $list = '<ref> (docker buildx history ls)'
+    if ($records.Count -gt 0) { $list = $records -join ' ' }
+    $text = 'a proxy variable holds a user name or password (not shown): the image does not keep it, ' +
+    "but Docker's build records do (docker buildx history inspect, Docker Desktop's Builds view). " +
+    ('Remove them: docker buildx history rm {0}' -f $list)
+    Write-BiMessage -Message $text
+}
+
 function Invoke-BuildImage {
     <#
     .SYNOPSIS
     Does the whole build and returns the exit code of the contract.
     .DESCRIPTION
-    See the script's help. Every docker call goes through Invoke-BiDockerCapture or
-    Invoke-BiDockerStream, every message through Write-BiMessage and every result line through
-    Write-BiResult, so that Pester can run this function without Docker.
+    See the script's help. Runs Invoke-BiBuildCore and then, whatever its outcome, names the
+    build records that keep a proxy's credentials (Write-BiBuildRecordReminder).
     .PARAMETER ArgumentList
     The script's arguments.
     .PARAMETER RepoRoot
@@ -275,10 +485,40 @@ function Invoke-BuildImage {
     [CmdletBinding()]
     [OutputType([int])]
     param([AllowEmptyCollection()][object[]]$ArgumentList = @(), [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot))
+    $script:BiMetadataDir = ''
+    try { return [int](Invoke-BiBuildCore -ArgumentList $ArgumentList -RepoRoot $RepoRoot) }
+    finally { Write-BiBuildRecordReminder }
+}
+
+function Invoke-BiBuildCore {
+    <#
+    .SYNOPSIS
+    The build's steps; returns the exit code of the contract.
+    .DESCRIPTION
+    See the script's help. Every docker call goes through Invoke-BiDockerCapture or
+    Invoke-BiDockerStream, every message through Write-BiMessage and every result line through
+    Write-BiResult, so that Pester can run this function without Docker. When a proxy value
+    carries credentials it sets $script:BiMetadataDir, where the builds write their metadata.
+    .PARAMETER ArgumentList
+    The script's arguments.
+    .PARAMETER RepoRoot
+    The repository root.
+    .OUTPUTS
+    System.Int32: 0, 1, 2, 3 or 4.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param([AllowEmptyCollection()][object[]]$ArgumentList = @(), [Parameter(Mandatory = $true)][string]$RepoRoot)
     $settings = ConvertFrom-BiArgument -ArgumentList $ArgumentList
     if ($settings.Error -ne '') {
         Write-BiMessage -Message $settings.Error
         Write-BiUsage
+        return 2
+    }
+    # The proxy variables, before anything runs (Get-BiProxyProblem): never their values.
+    $proxyProblem = Get-BiProxyProblem
+    if ($proxyProblem -ne '') {
+        Write-BiMessage -Message $proxyProblem
         return 2
     }
     if (-not (Test-BiDockerAvailable)) {
@@ -287,6 +527,20 @@ function Invoke-BuildImage {
     }
     if ((Invoke-BiDockerCapture -ArgumentList @('buildx', 'version')).ExitCode -ne 0) {
         Write-BiMessage -Message 'docker buildx is required (Docker Desktop, or Docker Engine 23 or later with the buildx plugin)'
+        return 1
+    }
+    # The daemon, before anything asks it a question: without this check a stopped Docker
+    # Desktop surfaced as an empty architecture, or (with -Platform) as a failed helper build.
+    # Docker's own error is not repeated: it can name DOCKER_HOST, which may hold a user name.
+    $server = Invoke-BiDockerCapture -ArgumentList @('version', '--format', '{{.Server.Version}}') -Quiet
+    if ($server.ExitCode -ne 0 -or (@($server.Lines) -join '').Trim() -eq '') {
+        $context = (@((Invoke-BiDockerCapture -ArgumentList @('context', 'show') -Quiet).Lines) -join '').Trim()
+        if ($context -eq '') { $context = 'unknown' }
+        $hostNote = ''
+        if ($env:DOCKER_HOST) { $hostNote = ', DOCKER_HOST is set' }
+        $advice = 'start Docker Desktop and wait until its engine runs (Windows, macOS), or start the daemon ' +
+        '(Linux: sudo systemctl start docker); check the Docker context and DOCKER_HOST'
+        Write-BiMessage -Message ("the Docker daemon is not reachable (Docker context '{0}'{1}): {2}" -f $context, $hostNote, $advice)
         return 1
     }
     $platform = $settings.Platform
@@ -315,11 +569,25 @@ function Invoke-BuildImage {
     foreach ($directory in @($cacheDir, $downloads)) {
         if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
     }
-    $cacheDir = (Resolve-Path -LiteralPath $cacheDir).ProviderPath
+    $cacheDir = ConvertTo-BiTrimmedPath -Path (Resolve-Path -LiteralPath $cacheDir).ProviderPath
 
+    # The shell's proxy variables, by name only (Get-BiProxyName): for the helper image's build
+    # (its apk add needs them on a proxy-only network), the helper container and the build.
+    $proxyNames = @(Get-BiProxyName)
+    # Docker's build records keep build arguments: with credentials in a proxy value, each
+    # build writes its metadata here, and Write-BiBuildRecordReminder names the records.
+    foreach ($name in $proxyNames) {
+        if ([string][Environment]::GetEnvironmentVariable($name) -like '*@*' -and -not $script:BiMetadataDir) {
+            $script:BiMetadataDir = Join-Path ([IO.Path]::GetTempPath()) ('brokersre-build-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $script:BiMetadataDir | Out-Null
+        }
+    }
     # 'buildx build --load', not 'docker build': with a docker-container default builder a plain
     # build leaves the image in the build cache only, and 'docker run' would not find it.
-    $built = Invoke-BiDockerCapture -ArgumentList @('buildx', 'build', '--load', '-q', '-t', $script:HelperImage, (Join-Path (Join-Path $RepoRoot 'scripts') 'build-helper'))
+    $helperBuild = @('buildx', 'build', '--load', '-q', '-t', $script:HelperImage)
+    foreach ($name in $proxyNames) { $helperBuild += @('--build-arg', $name) }
+    if ($script:BiMetadataDir) { $helperBuild += @('--metadata-file', (Join-Path $script:BiMetadataDir 'helper.json')) }
+    $built = Invoke-BiDockerCapture -ArgumentList ($helperBuild + @((Join-Path (Join-Path $RepoRoot 'scripts') 'build-helper')))
     if ($built.ExitCode -ne 0) {
         Write-BiMessage -Message 'could not build the helper image from scripts/build-helper'
         return 1
@@ -327,8 +595,12 @@ function Invoke-BuildImage {
     $helperPrefix = @('run', '--rm') + @(Get-BiUserArgument)
     if ($settings.Installer -ne '') {
         $installerPath = (Resolve-Path -LiteralPath $settings.Installer).ProviderPath
-        $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)))
+        $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)),
+            '-e', ('BROKERSRE_HOST_INSTALLER={0}' -f $settings.Installer))
     }
+    # The helper's messages name the cache as this host does, not by its mount /cache.
+    $helperPrefix += @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $cacheDir))
+    foreach ($name in $proxyNames) { $helperPrefix += @('-e', $name) }
     # BROKERSRE_HOST_SHELL and BROKERSRE_HOST_DOWNLOADS let the helper's advice name PowerShell's
     # command, -Installer and the Windows path of downloads\ (it sees only its mount /downloads).
     $helperPrefix += @('-v', ('{0}:/cache' -f $cacheDir), '-v', ('{0}:/repo:ro' -f $RepoRoot), '-v', ('{0}:/downloads' -f $downloads),
@@ -373,6 +645,18 @@ function Invoke-BuildImage {
         foreach ($line in $plan) {
             if ($line.StartsWith('build_arg: ')) { $build += @('--build-arg', $line.Substring(11)) }
         }
+        # Predefined build arguments: usable in RUN, kept out of docker history and the image.
+        foreach ($name in $proxyNames) { $build += @('--build-arg', $name) }
+        if ($script:BiMetadataDir) { $build += @('--metadata-file', (Join-Path $script:BiMetadataDir 'image.json')) }
+        # The build's own OCI labels, as build-image.sh sets them: the commit of this checkout
+        # (Get-BiRevision) and a created time that the same inputs always give (Get-BiCreated).
+        $created = Get-BiCreated -RepoRoot $RepoRoot -Stamp (Get-BiPlanValue -Plan $plan -Key 'ibkr_build_stamp')
+        $build += @('--label', ('org.opencontainers.image.created={0}' -f $created),
+            '--label', ('org.opencontainers.image.revision={0}' -f (Get-BiRevision -RepoRoot $RepoRoot)))
+        # No provenance attestation (as build-image.sh): with Docker's containerd image store the
+        # image id covers it, and it records the build's start and end time, so two builds of
+        # the same inputs had one image manifest but two ids (measured 2026-11-17).
+        $build += @('--provenance=false')
         $build += @('-f', (Join-Path $RepoRoot 'Dockerfile'), $RepoRoot)
         Write-BiMessage -Message ('building {0}: IB Gateway {1} ({2}) for {3}' -f $image, $version, $channel, $platform)
         if ((Invoke-BiDockerStream -ArgumentList $build) -ne 0) {

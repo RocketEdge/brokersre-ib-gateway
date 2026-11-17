@@ -59,7 +59,8 @@ setup() {
   write_stub_docker
   export PATH="${WORK}/bin:${PATH}"
   export STUB_DIR="${WORK}/stub"
-  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC
+  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC STUB_DAEMON_DOWN
+  unset HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy
   start_server
   export BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:${PORT}"
 }
@@ -88,17 +89,43 @@ write_stub_docker() {
 #!/usr/bin/env bash
 # Stub docker for build-image.bats: records each call in ${STUB_DIR}/calls.
 printf '%s\n' "$*" >>"${STUB_DIR}/calls"
+# meta_out REF ARGS...: like buildx, write the build's metadata file when ARGS ask for one.
+meta_out() {
+  local ref="$1" prev="" file=""
+  shift
+  for a in "$@"; do
+    if [ "${prev}" = --metadata-file ]; then file="${a}"; fi
+    prev="${a}"
+  done
+  if [ -n "${file}" ]; then
+    printf '{\n  "buildx.build.ref": "desktop-linux/desktop-linux/%s"\n}\n' "${ref}" >"${file}"
+    printf '%s\n' "${file}" >>"${STUB_DIR}/metadata-files"
+  fi
+}
 case "$1" in
-  info) echo "${STUB_ARCH:-x86_64}" ;;
+  info)
+    if [ -n "${STUB_DAEMON_DOWN:-}" ]; then echo "error during connect: daemon not running" >&2 && exit 1; fi
+    echo "${STUB_ARCH:-x86_64}"
+    ;;
+  version)
+    if [ -n "${STUB_DAEMON_DOWN:-}" ]; then echo "error during connect: daemon not running" >&2 && exit 1; fi
+    echo "29.9.3"
+    ;;
+  context) echo "desktop-linux" ;;
   build) echo "sha256:helper" ;;
   buildx)
     case "$2" in
       version) echo "github.com/docker/buildx v0.38.1 stub" ;;
       build)
-        case " $* " in *" brokersre-ib-gateway-build-helper:local "*) echo "sha256:helper" && exit 0 ;; esac
+        case " $* " in *" brokersre-ib-gateway-build-helper:local "*)
+          meta_out stubhelperref "$@"
+          echo "sha256:helper" && exit 0
+          ;;
+        esac
         shift 2
         printf '%s\n' "$@" >"${STUB_DIR}/buildx-args"
         ls "${*: -1}/downloads" >"${STUB_DIR}/context-downloads" 2>&1
+        meta_out stubimageref "$@"
         exit "${STUB_BUILD_RC:-0}"
         ;;
       *) exit 1 ;;
@@ -143,7 +170,10 @@ case "$1" in
       done
       args+=("$a")
     done
-    exec env -u BROKERSRE_TEST_IBKR_BASE_URL "${envs[@]}" "${args[@]}"
+    # What the helper's environment would be (docker passes only the -e variables), recorded
+    # for the proxy tests; proxies of the test's own shell never leak in otherwise.
+    for e in "${envs[@]}"; do printf '%s\n' "$e"; done >"${STUB_DIR}/helper-env"
+    exec env -u BROKERSRE_TEST_IBKR_BASE_URL -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u https_proxy -u http_proxy -u no_proxy "${envs[@]}" "${args[@]}"
     ;;
   *) exit 0 ;;
 esac
@@ -934,4 +964,333 @@ cached_meta() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"version: 10.53.1a"* ]]
   [[ "$output" == *"ibkr_build_stamp: (.1a) 20261120 09:00:00"* ]]
+}
+
+@test "an unreachable Docker daemon is named as such, exit 1, with or without --platform" {
+  STUB_DAEMON_DOWN=1 build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"the Docker daemon is not reachable"* ]]
+  [[ "$stderr" == *"desktop-linux"* ]]
+  [[ "$stderr" != *"architecture"* ]]
+  STUB_DAEMON_DOWN=1 build --platform linux/amd64 --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"the Docker daemon is not reachable"* ]]
+  ! grep -q -e '^run ' -e '^buildx build' "${WORK}/stub/calls" || false
+}
+
+# --- Proxy settings of the caller's shell reach the helper and the build, by name only.
+
+@test "proxy variables set in the shell reach the helper and the build, and their values are never printed" {
+  local secret
+  secret="pw-$(printf 'SYN%s' THETIC)"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://synthetic:${secret}@proxy.invalid:3128"
+  export http_proxy="http://synthetic:${secret}@proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  # The helper got the values (docker reads them from the caller's environment: -e NAME).
+  grep -qx "HTTPS_PROXY=${HTTPS_PROXY}" "${WORK}/stub/helper-env"
+  grep -qx "http_proxy=${http_proxy}" "${WORK}/stub/helper-env"
+  grep -qx "NO_PROXY=127.0.0.1,localhost" "${WORK}/stub/helper-env"
+  # The helper image's own build (apk add) needs the proxy too, on a network that has nothing
+  # else (review of #43: its first build failed there).
+  helper_build="$(grep '^buildx build --load -q -t brokersre-ib-gateway-build-helper:local ' "${WORK}/stub/calls")"
+  [[ "${helper_build}" == *"--build-arg HTTPS_PROXY "* ]]
+  [[ "${helper_build}" == *"--build-arg http_proxy "* ]]
+  [[ "${helper_build}" == *"--build-arg NO_PROXY "* ]]
+  [[ "${helper_build}" != *"${secret}"* ]]
+  ! grep -q '^HTTP_PROXY=' "${WORK}/stub/helper-env" || false
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e HTTPS_PROXY ' >/dev/null
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e http_proxy ' >/dev/null
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e NO_PROXY ' >/dev/null
+  ! grep '^run ' "${WORK}/stub/calls" | grep -- '-e HTTP_PROXY ' >/dev/null || false
+  # The build got them as build arguments by name (buildx reads the values from the environment).
+  [ "$(buildx_option --build-arg | grep -cx -e HTTPS_PROXY -e http_proxy -e NO_PROXY)" -eq 3 ]
+  # No value in an argument list, on standard output or on standard error.
+  ! grep -q "${secret}" "${WORK}/stub/calls" "${WORK}/stub/buildx-args" || false
+  [[ "$output" != *"${secret}"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+}
+
+@test "without proxy variables nothing proxy-related is passed" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  ! grep -qi 'proxy' "${WORK}/stub/calls" "${WORK}/stub/buildx-args" || false
+}
+
+@test "the Dockerfile declares no proxy variable, so Docker keeps proxy build arguments out of the image" {
+  # HTTP_PROXY, HTTPS_PROXY, NO_PROXY (and lower case) are predefined build arguments: usable
+  # in RUN, excluded from `docker history` and from the image configuration unless declared.
+  ! grep -Ei '^[[:space:]]*(ARG|ENV|LABEL)[[:space:]].*(https?_proxy|no_proxy|all_proxy|ftp_proxy)' "${SRC}/Dockerfile" || false
+}
+
+# --- OCI labels of a helper build: created (the commit's time, else IBKR's build time; never
+# the clock) and revision (the commit); no provenance attestation.
+
+# created_label: the org.opencontainers.image.created of the recorded build.
+created_label() {
+  buildx_option --label | sed -n 's/^org.opencontainers.image.created=//p'
+}
+
+@test "outside a git work tree: revision unknown, created is IBKR's installer build time, the same for every build" {
+  # Never the wall clock: a rebuild of the same inputs must keep its image id, or
+  # `docker compose up -d` would start the gateway again, with a new login.
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-09T16:10:13Z" ]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = unknown ]
+  sleep 1
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-09T16:10:13Z" ]
+}
+
+@test "in a git work tree: revision is the commit, created its commit time in UTC; same commit same label, a new commit a new one" {
+  require_command git
+  git -C "${REPO}" init -q
+  git -C "${REPO}" add -A
+  GIT_COMMITTER_DATE="2026-11-17T17:59:32+08:00" git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q -m test
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = "$(git -C "${REPO}" rev-parse HEAD)" ]
+  [ "$(created_label)" = "2026-11-17T09:59:32Z" ]
+  sleep 1
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-17T09:59:32Z" ]
+  GIT_COMMITTER_DATE="2026-11-18T08:00:00Z" git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m next
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-18T08:00:00Z" ]
+}
+
+@test "the image build attaches no provenance attestation: it holds the build's start and end time" {
+  # Measured 2026-11-17 (Docker Desktop, containerd image store): with buildx's default
+  # provenance two warm builds of one commit had one manifest but two image ids (the index
+  # with the attestation); with --provenance=false the id was the same.
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx -- --provenance=false "${WORK}/stub/buildx-args"
+}
+
+@test "the image's url label points at the README's build section, not the retired package page" {
+  grep -q 'org.opencontainers.image.url="https://github.com/RocketEdge/brokersre-ib-gateway#build-the-image"' "${SRC}/Dockerfile"
+  grep -q '^## Build the image$' "${SRC}/README.md"
+  ! grep -q 'pkgs/container' "${SRC}/Dockerfile" || false
+}
+
+# --- Messages name the host's paths, not the helper container's mounts (/cache, /installer).
+
+@test "the helper names the cache and the installer by the host paths the wrapper passes" {
+  local host_cache='D:\Users\someone\cache dir'
+  # Offline, nothing cached: the message names the cache.
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" BROKERSRE_HOST_CACHE="${host_cache}" \
+    run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${WORK}/mnt-cache" --downloads "${REPO}/downloads" --strict
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"is not in the cache ${host_cache}"* ]]
+  [[ "$stderr" != *"${WORK}/mnt-cache"* ]]
+  # A cached file that no longer matches is named below the host's cache, in its path style.
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  printf 'tampered' >>"$(find "${CACHE}/installers/10.50.1h" -name '*.sh' | head -n 1)"
+  BROKERSRE_HOST_CACHE="${host_cache}" run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 \
+    --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads" --print-plan
+  local bs='\'
+  [[ "$stderr" == *"cached ${host_cache}${bs}installers${bs}10.50.1h${bs}x64${bs}${NEWER_X64}${bs}ibgateway-10.50.1h-standalone-linux-x64.sh no longer matches"* ]]
+  # An --installer file is named as the user gave it.
+  printf '#!/bin/sh\nexit 0\n' >"${WORK}/plain.sh"
+  BROKERSRE_HOST_INSTALLER='.\my installers\plain.sh' run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve \
+    --arch x64 --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads" --installer "${WORK}/plain.sh" --print-plan
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *'cannot read a build stamp from .\my installers\plain.sh'* ]]
+}
+
+@test "the wrapper passes the host's cache directory and installer path to the helper" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --installer "${WORK}/pinned-x64.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx "BROKERSRE_HOST_CACHE=${CACHE}" "${WORK}/stub/helper-env"
+  grep -qx "BROKERSRE_HOST_INSTALLER=${WORK}/pinned-x64.sh" "${WORK}/stub/helper-env"
+  XDG_CACHE_HOME="${WORK}/xdg" run --separate-stderr "${REPO}/scripts/build-image.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx "BROKERSRE_HOST_CACHE=${WORK}/xdg/brokersre-ib-gateway" "${WORK}/stub/helper-env"
+}
+
+@test "the revision is asked of git in the checkout, without a path argument (Git Bash cannot pass one)" {
+  # build-image.sh exports MSYS_NO_PATHCONV=1 for docker's container paths; under Git Bash a
+  # POSIX path given to git is then not converted and git cannot open it, so the label said
+  # unknown on a real clone (2026-11-17). A stand-in git records how it was called.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s|%s\n" "$PWD" "$*" >>"${STUB_DIR}/git-calls"' 'echo 0123456789abcdef0123456789abcdef01234567' >"${WORK}/bin/git"
+  chmod +x "${WORK}/bin/git"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = 0123456789abcdef0123456789abcdef01234567 ]
+  # Every call (the revision, then the commit time for `created`) runs in the checkout and
+  # names no path.
+  [ "$(sed -n 1p "${WORK}/stub/git-calls" | cut -d'|' -f2)" = "rev-parse HEAD" ]
+  while IFS='|' read -r cwd arguments; do
+    [ "${cwd}" = "${REPO}" ]
+    [[ "${arguments}" != *"-C "* ]]
+    [[ "${arguments}" != *"${REPO}"* ]]
+  done <"${WORK}/stub/git-calls"
+}
+
+# --- Proxy values (review of #43 at 2e059b1): curl quotes a value it cannot parse in full,
+# password included ("Unsupported proxy syntax in '...'"), in shapes no URL pattern finds. The
+# wrappers refuse a malformed value before anything runs; the helper hides every proxy value in
+# curl's errors as well. The synthetic password's marker is assembled at run time (gitleaks).
+
+# helper_resolve: the helper's `resolve --print-plan`, run on this host as in its container;
+# stdout in $output, stderr in $stderr.
+helper_resolve() {
+  run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads" --print-plan
+}
+
+@test "a malformed proxy value is a usage error that names the variable, before any docker call, never the value" {
+  local token bad name
+  token="SYN$(printf 'THETIC')"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # The reviewer's four (no scheme; a slash, a space, an unencoded @ in the password), then the
+  # scheme, port and host rules, a broken percent escape and a line break at the end.
+  for bad in "u:pw-${token}@[::1" "http://u:pw-${token}/x@h:1" "http://u:pw-${token} 9x@h:1" \
+    "http://u:pw@${token}@[::1]:1" "ftp://u:pw-${token}@h:1" "http://u:pw-${token}@h:0" \
+    "http://u:pw-${token}@h:65536" "http://u:pw-${token}@:3128" "http://u:pw%4-${token}@h:1" \
+    "http://u:pw-${token}@h:1"$'\n'; do
+    for name in HTTPS_PROXY http_proxy; do
+      rm -f "${WORK}/stub/calls"
+      export "${name}=${bad}"
+      build --no-smoke
+      unset "${name}"
+      [ "$status" -eq 2 ]
+      [ "$stderr" = "build-image: ${name} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)" ]
+      [[ "$output" != *"${token}"* ]]
+      [ ! -e "${WORK}/stub/calls" ]
+    done
+  done
+}
+
+@test "well-formed proxy URLs pass: plain, percent-encoded credentials, IPv6 SOCKS, no port" {
+  local token good
+  token="SYN$(printf 'THETIC')"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # HTTPS_PROXY does not apply to the fake http:// server, so each build completes; NO_PROXY
+  # may have spaces after its commas.
+  for good in "http://proxy.invalid:3128" "http://u:p%40ss%2Fw%20d-${token}@proxy.invalid:3128/" \
+    "socks5h://[::1]:1080" "https://u@10.0.0.1"; do
+    export HTTPS_PROXY="${good}" NO_PROXY="127.0.0.1, localhost"
+    build --no-smoke
+    unset HTTPS_PROXY NO_PROXY
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"${token}"* ]]
+    [[ "$stderr" != *"${token}"* ]]
+  done
+}
+
+@test "a control character in NO_PROXY is a usage error, before any docker call" {
+  local name
+  for name in NO_PROXY no_proxy; do
+    rm -f "${WORK}/stub/calls"
+    export "${name}=localhost"$'\t'"127.0.0.1"
+    build --no-smoke
+    unset "${name}"
+    [ "$status" -eq 2 ]
+    [ "$stderr" = "build-image: ${name} holds a control character (a tab or a line break); expected host names separated by commas" ]
+    [ ! -e "${WORK}/stub/calls" ]
+  done
+}
+
+@test "the helper hides a proxy value curl quotes, whatever its shape" {
+  local token value
+  token="SYN$(printf 'THETIC')"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  # The fake server is http://, so curl takes http_proxy. These reach the helper only when it
+  # runs without a wrapper; curl quotes each in full.
+  for value in "u:pw-${token}@[::1" "http://u:pw-${token}/x@h:1" "http://u:pw-${token} 9x@h:1" "http://u:pw@${token}@[::1"; do
+    http_proxy="${value}" helper_resolve
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"Unsupported proxy syntax in '***'"* ]]
+    [[ "$stderr" != *"${token}"* ]]
+    [[ "$output" != *"${token}"* ]]
+  done
+  # Values the wrappers accept that curl still fails with: an unresolvable and a closed SOCKS
+  # proxy, the second with a percent-encoded password.
+  for value in "socks5h://u:pw-${token}@unreachable.invalid:1080" "socks5h://u:pw%40${token}@127.0.0.1:1"; do
+    http_proxy="${value}" helper_resolve
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"curl: ("* ]]
+    [[ "$stderr" != *"${token}"* ]]
+    [[ "$output" != *"${token}"* ]]
+  done
+}
+
+@test "the helper also hides a proxy value's percent-decoded form, its user information and its password" {
+  local token value
+  token="SYN$(printf 'THETIC')"
+  value="http://u:pw%40${token}%2Fx@proxy.invalid:3128"
+  # A stand-in curl that quotes the value as written, decoded, and in parts.
+  mkdir -p "${WORK}/curlbin"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${STUB_CURL_ERRORS}" >&2' 'exit 7' >"${WORK}/curlbin/curl"
+  chmod +x "${WORK}/curlbin/curl"
+  STUB_CURL_ERRORS="as written: ${value}
+decoded: http://u:pw@${token}/x@proxy.invalid:3128
+user information: u:pw@${token}/x
+password: pw%40${token}%2Fx" PATH="${WORK}/curlbin:${PATH}" http_proxy="${value}" helper_resolve
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"as written: ***"* ]]
+  [[ "$stderr" == *"decoded: ***"* ]]
+  [[ "$stderr" == *"user information: ***"* ]]
+  [[ "$stderr" == *"password: ***"* ]]
+  [[ "$stderr" != *"${token}"* ]]
+}
+
+# --- Docker's build records keep build arguments, proxy credentials included (review of #43).
+
+@test "a proxy URL with credentials ends the build with the records to remove; the value stays hidden" {
+  local secret
+  secret="pw-$(printf 'SYN%s' THETIC)"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://synthetic:${secret}@proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"build records"* ]]
+  [[ "$stderr" == *"docker buildx history rm stubhelperref stubimageref"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+  # The metadata files (they can hold the provenance, build arguments included) are gone.
+  while read -r file; do [ ! -e "${file}" ]; done <"${WORK}/stub/metadata-files"
+  # A failed build has records too.
+  STUB_BUILD_RC=1 build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"docker buildx history rm stubhelperref stubimageref"* ]]
+}
+
+@test "a proxy URL without credentials asks for no metadata and prints no reminder" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" != *"build records"* ]]
+  ! grep -q -- '--metadata-file' "${WORK}/stub/calls" || false
 }

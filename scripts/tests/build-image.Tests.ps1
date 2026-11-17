@@ -79,6 +79,7 @@ Describe 'Invoke-BuildImage' {
         $script:buildExit = 0
         $script:smokeExit = 0
         $script:hostArch = 'x86_64'
+        $script:daemonDown = $false
         $script:plan = Get-TestPlan -Stamp $script:stamp -Context $script:context
         Mock Write-BiMessage { [void]$script:messages.Add($Message) }
         Mock Write-BiUsage {}
@@ -87,6 +88,12 @@ Describe 'Invoke-BuildImage' {
         Mock Get-BiUserArgument { return @() }
         Mock Invoke-BiDockerCapture {
             [void]$script:calls.Add([string[]]$ArgumentList)
+            # Like buildx: a build asked for a metadata file writes one that names its record.
+            $at = [array]::IndexOf([string[]]$ArgumentList, '--metadata-file')
+            if ($at -ge 0) { Set-Content -LiteralPath $ArgumentList[$at + 1] -Value '{ "buildx.build.ref": "desktop-linux/desktop-linux/stubhelperref" }' }
+            if ($script:daemonDown -and @('info', 'version') -contains $ArgumentList[0]) { return [pscustomobject]@{ ExitCode = 1; Lines = [string[]]@() } }
+            if ($ArgumentList[0] -eq 'version') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('29.9.3') } }
+            if ($ArgumentList[0] -eq 'context') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('desktop-linux') } }
             if ($ArgumentList[0] -eq 'info') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@($script:hostArch) } }
             if ($ArgumentList[0] -eq 'image') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('sha256:' + ('a' * 64)) } }
             if ($ArgumentList -contains 'resolve') { return [pscustomobject]@{ ExitCode = $script:resolveExit; Lines = [string[]]$script:plan } }
@@ -98,6 +105,8 @@ Describe 'Invoke-BuildImage' {
         }
         Mock Invoke-BiDockerStream {
             [void]$script:calls.Add([string[]]$ArgumentList)
+            $at = [array]::IndexOf([string[]]$ArgumentList, '--metadata-file')
+            if ($at -ge 0) { Set-Content -LiteralPath $ArgumentList[$at + 1] -Value '{ "buildx.build.ref": "desktop-linux/desktop-linux/stubimageref" }' }
             if ($ArgumentList[0] -eq 'buildx') { return $script:buildExit }
             return $script:smokeExit
         }
@@ -247,6 +256,230 @@ Describe 'Invoke-BuildImage' {
             Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-v', $expected) | Should -BeTrue
         }
         finally { $env:LOCALAPPDATA = $saved }
+    }
+
+    It 'an unreachable Docker daemon is named as such and returns 1, with or without -Platform: <arguments>' -TestCases @(
+        @{ arguments = @() }, @{ arguments = @('-Platform', 'linux/amd64') }
+    ) {
+        $script:daemonDown = $true
+        Invoke-BuildImage -ArgumentList (@($arguments) + @('-NoSmoke', '-CacheDir', $script:cache)) -RepoRoot $script:repo | Should -Be 1
+        ($script:messages -join "`n") | Should -Match 'the Docker daemon is not reachable'
+        ($script:messages -join "`n") | Should -Match 'desktop-linux'
+        ($script:messages -join "`n") | Should -Not -Match 'architecture'
+        (Get-TestCall -Calls $script:calls -Marker 'run').Count | Should -Be 0
+    }
+
+    It 'proxy variables reach the helper (-e NAME) and the build (--build-arg NAME) by name, never by value' {
+        $secret = 'pw-' + ('SYN{0}' -f 'THETIC')
+        $saved = @{}
+        foreach ($name in @('HTTPS_PROXY', 'NO_PROXY')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', ('http://synthetic:{0}@proxy.invalid:3128' -f $secret))
+            [Environment]::SetEnvironmentVariable('NO_PROXY', '127.0.0.1,localhost')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-e', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-e', 'NO_PROXY') | Should -BeTrue
+            $build = (Get-TestCall -Calls $script:calls -Marker '--platform')[0]
+            Test-Sequence -Actual $build -Expected @('--build-arg', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual $build -Expected @('--build-arg', 'NO_PROXY') | Should -BeTrue
+            # The helper image's build (apk add) needs the proxy as well (review of #43).
+            $helperBuild = (Get-TestCall -Calls $script:calls -Marker 'brokersre-ib-gateway-build-helper:local')[0]
+            Test-Sequence -Actual $helperBuild -Expected @('buildx', 'build', '--load', '-q', '-t', 'brokersre-ib-gateway-build-helper:local') | Should -BeTrue
+            Test-Sequence -Actual $helperBuild -Expected @('--build-arg', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual $helperBuild -Expected @('--build-arg', 'NO_PROXY') | Should -BeTrue
+            foreach ($call in $script:calls) { ($call -join ' ') | Should -Not -Match $secret }
+            ($script:messages -join "`n") | Should -Not -Match $secret
+            ($script:results -join "`n") | Should -Not -Match $secret
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        }
+    }
+
+    It 'a malformed proxy value in <name> is a usage error before any docker call, never echoed: <shape>' -TestCases @(
+        @{ name = 'HTTPS_PROXY'; shape = 'no scheme'; template = 'u:pw-{0}@[::1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a slash in the password'; template = 'http://u:pw-{0}/x@h:1' },
+        @{ name = 'HTTP_PROXY'; shape = 'a space in the password'; template = 'http://u:pw-{0} 9x@h:1' },
+        @{ name = 'HTTP_PROXY'; shape = 'an unencoded @ in the password'; template = 'http://u:pw@{0}@[::1]:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'scheme ftp'; template = 'ftp://u:pw-{0}@h:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'port 0'; template = 'http://u:pw-{0}@h:0' },
+        @{ name = 'HTTPS_PROXY'; shape = 'port 65536'; template = 'http://u:pw-{0}@h:65536' },
+        @{ name = 'HTTPS_PROXY'; shape = 'no host'; template = 'http://u:pw-{0}@:3128' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a broken percent escape'; template = 'http://u:pw%4-{0}@h:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a line break at the end'; template = "http://u:pw-{0}@h:1`n" }
+    ) {
+        # Review of #43 at 2e059b1: curl quotes a value it cannot parse in full, password included.
+        $token = 'SYN{0}' -f 'THETIC'
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        $saved = @{}
+        foreach ($each in $names) { $saved[$each] = [Environment]::GetEnvironmentVariable($each) }
+        try {
+            foreach ($each in $names) { [Environment]::SetEnvironmentVariable($each, $null) }
+            [Environment]::SetEnvironmentVariable($name, ($template -f $token))
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 2
+            $script:messages | Should -Contain ('{0} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)' -f $name)
+            $script:calls.Count | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match $token
+            ($script:results -join "`n") | Should -Not -Match $token
+        }
+        finally {
+            foreach ($each in $saved.Keys) { [Environment]::SetEnvironmentVariable($each, $saved[$each]) }
+        }
+    }
+
+    It 'accepts a well-formed proxy URL: <value>' -TestCases @(
+        @{ value = 'http://proxy.invalid:3128' }, @{ value = 'http://u:p%40ss%2Fw%20d@proxy.invalid:3128/' },
+        @{ value = 'socks5h://[::1]:1080' }, @{ value = 'https://u@10.0.0.1' }
+    ) {
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        $saved = @{}
+        foreach ($each in $names) { $saved[$each] = [Environment]::GetEnvironmentVariable($each) }
+        try {
+            foreach ($each in $names) { [Environment]::SetEnvironmentVariable($each, $null) }
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $value)
+            [Environment]::SetEnvironmentVariable('NO_PROXY', '127.0.0.1, localhost')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match 'p%40ss|p@ss'
+        }
+        finally {
+            foreach ($each in $saved.Keys) { [Environment]::SetEnvironmentVariable($each, $saved[$each]) }
+        }
+    }
+
+    It 'a control character in NO_PROXY is a usage error before any docker call' {
+        $saved = [Environment]::GetEnvironmentVariable('NO_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('NO_PROXY', "localhost`t127.0.0.1")
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 2
+            $script:messages | Should -Contain 'NO_PROXY holds a control character (a tab or a line break); expected host names separated by commas'
+            $script:calls.Count | Should -Be 0
+        }
+        finally { [Environment]::SetEnvironmentVariable('NO_PROXY', $saved) }
+    }
+
+    It 'without proxy variables no proxy name is passed' {
+        $saved = @{}
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $null) }
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            foreach ($call in $script:calls) { ($call -join ' ') | Should -Not -Match '(?i)proxy' }
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        }
+    }
+
+    It 'labels the build with the revision Get-BiRevision gives (<revision>) and a created time that two builds share' -TestCases @(
+        @{ revision = ('c' * 40) }, @{ revision = 'unknown' }
+    ) {
+        # Outside a git work tree (the test's repository folder) created is IBKR's installer build
+        # time from the plan's stamp, (.1h) 20261116 16:02:08: never the wall clock, so that an
+        # unchanged rebuild keeps its image id.
+        Mock Get-BiRevision { return $revision }
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        Start-Sleep -Seconds 1
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $builds = Get-TestCall -Calls $script:calls -Marker '--platform'
+        $builds.Count | Should -Be 2
+        foreach ($build in $builds) {
+            Test-Sequence -Actual $build -Expected @('--label', ('org.opencontainers.image.revision={0}' -f $revision)) | Should -BeTrue
+            Test-Sequence -Actual $build -Expected @('--label', 'org.opencontainers.image.created=2026-11-16T16:02:08Z') | Should -BeTrue
+        }
+    }
+
+    It 'builds the image without a provenance attestation, which holds the build time and would change the image id' {
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $builds = Get-TestCall -Calls $script:calls -Marker '--platform'
+        $builds.Count | Should -Be 1
+        $builds[0] | Should -Contain '--provenance=false'
+    }
+
+    It 'Get-BiCreated gives the commit time in UTC in a git work tree (a new commit, a new time) and the stamp elsewhere' {
+        Get-BiCreated -RepoRoot $script:repo -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-09T16:10:13Z'
+        if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+            $work = Join-Path $TestDrive ('git-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $work | Out-Null
+            $saved = $env:GIT_COMMITTER_DATE
+            $savedPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & git -C $work init -q 2>$null
+                $env:GIT_COMMITTER_DATE = '2026-11-17T17:59:32+08:00'
+                & git -C $work -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m one 2>$null
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-17T09:59:32Z'
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-17T09:59:32Z'
+                $env:GIT_COMMITTER_DATE = '2026-11-18T08:00:00Z'
+                & git -C $work -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m two 2>$null
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-18T08:00:00Z'
+            }
+            finally {
+                $env:GIT_COMMITTER_DATE = $saved
+                $ErrorActionPreference = $savedPreference
+            }
+        }
+    }
+
+    It 'Get-BiRevision names the commit of a git work tree and unknown elsewhere' {
+        Get-BiRevision -RepoRoot $script:repo | Should -Be 'unknown'
+        if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+            Get-BiRevision -RepoRoot (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) | Should -Match '^[0-9a-f]{40}$'
+        }
+    }
+
+    It 'passes the host''s cache directory and installer path, so the helper''s messages name them' {
+        $installer = Join-Path $TestDrive 'mine.sh'
+        Set-Content -LiteralPath $installer -Value 'x'
+        Invoke-BuildImage -ArgumentList @('-Installer', $installer, '-PrintPlan', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $resolve = (Get-TestCall -Calls $script:calls -Marker 'resolve')[0]
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $script:cache)) | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_INSTALLER={0}' -f $installer)) | Should -BeTrue
+    }
+
+    It 'drops a trailing separator from -CacheDir: Windows PowerShell 5.1 turns "\ + quote" into an escaped quote' {
+        # "...\ps cache dir\" (a space and a trailing backslash): 5.1 quoted the argument
+        # BROKERSRE_HOST_CACHE=...\ps cache dir\ as "...dir\" and docker read a garbled command
+        # ("Unable to find image 'cache:latest'"; review of #43).
+        $dir = Join-Path $TestDrive 'ps cache dir'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Invoke-BuildImage -ArgumentList @('-PrintPlan', '-CacheDir', ($dir + [IO.Path]::DirectorySeparatorChar)) -RepoRoot $script:repo | Should -Be 0
+        $resolve = (Get-TestCall -Calls $script:calls -Marker 'resolve')[0]
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $dir)) | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-v', ('{0}:/cache' -f $dir)) | Should -BeTrue
+        foreach ($argument in $resolve) { $argument.EndsWith('\') | Should -BeFalse -Because $argument }
+    }
+
+    It 'a proxy URL with credentials ends the build (<outcome>) with the records to remove; the value stays hidden' -TestCases @(
+        @{ outcome = 'built'; buildExit = 0; code = 0 }, @{ outcome = 'failed'; buildExit = 1; code = 1 }
+    ) {
+        $secret = 'pw-' + ('SYN{0}' -f 'THETIC')
+        $saved = [Environment]::GetEnvironmentVariable('HTTPS_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', ('http://synthetic:{0}@proxy.invalid:3128' -f $secret))
+            $script:buildExit = $buildExit
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be $code
+            $text = $script:messages -join "`n"
+            $text | Should -Match 'build records'
+            $text | Should -Match 'docker buildx history rm stubhelperref stubimageref'
+            $text | Should -Not -Match $secret
+            foreach ($call in $script:calls) {
+                $at = [array]::IndexOf([string[]]$call, '--metadata-file')
+                if ($at -ge 0) { Test-Path -LiteralPath $call[$at + 1] | Should -BeFalse }
+            }
+        }
+        finally { [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $saved) }
+    }
+
+    It 'a proxy URL without credentials asks for no metadata and prints no reminder' {
+        $saved = [Environment]::GetEnvironmentVariable('HTTPS_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', 'http://proxy.invalid:3128')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match 'build records'
+            foreach ($call in $script:calls) { $call | Should -Not -Contain '--metadata-file' }
+        }
+        finally { [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $saved) }
     }
 
     It 'without Docker it returns 1' {

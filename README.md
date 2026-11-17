@@ -304,9 +304,45 @@ Windows), next to the keys already there:
 }
 ```
 
-and the same proxy into the daemon's settings. **`HTTPS_PROXY` set in your shell does not
-reach the build**: the script does not pass it into the helper container (checked: with
-`HTTPS_PROXY` pointing at a closed port the helper still reached IBKR directly).
+and the same proxy into the daemon's settings. **Or set it in your shell**: when
+`HTTPS_PROXY`, `HTTP_PROXY` or `NO_PROXY` (or their lower-case forms) are set, both scripts pass
+them to the helper image's build, the helper container and the image build, where they take
+precedence over `config.json`. The daemon still takes its own proxy for pulls.
+
+- **The form the scripts accept**: `scheme://[user[:password]@]host[:port][/]`, the scheme
+  `http`, `https`, `socks4`, `socks4a`, `socks5` or `socks5h`, the host a name, an IPv4 address
+  or an IPv6 address in brackets, the port 1 to 65535. In a user name or password,
+  **percent-encode** every character other than letters, digits and `-._~!$&'()*+,;=`: `@` is
+  `%40`, `/` is `%2F`, `:` (in a user name) is `%3A`, `%` is `%25`, `#` is `%23`, `?` is `%3F`, a
+  space is `%20`; for example `http://alice:p%40ss%2Fword@proxy.example.com:3128`. Anything
+  else stops the script before it runs anything, with exit 2 and the variable's name, never its
+  value: curl and apt quote a value they cannot read in their errors, password included.
+  `NO_PROXY` is a comma-separated list of hosts and must not hold a tab or a line break.
+- **Where a proxy's password ends up.** Only the variables' names are on Docker's command
+  line, and the scripts print no value. The image keeps none either (`docker history`, the
+  image's configuration). But **Docker's build records keep every build argument**, so a
+  proxy URL with a user name and password stays readable in `docker buildx history inspect
+  <ref>`, in `docker buildx history export` and in Docker Desktop's Builds view until you
+  remove the record; proxies from `config.json` end up there the same way. Prefer a proxy URL
+  without credentials (a local relay that adds them, for example). When a value holds a user
+  name or password, the script ends by naming the records to remove:
+  `docker buildx history rm <ref> <ref>` (it deletes those records; the image is not touched).
+- **Windows**: environment names are case-insensitive, so `HTTPS_PROXY` and `https_proxy`
+  are one variable with one value (Linux keeps two).
+- **Reachable from both sides**: the Docker client on your computer uses the proxy (for
+  registry tokens), and so do the containers. `127.0.0.1` inside a container is the container
+  itself: name the proxy by a host name both can reach (`host.docker.internal` reaches your
+  computer from Docker Desktop's containers).
+
+Checked on 2026-11-17 with the shell variables and a local Squid proxy, with a user name and
+password in the proxy URL and a fresh BuildKit builder (so every step ran, the helper image's
+too): the proxy logged every request of `scripts/build-image.sh` (Alpine's index for the
+helper, IBKR, Ubuntu's archives, IBC from GitHub), the build passed its smoke test, and the
+password was in neither the script's output, nor `docker history --no-trunc`, nor `docker
+image inspect`. It was in the two build records the script named at the end (four times
+each), until `docker buildx history rm` with those two refs deleted them. The helper also
+replaces every proxy value, as written and percent-decoded, its `user:password` part and its
+password, with `***` in curl's error messages.
 
 Checked on 2026-11-17 with a local Squid proxy standing in for a corporate one: with
 `proxies` in `config.json`, `scripts/build-image.sh --print-plan` reached IBKR through it (the
@@ -442,7 +478,11 @@ What a build used is written down in three places:
 
 - **The image's labels**: `com.rocketedge.brokersre.ibkr.version`, `.ibkr.channel`,
   `.ibkr.build_stamp`, `.installer.sha256`, `.installer.source` (`ibkr` or `installer`),
-  `.qualified`, `.ibc.version`, `.ibc.release`.
+  `.qualified`, `.ibc.version`, `.ibc.release`, and the OCI labels
+  `org.opencontainers.image.revision` (the commit you built from, `unknown` outside a git
+  clone) and `org.opencontainers.image.created`: that commit's time in UTC, or outside a git
+  clone IBKR's build time of the installer (the date and time of `ibkr_build_stamp` in ISO
+  8601; IBKR names no time zone, so it is written as UTC). It is never the time of the build.
 - **[versions.json](versions.json)** of the commit you built from: the Ubuntu base image by
   digest, IBC by release and SHA-256, and the pinned Gateway versions with their SHA-256 and
   build stamps. The helper image is pinned by digest in `scripts/build-helper/Dockerfile`.
@@ -450,10 +490,20 @@ What a build used is written down in three places:
 
 To build the same Gateway again, check out the same commit and build with the same cache
 (or `--installer` with the kept file). Two things are not frozen: Ubuntu packages are
-installed and upgraded at build time (so a later build has later security fixes), and the
-helper's Alpine packages come from Alpine's index at its first build
-([limitations](docs/limitations.md) L36). A rebuild therefore has the same IB Gateway and IBC,
-not the same image id. To run exactly one image, name it by its id, by a tag you do not
+installed and upgraded when Docker's build cache does not hold that step (so a later build
+without it has later security fixes), and the helper's Alpine packages come from Alpine's
+index at its first build ([limitations](docs/limitations.md) L36).
+
+Compose starts a container again when its tag points at another image, and a new container
+means a new login. A rebuild of the same commit and installer on the same builder reuses every
+cached layer and keeps the image id: no label holds the build time, and the scripts attach no
+provenance attestation (`--provenance=false`; Docker's default one records the build's start
+and end time, and with the containerd image store the image id covers it). So `docker compose
+up -d` after such a rebuild leaves the running gateway alone. A new commit (even one that
+changes only documentation: `created` is its time), another installer, or a build without
+those cached layers (another builder, or a pruned build cache: the Ubuntu packages are
+installed and upgraded again) gives a new image, and the next `up -d` starts the gateway
+again with a new login. To run exactly one image, name it by its id, by a tag you do not
 rebuild, or by its digest in your registry.
 
 ### Pushing to your own private registry
@@ -617,10 +667,13 @@ IBGW_IMAGE=brokersre-ib-gateway:previous docker compose -f compose/docker-compos
 ```
 
 `docker image ls brokersre-ib-gateway` lists what you have. With a registry, push each version
-and roll back by pinning the earlier digest. A rebuild of the same version (for Ubuntu's
-security fixes) is a new image under the same version tag: tag the old one first if you want
-to keep it. [Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a
-rebuild brings a new Gateway.
+and roll back by pinning the earlier digest. A rebuild of the same commit and version on the
+same builder gives the same image ([Pinning and reproducing a
+build](#pinning-and-reproducing-a-build)). It brings Ubuntu's security fixes only when Docker's
+build cache no longer holds the package step (another builder, or a pruned cache), and is then
+a new image under the same version tag: tag the old one first if you want to keep it. [Is a
+newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a rebuild brings a
+new Gateway.
 
 ### Coming from the public image
 
@@ -675,10 +728,10 @@ leave it out, or name the copy in your own registry. Details:
 | `IBKR's stable channel changed during the download again` | 1 | IBKR published a build while the script downloaded, twice | Run again |
 | `the image build failed; nothing was cached` or `the IBC smoke test failed` | 1 | Docker's build or the offline IBC test failed; the lines above say which step | Read the lines above; see the rows below for disk and network |
 | `build-image: ... needs a value`, `unknown option` | 2 | A typing error | `scripts/build-image.sh --help` |
+| `HTTPS_PROXY is not a valid proxy URL (expected scheme://host:port; ...)` | 2 | The proxy variable is not `scheme://[user[:password]@]host[:port]`, or its user name or password holds `@`, `/`, a space or another character that must be percent-encoded | Fix the variable as in [Behind a corporate proxy](#behind-a-corporate-proxy) (`@` is `%40`, `/` is `%2F`, a space is `%20`) |
 | `IBKR is unreachable (...version.json), and no installer of the stable channel (x64) is in the cache` | 3 | No connection to IBKR and nothing cached | Check the connection or the [proxy](#behind-a-corporate-proxy); or build with `--installer` |
 | `--strict: IBKR's stable channel serves 10.50.1h; versions.json pins 10.50.1g` | 4 | `--strict` and IBKR moved on | Build without `--strict` and qualify the image, or use the cache |
-| `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running` (Windows), `Cannot connect to the Docker daemon` (Linux, macOS) | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it) | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group |
-| PowerShell, below Docker's line above: `the Docker host's architecture '' is not supported; pass -Platform` | 1 | The same: the script could not ask the daemon for its architecture | Start Docker Desktop (passing `-Platform` does not help) |
+| `the Docker daemon is not reachable (Docker context 'desktop-linux')` | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it); with `DOCKER_HOST is set`, that address does not answer | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group; check `docker context ls` and `DOCKER_HOST` |
 | `docker buildx is required` | 1 | Docker without the buildx plugin (an old Docker Engine) | Install `docker-buildx-plugin` from Docker's repository, or Docker Desktop |
 | `no space left on device` in the build output | 1 | The Docker disk is full (Docker Desktop: its virtual disk) | `docker builder prune`, `docker image prune`; Docker Desktop: Settings, Resources, Disk usage limit |
 | `$'\r': command not found` or `/usr/bin/env: 'bash\r'` | 1 | The scripts have Windows line endings: the files were copied or edited with a tool that wrote CRLF (a clone keeps LF, `.gitattributes` says so) | Clone again with git; do not convert the files |

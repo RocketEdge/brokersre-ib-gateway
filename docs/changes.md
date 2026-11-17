@@ -5,6 +5,138 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #43: malformed proxy values refused, every proxy value masked
+
+- **What changed:** both wrappers check every set proxy variable before anything runs (no
+  docker call). `HTTPS_PROXY`, `HTTP_PROXY` and their lower-case forms must be
+  `scheme://[user[:password]@]host[:port][/]`: scheme http, https, socks4, socks4a, socks5 or
+  socks5h; a host name, an IPv4 address or an IPv6 address in brackets; port 1 to 65535; in
+  the user information only RFC 3986's unreserved and sub-delims characters, the rest
+  percent-encoded; no whitespace. `NO_PROXY` and `no_proxy` must hold no control character. A
+  failure exits 2 and names the variable, never its value. The helper's `hide_proxy_values`
+  replaces each proxy value (as written and percent-decoded), its `user:password` and its
+  password with `***` in curl's errors, then applies the old URL pattern. README: the accepted
+  form, the percent-encoding rule, a troubleshooting row; both contract files.
+- **Result:** red first. bats: the reviewer's four values (no scheme; a `/`, a space, a second
+  `@` in the password) and six more (scheme, ports 0 and 65536, no host, a broken escape, a
+  final line break), each as `HTTPS_PROXY` and `http_proxy`, exited 0 instead of 2; a tab in
+  `NO_PROXY` likewise; the helper showed `Unsupported proxy syntax in '...'` with the
+  password; a stand-in curl quoting the decoded value, `user:password` and the password leaked
+  all three. Pester: 11 failing. Then green: `build-image.bats` 72/72 on Linux, Pester 62/62
+  in PowerShell 7 and 5.1; the bash and PowerShell checks agree on 23 further edge cases. End
+  to end: the real wrapper with a space in the password exited 2 with the name only; through
+  Squid (fresh docker-container builder, helper image removed, percent-encoded password in all
+  four variables) the build passed its smoke test in 211 s, Squid logged 262 requests
+  (Alpine, IBKR, Ubuntu's archives, GitHub), the password was in neither the output nor
+  `docker history`/`inspect`, and the two named build records held it four times each until
+  removed.
+- **What did NOT work / root cause:** the previous round masked `://user:password@` with a
+  pattern and tested it with a value of exactly that shape. The values curl cannot parse are
+  the ones whose shape differs, and curl quotes them in full. A pattern cannot know which part
+  is the password; the values themselves can. Masking only covered the helper: the
+  Dockerfile's apt-get and curl received the same values, which only the check up front keeps
+  out.
+- **Next step:** proxies from Docker's `config.json` reach the build without passing the
+  wrappers, so they are not checked; `ALL_PROXY` is not forwarded. A proxy that requires
+  authentication, and a real corporate proxy, remain untested.
+
+### 2026-11-17 — An unchanged rebuild keeps its image id: deterministic `created`, no provenance
+
+- **What changed:** both wrappers label `org.opencontainers.image.created` with the checkout's
+  commit time in UTC (asked inside the checkout, like `revision`), or outside a git work tree
+  with IBKR's build time of the installer (the stamp's date and time as ISO 8601, written as
+  UTC; IBKR names no zone), never the clock, and build the image with `--provenance=false`.
+  README ("Pinning and reproducing a build", "Upgrading and rolling back"),
+  `docs/evidence.md`, the container suite's comment and both contract files say so.
+- **Result:** bats and Pester red first (two builds of the same inputs, one `created`; a new
+  commit, a new one; `--provenance=false` on the image build), then green. End to end on
+  Docker Desktop 29.9.3 (containerd image store), a fresh clone of `ba2b979`, cache hit: two
+  consecutive `build-image.sh` runs (77 s, 75 s) both gave `sha256:3d508f042063…`, and
+  `build-image.ps1` on the same clone gave the same id; `docker compose ... up -d`
+  (`IBC_LAUNCH=no`, dummy secret files) after the second build printed `Container
+  det-e2e-ib-gateway-1 Running`, the container started by the first `up`. A new commit gave a
+  new manifest, and compose recreated the container. A build through Squid with a canary
+  password in `HTTPS_PROXY` gave the same id and named its two build records.
+- **What did NOT work / root cause:** the deterministic label alone did not keep the id: two
+  warm builds of `890bd39` gave `a2171de11e94`, then `f4a0fdcc0004`, with one manifest,
+  `503040d3eba0`. buildx attaches a min-mode SLSA provenance attestation by default, the
+  containerd image store keeps it, and the image id is then the index over the image manifest
+  and that attestation, whose `startedOn` and `finishedOn` change with every build; with
+  `BUILDX_NO_DEFAULT_ATTESTATIONS=1` both builds were `503040d3eba0`. Compose was not misled:
+  it records the platform manifest (label `com.docker.compose.image`) and left the gateway
+  running in both cases, so the recreation came from the clock in `created`. The attestation
+  held no build arguments (no canary in it): not a leak. It did record the clone's source path.
+- **Next step:** a build without the cached layers (another builder, a pruned cache) still
+  gives a new image, by design (the Ubuntu packages are upgraded again). RocketEdge's bake path
+  still writes the build time (each published digest is signed and attested; it is never
+  rebuilt in place). arm64 and the Windows kit's WSL path were not re-measured.
+
+### 2026-11-17 — Review of #43: build records, the helper's own build, 5.1 quoting
+
+- **What changed:** when a proxy variable's value holds `@`, both wrappers give the helper
+  build and the image build a `--metadata-file`, read each build record's ref from it, delete
+  it at once, and end the run (built or failed) with `docker buildx history rm <ref> <ref>`.
+  The helper image's own build gets the proxy names as build arguments. `build-image.ps1`
+  trims trailing separators from the cache directory. The helper's curl errors are shown with
+  `://user:password@` replaced by `://***@`. README: where a proxy's password ends up (build
+  records, also for `config.json` proxies; prefer a URL without credentials), Windows'
+  case-insensitive variable names, a proxy reachable from the host and the containers, and why
+  a rebuild has a new image id.
+- **Result:** red first for each (bats and Pester; the 5.1 failure also reproduced for real:
+  "Unable to find image 'cache:latest'" with `-CacheDir '...\ps cache dir\'`). Checked:
+  `docker buildx history inspect <ref>` lists `HTTPS_PROXY` with its value, `history export`
+  carries it, `docker buildx history rm <ref>` deletes the record (inspect then fails) and the
+  image never held it. End to end through Squid, credentials in the URL, a fresh builder and
+  the helper image removed first: Squid logged `CONNECT dl-cdn.alpinelinux.org:443` for the
+  helper's `apk add` and every other request (262 in all), the build passed its smoke test in
+  3 min 43 s, and the run ended naming two records, each holding the password four times,
+  which the printed `docker buildx history rm` deleted. Windows PowerShell 5.1 with
+  `-CacheDir '...\ps cache dir\'`: exit 0 in 73 s, smoke test passed.
+- **What did NOT work / root cause:** "the values are not printed" was true of the scripts'
+  output and the image, and the previous run checked only those; the build record, where
+  BuildKit keeps every build argument, was not looked at. The helper image was built before
+  the proxy names were collected, so a proxy-only network failed its first run. A new argument
+  built from a user's path (`BROKERSRE_HOST_CACHE=...`) inherited 5.1's quoting of a final
+  backslash, which the older `-v <path>:/cache` form had hidden behind its suffix.
+- **Next step:** a proxy that requires authentication and a real corporate proxy remain
+  untested; with `org.opencontainers.image.created` set per build, a rebuild now always has a
+  new image id, so `docker compose up -d` after it starts a new login (README says so; a
+  deterministic time, such as the commit's, would keep the id of an unchanged rebuild).
+
+### 2026-11-17 — Build polish: stopped Docker, shell proxies, OCI labels, host paths
+
+- **What changed:** both build wrappers ask the daemon for its version before anything else
+  and, when it does not answer, say "the Docker daemon is not reachable" with the Docker
+  context (exit 1). They pass `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lower-case
+  forms, when set, to the helper container (`-e NAME`) and to the build (`--build-arg NAME`),
+  names only. A helper build is labelled `org.opencontainers.image.created` (UTC, to the
+  second) and `.revision` (the commit, `unknown` outside a git work tree), and the
+  Dockerfile's `org.opencontainers.image.url` points at the README's "Build the image". The
+  helper's messages name the cache and the `--installer` file by the host's paths
+  (`BROKERSRE_HOST_CACHE`, `BROKERSRE_HOST_INSTALLER`), not by its mounts.
+- **Result:** red first for each, in bats and Pester (daemon down with and without
+  `--platform`; proxy values in the helper's environment and names in the build arguments, no
+  value in any call or output; created and revision labels; host paths in three messages). End
+  to end on Windows 11, Docker 29.9.3: through a local Squid proxy with a user name and
+  password in the shell's proxy URL and a fresh BuildKit builder, `build-image.sh` built
+  10.50.1h in 6 min 15 s; Squid logged 263 requests (IBKR, Ubuntu's archives, GitHub), and the
+  password was in neither the output nor `docker history --no-trunc` nor `docker image
+  inspect` (it was, though, in BuildKit's build records, which this run did not look at: see
+  the entry above); the full container suite passed on that image (89 checks, incl. the new OCI label
+  check, which failed on the image built before). From a fresh clone, cache hits: the `.sh`
+  build in 1 min 13 s and the `.ps1` build (PowerShell 7) in 1 min 6 s, both labelled with
+  the commit, both smoke tests passed. With `DOCKER_HOST=tcp://127.0.0.1:1` both wrappers say
+  the daemon is not reachable, exit 1; offline `--strict` with an empty cache names the cache
+  as `/c/Users/.../empty cache` (Git Bash) and `C:\Users\...\empty cache` (PowerShell), exit 3.
+- **What did NOT work / root cause:** the first real Git Bash build labelled a clone with
+  revision `unknown`: the script exports `MSYS_NO_PATHCONV=1` for docker's container paths, so
+  `git -C /c/...` got a POSIX path Windows git cannot open; it now runs `git rev-parse HEAD`
+  inside the checkout (a stand-in git in bats guards it; Linux never showed it). A Bash
+  heredoc on this host halved the backslashes of a new test line, which then compared against
+  `\${NEWER_X64}` unexpanded; the line was rewritten with the Edit tool and `bs='\'`.
+- **Next step:** a proxy that requires authentication (Squid here accepted the credentials
+  without checking them) and a real corporate proxy remain untested.
+
 ### 2026-11-17 — Review of #42: "not public" in generated text, the audit log's times
 
 - **What changed:** `publish.yml`'s release notes and `detect-releases.yml`'s update pull

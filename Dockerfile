@@ -164,7 +164,7 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 LABEL org.opencontainers.image.title="brokersre-ib-gateway" \
       org.opencontainers.image.description="IB Gateway ${IB_GATEWAY_VERSION} (${IB_GATEWAY_CHANNEL}) with IBC ${IBC_VERSION}, built for unattended, observable operation. Not affiliated with Interactive Brokers." \
       org.opencontainers.image.source="https://github.com/RocketEdge/brokersre-ib-gateway" \
-      org.opencontainers.image.url="https://github.com/RocketEdge/brokersre-ib-gateway/pkgs/container/brokersre-ib-gateway" \
+      org.opencontainers.image.url="https://github.com/RocketEdge/brokersre-ib-gateway#build-the-image" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="RocketEdge.com Pte. Ltd." \
       org.opencontainers.image.version="${IB_GATEWAY_VERSION}-${IB_GATEWAY_CHANNEL}" \

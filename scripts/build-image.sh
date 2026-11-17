@@ -90,6 +90,27 @@ die_usage() {
 # say MESSAGE...: one progress line on stderr.
 say() { printf 'build-image: %s\n' "$*" >&2; }
 
+# proxy_url_valid VALUE: whether VALUE is a proxy URL that curl, apt and the helper read the
+# same way: scheme://[user[:password]@]host[:port][/], the scheme one of http, https, socks4,
+# socks4a, socks5, socks5h; the host a name, an IPv4 address or a bracketed IPv6 address; the
+# port 1 to 65535; in the user name and password only RFC 3986's unreserved and sub-delims
+# characters, anything else percent-encoded (@, /, :, %, ?, #, spaces); no whitespace anywhere.
+# Why: curl's error for a value it cannot parse quotes the value in full, password included
+# (review of #43), and the Dockerfile's apt-get and curl get the same value. The C locale keeps
+# the ranges ASCII.
+proxy_url_valid() {
+  local LC_ALL=C
+  local user_char="([A-Za-z0-9._~!\$&'()*+,;=-]|%[0-9A-Fa-f]{2})"
+  local url_re="^(http|https|socks4|socks4a|socks5|socks5h)://(${user_char}*(:${user_char}*)?@)?(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:[0-9]{1,5})?/?$"
+  [[ "$1" =~ ${url_re} ]] || return 1
+  # The port, when there is one, is the only `:digits` at the end (a host has no colon outside
+  # its brackets).
+  if [[ "$1" =~ :([0-9]{1,5})/?$ ]]; then
+    [ $((10#${BASH_REMATCH[1]})) -ge 1 ] && [ $((10#${BASH_REMATCH[1]})) -le 65535 ] || return 1
+  fi
+  return 0
+}
+
 # host_path PATH: PATH as the Docker CLI on this host understands it (C:/... under Git Bash).
 host_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
@@ -133,6 +154,22 @@ if [ -n "${installer}" ]; then
   installer_dir="$(cd "$(dirname "${installer}")" && pwd)"
   installer_name="$(basename "${installer}")"
 fi
+# The proxy variables, before anything runs (proxy_url_valid): a usage error names the variable,
+# never its value. NO_PROXY is a list of hosts; it must not hold a control character.
+for proxy_name in HTTPS_PROXY HTTP_PROXY https_proxy http_proxy; do
+  if [ -n "${!proxy_name:-}" ] && ! proxy_url_valid "${!proxy_name}"; then
+    say "${proxy_name} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)"
+    exit 2
+  fi
+done
+for proxy_name in NO_PROXY no_proxy; do
+  case "${!proxy_name:-}" in
+    *[[:cntrl:]]*)
+      say "${proxy_name} holds a control character (a tab or a line break); expected host names separated by commas"
+      exit 2
+      ;;
+  esac
+done
 
 command -v docker >/dev/null 2>&1 || {
   say "Docker is required (Docker Desktop, or Docker Engine 23 or later with buildx)"
@@ -142,6 +179,15 @@ docker buildx version >/dev/null 2>&1 || {
   say "docker buildx is required (Docker Desktop, or Docker Engine 23 or later with the buildx plugin)"
   exit 1
 }
+# The daemon, before anything asks it a question: without this check a stopped Docker Desktop
+# surfaced as an empty architecture, or (with --platform) as a failed helper build. Docker's
+# own error is not repeated: it can name DOCKER_HOST, which may hold a user name.
+server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || server_version=""
+if [ -z "${server_version}" ]; then
+  context="$(docker context show 2>/dev/null)" || context="unknown"
+  say "the Docker daemon is not reachable (Docker context '${context}'$([ -n "${DOCKER_HOST:-}" ] && printf ', DOCKER_HOST is set')): start Docker Desktop and wait until its engine runs (Windows, macOS), or start the daemon (Linux: sudo systemctl start docker); check the Docker context and DOCKER_HOST"
+  exit 1
+fi
 if [ -z "${platform}" ]; then
   host_arch="$(docker info --format '{{.Architecture}}')"
   case "${host_arch}" in
@@ -159,9 +205,51 @@ if [ -z "${cache_dir}" ]; then cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/brok
 # Created here, so that Docker does not create it (as root, on Linux) for the bind mount.
 mkdir -p "${cache_dir}" "${repo_root}/downloads"
 
+# The proxy variables of the caller's environment, by name. Docker takes their values from this
+# process's environment (`-e NAME`, `--build-arg NAME`), so a value, which may hold a password,
+# is never in an argument list or in the output. They are predefined build arguments: usable in
+# RUN steps, kept out of `docker history` and the image configuration (the Dockerfile declares
+# none). A proxy in Docker's config.json still applies when none of these is set. Collected
+# before the helper image is built: its `apk add` needs the proxy too on a proxy-only network.
+proxy_names=""
+proxy_credentials=no
+for proxy_name in HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy; do
+  if [ -n "${!proxy_name:-}" ]; then proxy_names="${proxy_names} ${proxy_name}"; fi
+  case "${!proxy_name:-}" in *@*) proxy_credentials=yes ;; esac
+done
+
+# But Docker's build records keep every build argument's value (`docker buildx history
+# inspect`, `history export`, Docker Desktop's Builds view) until they are removed. When a
+# proxy value carries a user name or password, each build writes its metadata file (which names
+# its record, and can hold the same provenance, so it is deleted at once), and the end of the
+# run names the records to remove; never the value.
+metadata_dir=""
+if [ "${proxy_credentials}" = yes ]; then metadata_dir="$(mktemp -d)"; fi
+# build_record FILE: the build record's ref in buildx's metadata FILE, or nothing.
+build_record() {
+  if [ -f "$1" ]; then sed -n 's/.*"buildx.build.ref": *"\([^"]*\)".*/\1/p' "$1" | sed -n 1p | sed 's#.*/##'; fi
+}
+# on_exit: the EXIT trap: remove the installer this run put into downloads/, and name the build
+# records that keep a proxy's credentials.
+# shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
+on_exit() {
+  local records=""
+  if [ -n "${context_path:-}" ]; then remove_context_installer; fi
+  if [ -n "${metadata_dir}" ]; then
+    records="$(build_record "${metadata_dir}/helper.json") $(build_record "${metadata_dir}/image.json")"
+    rm -rf "${metadata_dir}"
+    records="$(printf '%s' "${records}" | tr -s ' ' | sed 's/^ //; s/ $//')"
+    say "a proxy variable holds a user name or password (not shown): the image does not keep it, but Docker's build records do (docker buildx history inspect, Docker Desktop's Builds view). Remove them: docker buildx history rm ${records:-<ref> (docker buildx history ls)}"
+  fi
+}
+trap on_exit EXIT
+
 # `buildx build --load`, not `docker build`: with a docker-container default builder (what
 # docker/setup-buildx-action installs) a plain build leaves the image in the build cache only.
-if ! docker buildx build --load -q -t "${helper_image}" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
+set -- buildx build --load -q -t "${helper_image}"
+for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+if [ -n "${metadata_dir}" ]; then set -- "$@" --metadata-file "$(host_path "${metadata_dir}/helper.json")"; fi
+if ! docker "$@" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
   say "could not build the helper image from scripts/build-helper"
   exit 1
 fi
@@ -176,7 +264,13 @@ helper() {
     -v "$(host_path "${repo_root}/downloads"):/downloads" -e BROKERSRE_TEST_IBKR_BASE_URL \
     -e BROKERSRE_HOST_SHELL=bash -e "BROKERSRE_HOST_DOWNLOADS=$(host_path "${repo_root}/downloads")" \
     "${helper_image}" bash /repo/scripts/resolve-installer.sh "$@"
-  if [ -n "${installer}" ]; then set -- -v "$(host_path "${installer_dir}"):/installer:ro" "$@"; fi
+  # The helper's messages name the cache and the --installer file as the user knows them
+  # (BROKERSRE_HOST_CACHE, BROKERSRE_HOST_INSTALLER), not by its mounts /cache and /installer.
+  set -- -e "BROKERSRE_HOST_CACHE=${cache_dir}" "$@"
+  if [ -n "${installer}" ]; then
+    set -- -v "$(host_path "${installer_dir}"):/installer:ro" -e "BROKERSRE_HOST_INSTALLER=${installer}" "$@"
+  fi
+  for proxy_name in ${proxy_names}; do set -- -e "${proxy_name}" "$@"; done
   if [ "$(uname -s)" = Linux ]; then set -- --user "$(id -u):$(id -g)" "$@"; fi
   docker run --rm "$@"
 }
@@ -220,12 +314,10 @@ discard() {
 }
 context_path="${repo_root}/${context_file}"
 # remove_context_installer: remove the installer this run put into downloads/ (and only that:
-# a file that was there before, the user's, is never removed).
-# shellcheck disable=SC2329  # invoked through the EXIT trap
+# a file that was there before, the user's, is never removed). Also run by on_exit.
 remove_context_installer() {
   if [ "$(value context_owned)" = yes ]; then rm -f "${context_path}"; fi
 }
-trap remove_context_installer EXIT
 
 set -- buildx build --platform "${platform}" --load
 for tag in "${tags[@]}"; do set -- "$@" -t "${tag}"; done
@@ -234,6 +326,32 @@ while IFS= read -r line; do
 done <<EOF
 ${plan}
 EOF
+for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+if [ -n "${metadata_dir}" ]; then set -- "$@" --metadata-file "$(host_path "${metadata_dir}/image.json")"; fi
+# The build's own OCI labels: the commit of this checkout (unknown outside a git work tree, a
+# downloaded archive) and a `created` time that is the same for the same inputs, never the wall
+# clock: the commit's time in UTC, or, outside a git work tree, IBKR's build time of the
+# installer (the stamp's buildDateTime as ISO 8601; IBKR names no time zone, it is written as
+# UTC). An unchanged rebuild on the same builder then keeps its image id, so `docker compose up
+# -d` does not start the gateway again (a new IBKR login). Without these labels the image showed
+# the Ubuntu base image's `created` and no revision. git is asked inside the checkout, with no
+# path argument: MSYS_NO_PATHCONV=1 (above) keeps Git Bash from converting a POSIX path for it.
+build_revision="$(cd "${repo_root}" && git rev-parse HEAD 2>/dev/null)" || build_revision=""
+case "${build_revision}" in "" | *[!0-9a-f]*) build_revision=unknown ;; esac
+build_created=""
+if [ "${build_revision}" != unknown ]; then
+  build_created="$(cd "${repo_root}" && TZ=UTC0 git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null)" || build_created=""
+fi
+if ! [[ "${build_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  build_created="$(value ibkr_build_stamp | sed -n -E 's/.* ([0-9]{4})([0-9]{2})([0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})$/\1-\2-\3T\4Z/p')"
+fi
+set -- "$@" --label "org.opencontainers.image.created=${build_created}" \
+  --label "org.opencontainers.image.revision=${build_revision}"
+# No provenance attestation: buildx attaches one by default, and where the image store keeps
+# it (Docker's containerd image store) the image id is the index over the image and that
+# attestation, which records the build's start and end time; two builds of the same inputs
+# then had one image manifest but two ids (measured 2026-11-17). It holds no build arguments.
+set -- "$@" --provenance=false
 set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
 say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
 if ! docker "$@" >&2; then

@@ -199,6 +199,20 @@ if [[ "${label_source}" =~ ^(ibkr|installer|override)$ ]]; then
 else
   fail "installer source label" "com.rocketedge.brokersre.installer.source is '${label_source}'"
 fi
+# The OCI labels of this build, not of the Ubuntu base image: a created time in UTC, to the
+# second (scripts/build-image.sh writes the commit's time or IBKR's build time of the
+# installer, bake-env.sh the build time; Ubuntu's own has fractions and +00:00), from which
+# commit (unknown outside a git work tree), and where its recipe is (the README's build
+# section; the package page it named before is gone).
+oci_labels="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.created"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.url"}}')"
+IFS='|' read -r label_created label_revision label_url <<<"${oci_labels}"
+if [[ "${label_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+  && [[ "${label_revision}" =~ ^([0-9a-f]{40}|unknown)$ ]] \
+  && [ "${label_url}" = "https://github.com/RocketEdge/brokersre-ib-gateway#build-the-image" ]; then
+  pass "OCI labels of this build: created ${label_created}, revision ${label_revision}, url to the recipe"
+else
+  fail "OCI build labels" "created '${label_created}', revision '${label_revision}', url '${label_url}'"
+fi
 # What the image takes from rootfs/ has the same owner and mode from every build host: a
 # Windows build context arrives with 0755 on every file, a WSL checkout under /mnt/c reports
 # 0777 (drvfs), and a template the gateway reads must never be writable by anyone but root.
