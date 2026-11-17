@@ -181,7 +181,7 @@ architecture and SHA-256 (`installers/<version>/<arch>/<sha256>/`), with where i
 |---|---|
 | `version` | The IB Gateway build in the image, as IBKR names it (`10.50.1h`) |
 | `channel` | IBKR's channel it came from: `stable` or `latest` |
-| `qualified_by_project` | `yes`: the version and the installer's SHA-256 are the ones pinned in [versions.json](versions.json), which the project has built, tested and logged in with. `no`: IBKR serves another build than the pin, usually a newer one (or you gave an installer other than the pinned one); the script built it after checking it against IBKR's own build stamp, and no login has been made with it by the project |
+| `qualified_by_project` | `yes`: the version and the installer's SHA-256 equal the repository's pin in [versions.json](versions.json), which passed the project's offline CI (build, IBC smoke test, container tests, Trivy gate). A paper login is a separate qualification (`scripts/qualify-paper.sh`, ADR 0014); `yes` does not say that one happened, and a `stable` pin can move after CI alone (ADR 0009). `no`: IBKR serves another build than the pin, usually a newer one (or you gave an installer other than the pinned one); the script built it after checking it against IBKR's own build stamp, and the project's CI has not run on it |
 | `installer_sha256` | SHA-256 of the installer the image was built from; also the label `com.rocketedge.brokersre.installer.sha256` |
 | `ibkr_build_stamp` | IBKR's build stamp, `(.<suffix>) <build date and time>`; the installed Gateway carries exactly this stamp, or the build would have failed |
 | `image` | The first tag of the image |
@@ -206,9 +206,11 @@ What to do, in order of preference:
 1. Qualify it yourself with one login to a **paper** account of your own:
    `scripts/qualify-paper.sh --image brokersre-ib-gateway:10.50.1h --secrets-dir <dir>`
    ([Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login));
-   exit 0 means the image logged in, was healthy and stopped tidily.
+   exit 0 means the image logged in, was healthy and stopped tidily. Do this before you go
+   live with any image you built, whatever the line says.
 2. Or wait until this repository pins the new build (a pull request that changes
-   `versions.json`), pull, and build again: the line then says `yes`.
+   `versions.json`), pull, and build again: the line then says `yes`, which means the pin
+   passed the project's offline CI, not that it logged in.
 3. Or refuse such builds: `--strict` (`-Strict`) builds only the pinned version and exits 4
    when IBKR serves another one.
 
@@ -565,9 +567,9 @@ jobs:
           docker push "$image:$version"
 ```
 
-Add `--strict` to the build to push only versions the project has qualified (the run then
-fails with exit 4 while IBKR serves another one), or keep `qualified_by_project` from
-`build.txt` and qualify the version with a paper login before you deploy it. For arm64, run
+Add `--strict` to the build to push only the pinned version, the one that passed the project's
+offline CI (the run then fails with exit 4 while IBKR serves another one). Either way, qualify
+the image with a paper login before you deploy it. For arm64, run
 the same job with `--platform linux/arm64` on an arm64 runner (not tested).
 
 ### Upgrading and rolling back
@@ -681,7 +683,7 @@ or in PowerShell: `pwsh -NoProfile -File scripts/build-image.ps1` (Windows Power
 
 You should see, after a few minutes, `ALL CONTAINER TESTS PASSED` and seven last lines ending
 with `image: brokersre-ib-gateway:stable`; the compose files use that name. If a line reads
-`qualified_by_project: no`, IBKR serves a newer Gateway than the project has qualified:
+`qualified_by_project: no`, IBKR serves another Gateway than the one this repository pins:
 [what that means](#what-the-last-lines-mean). Everything about the build, from prerequisites to
 proxies, is in [Build the image](#build-the-image).
 
@@ -800,8 +802,11 @@ Paper first. Before the same setup holds a live session, check each line:
       `IBGW_IMAGE` names the version tag you built and do not rebuild, or the digest of your
       copy in your own private registry (`IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...`).
       The channel tag moves with every build.
-- [ ] **The Gateway in it was qualified**: `qualified_by_project: yes`, or one paper login of
-      your own with that image ([qualifying](#qualifying-an-image-with-a-real-paper-login)).
+- [ ] **You logged in with that very image once, on paper**:
+      `scripts/qualify-paper.sh --image <the image you built> --secrets-dir <dir>` exited 0
+      ([qualifying](#qualifying-an-image-with-a-real-paper-login)). `qualified_by_project: yes`
+      does not replace this: it says only that the version and installer equal the pin, which
+      passed the project's offline CI.
 - [ ] **`TRADING_MODE=live`**, and `READ_ONLY_API=no` only if the strategy places orders.
 - [ ] **A daily restart time** (`AUTO_RESTART_TIME`, two-digit hour) outside IBKR's reset
       windows for your region; `doctor` checks the form and, for three time-zone families,
@@ -1133,8 +1138,9 @@ really log in, run the qualification against a **paper** account of your own:
 scripts/qualify-paper.sh --image brokersre-ib-gateway:10.50.1h --secrets-dir <dir>
 ```
 
-Give it the image you built (by its version tag, as here, or by digest in your registry). This
-is how a build that says `qualified_by_project: no` is qualified on your side.
+Give it the image you built (by its version tag, as here, or by digest in your registry), before
+you go live with it, whatever its `qualified_by_project` line says: `yes` means only that the
+pin passed the project's offline CI.
 
 It starts the image in the hardened reference configuration, makes **one** login attempt in
 paper mode with the read-only API, and checks: the phase reaches `logged-in`, the health check
@@ -1202,7 +1208,8 @@ pwsh -NoProfile -File scripts/build-image.ps1 -PrintPlan | Select-String '^versi
 The first line is what IBKR serves now (`version: 10.50.1h` on 2026-11-17), the second what
 your image holds. When they differ, a rebuild brings the new Gateway
 ([Upgrading and rolling back](#upgrading-and-rolling-back)); `--print-plan` also says whether
-that version is the one `versions.json` pins (`pinned: yes`) and therefore qualified.
+that version is the one `versions.json` pins (`pinned: yes`), which passed the project's
+offline CI.
 [docs/upgrade-check.md](docs/upgrade-check.md) has a cron and a Task Scheduler example that
 only notify. For an image in a registry (yours), `scripts/check-upgrade.sh` compares the digest
 a gateway runs with the digest a channel tag points at in that registry; it answers exit 2
@@ -1247,13 +1254,15 @@ image name that cannot move ([Upgrading and rolling back](#upgrading-and-rolling
 
 For the project and RocketEdge's own image, see [docs/upgrade-policy.md](docs/upgrade-policy.md).
 Summary: `detect-releases.yml` checks IBKR daily and opens a pull request when IBKR publishes a
-build, which moves the pins in `versions.json` (what `qualified_by_project: yes` refers to); a
-`stable` update merges itself once CI passes, a `latest` update waits for a human (ADR 0009);
-`publish.yml` builds RocketEdge's image, pushes it by digest, scans both platforms of that
-digest, signs, and only then moves tags; OS packages are refreshed with `-rYYYYMMDD` tags
-monthly, and within a day of a fixable CRITICAL/HIGH finding (a target, not a guarantee:
-GitHub can delay or drop a scheduled run). That image is private from Phase 4 of
-[the spec](docs/specs/2026-11-17-private-image-public-recipe.md) on.
+build, which moves the pins in `versions.json` (what `qualified_by_project: yes` refers to: a
+pin passed the project's offline CI, not a login); a `stable` update merges itself once CI
+passes, a `latest` update waits for a human (ADR 0009; the repository variable
+`STABLE_AUTOMERGE=false` stops the automatic merges); `publish.yml` builds RocketEdge's image,
+pushes it by digest, scans both platforms of that digest, signs, and only then moves tags; OS
+packages are refreshed with `-rYYYYMMDD` tags monthly, and within a day of a fixable
+CRITICAL/HIGH finding (a target, not a guarantee: GitHub can delay or drop a scheduled run).
+The former public package of that image is being withdrawn (Phase 4 of
+[the spec](docs/specs/2026-11-17-private-image-public-recipe.md)).
 
 ## Automatic updates and repository secrets
 

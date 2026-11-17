@@ -22,8 +22,9 @@ pwsh -NoProfile -File scripts/build-image.ps1 -PrintPlan | Select-String '^versi
 (docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels}}' | ConvertFrom-Json).'com.rocketedge.brokersre.ibkr.version'
 ```
 
-Different values: a rebuild brings the new Gateway; the plan's `pinned:` line says whether
-this project has qualified it (`yes`) or not (`no`, see
+Different values: a rebuild brings the new Gateway; the plan's `pinned:` line says whether it
+is the version `versions.json` pins (`yes`: it passed the project's offline CI; a paper login
+is a separate qualification, `scripts/qualify-paper.sh`) or not (`no`, see
 [what the last lines mean](../README.md#what-the-last-lines-mean)). The plan asks IBKR's
 `version.json` once and builds the small helper image if it is missing; when IBKR cannot be
 reached it reports the cached version with `ibkr_reachable: no`.

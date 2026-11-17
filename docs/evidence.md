@@ -54,7 +54,7 @@ Run on 2026-11-17 against `brokersre-ib-gateway:stable` built with `scripts/buil
 
 | What the build provides | Where it comes from | Command |
 |---|---|---|
-| The build's own record: version, channel, whether the project qualified it, the installer's SHA-256, IBKR's build stamp, the image id | the last seven lines of `scripts/build-image.sh` / `.ps1` | keep them with your change record |
+| The build's own record: version, channel, whether version and installer equal the pin (`qualified_by_project`), the installer's SHA-256, IBKR's build stamp, the image id | the last seven lines of `scripts/build-image.sh` / `.ps1` | keep them with your change record |
 | The same facts as image labels (`com.rocketedge.brokersre.*`) | `Dockerfile`, `scripts/resolve-installer.sh` | B1 |
 | The installer's bytes, where they came from (`source`) and when they were accepted, by version and SHA-256 | the installer cache (`installers/<version>/<arch>/<sha256>/meta`) | B2 |
 | The installed Gateway carries IBKR's build stamp (the build fails otherwise) | `scripts/fetch-installer.sh --check-stamp` in the `Dockerfile` | B3 |
@@ -74,8 +74,11 @@ jq '.components | length' sbom.cdx.json
 ```
 
 Limits: an image you built has no signature, no attested SBOM and no provenance unless you add
-them in your own pipeline. A build that says `qualified_by_project: no` holds a Gateway build
-the project has not logged in with ([limitations](limitations.md), L35). The labels
+them in your own pipeline. `qualified_by_project: yes` says that the version and installer
+equal the repository's pin, which passed the project's offline CI; a build that says `no` holds
+a Gateway build the project's CI has not run on ([limitations](limitations.md), L35). Neither
+says that a login happened: a paper login is a separate qualification
+(`scripts/qualify-paper.sh`, [ADR 0014](adr/0014-paper-login-qualification.md)). The labels
 `org.opencontainers.image.created` and `.revision` are set by the maintainers' bake path only:
 an image built with the build helper carries the Ubuntu base image's `created` date and no
 revision (`docker image inspect --format '{{.Created}}'` gives the build time).
