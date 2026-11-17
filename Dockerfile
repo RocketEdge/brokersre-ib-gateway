@@ -62,12 +62,16 @@ RUN curl -fsSL "${IBC_RELEASE_BASE}/${IBC_RELEASE_TAG}/IBCLinux-${IBC_VERSION}.z
  && rm -f /tmp/setup/ibc.zip
 
 # -----------------------------------------------------------------------------
-# Stage 2: runtime image.
+# Stage 2: runtime image (finished by the per-architecture label stages below).
 # -----------------------------------------------------------------------------
-FROM ubuntu:26.04@${UBUNTU_DIGEST}
+FROM ubuntu:26.04@${UBUNTU_DIGEST} AS runtime
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG IB_GATEWAY_CHANNEL=stable
 ARG IB_GATEWAY_VERSION
+ARG IB_GATEWAY_BUILD_STAMP
+# "yes" only when the version and the installer's SHA-256 are the pins of versions.json (the
+# bake targets, or scripts/build-image.sh on the pinned build); anything else is "no".
+ARG IB_GATEWAY_QUALIFIED=no
 ARG IBC_VERSION
 ARG IBC_RELEASE_TAG
 ARG TARGETARCH
@@ -152,5 +156,27 @@ LABEL org.opencontainers.image.title="brokersre-ib-gateway" \
       org.opencontainers.image.version="${IB_GATEWAY_VERSION}-${IB_GATEWAY_CHANNEL}" \
       org.opencontainers.image.base.name="docker.io/library/ubuntu:26.04" \
       com.rocketedge.brokersre.ibkr.channel="${IB_GATEWAY_CHANNEL}" \
+      com.rocketedge.brokersre.ibkr.version="${IB_GATEWAY_VERSION}" \
+      com.rocketedge.brokersre.ibkr.build_stamp="${IB_GATEWAY_BUILD_STAMP}" \
+      com.rocketedge.brokersre.qualified="${IB_GATEWAY_QUALIFIED}" \
       com.rocketedge.brokersre.ibc.version="${IBC_VERSION}" \
       com.rocketedge.brokersre.ibc.release="${IBC_RELEASE_TAG}"
+
+# -----------------------------------------------------------------------------
+# The installer's SHA-256 differs per architecture, and a label cannot choose between two
+# build arguments; one label-only stage per architecture does, so a multi-platform bake build
+# labels each platform with its own installer. Nothing else changes: a stage inherits the
+# whole image configuration (user, environment, entrypoint, health check, volumes, ports).
+# -----------------------------------------------------------------------------
+FROM runtime AS runtime-amd64
+ARG IB_GATEWAY_SHA256_X64
+LABEL com.rocketedge.brokersre.installer.sha256="${IB_GATEWAY_SHA256_X64}"
+
+FROM runtime AS runtime-arm64
+ARG IB_GATEWAY_SHA256_ARM
+LABEL com.rocketedge.brokersre.installer.sha256="${IB_GATEWAY_SHA256_ARM}"
+
+# The image: the label stage of the platform being built (TARGETARCH is predefined by BuildKit
+# in the global scope, where FROM can use it).
+# hadolint ignore=DL3006
+FROM runtime-${TARGETARCH}

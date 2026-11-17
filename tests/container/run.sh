@@ -179,6 +179,18 @@ if docker run --rm --entrypoint test "${IMAGE}" -f /usr/share/doc/ibc/LICENSE.tx
 if docker run --rm --entrypoint bash "${IMAGE}" -c 'test -x "/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}/ibgateway" && test -f /opt/ibc/IBC.jar'; then pass "Gateway and IBC installed"; else fail "install" "gateway launcher or IBC.jar missing"; fi
 labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.licenses"}} {{index .Config.Labels "com.rocketedge.brokersre.ibc.version"}}')
 if [[ "${labels}" == MIT\ 3.* ]]; then pass "OCI labels present (${labels})"; else fail "labels" "${labels}"; fi
+# The build's provenance (ADR 0018): the Gateway version, IBKR's build stamp it was checked
+# against (the one the installed Gateway carries), the installer's SHA-256, and whether the
+# project qualified that build.
+build_labels="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "com.rocketedge.brokersre.ibkr.version"}}|{{index .Config.Labels "com.rocketedge.brokersre.ibkr.build_stamp"}}|{{index .Config.Labels "com.rocketedge.brokersre.installer.sha256"}}|{{index .Config.Labels "com.rocketedge.brokersre.qualified"}}')"
+IFS='|' read -r label_version label_stamp label_sha label_qualified <<<"${build_labels}"
+installed="$(docker run --rm --entrypoint bash "${IMAGE}" -c 'printf "%s|" "${IB_GATEWAY_VERSION}"; sed -n "s/.*applicationVersion=\"\([^\"]*\)\".*/\1/p" "/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}/.install4j/i4jparams.conf" | head -n 1')"
+if [ "${label_version}" = "${installed%%|*}" ] && [ -n "${label_stamp}" ] && [ "${label_stamp}" = "${installed#*|}" ] \
+  && [[ "${label_sha}" =~ ^[0-9a-f]{64}$ ]] && [[ "${label_qualified}" =~ ^(yes|no)$ ]]; then
+  pass "build labels: version ${label_version}, stamp ${label_stamp} as installed, installer SHA-256, qualified=${label_qualified}"
+else
+  fail "build labels" "labels '${build_labels}', installed '${installed}'"
+fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="
 run_container -e IBC_LAUNCH=no -e SAMPLE_INTERVAL_S=2
