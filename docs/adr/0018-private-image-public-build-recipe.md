@@ -285,8 +285,9 @@ push from a workflow of this repository public).
   describes: every member of the enterprise, and every workflow in it, may read the image.
 - **Access:** the owner granted this repository Write under *Manage Actions access*, which let
   the workflow's token push. That publish then **linked** the package to this repository (the
-  API names `RocketEdge/brokersre-ib-gateway` from 20:19:57 UTC; at 08:46 it named none), as
-  the source label predicts. A linked package can inherit the repository's access, and
+  API names `RocketEdge/brokersre-ib-gateway` from 20:19:57 UTC; at 08:46 it named none): the
+  push with the workflow's token linked it, as the Phase 3 decision expected, where the
+  personal-token push with the source label had not (finding 3 above). A linked package can inherit the repository's access, and
   everyone can read a public repository (the decision above), so the owner then switched off
   "Inherit access from repository" in the package settings and granted the repositories
   explicitly (the owner's report; the API does not expose that setting).
