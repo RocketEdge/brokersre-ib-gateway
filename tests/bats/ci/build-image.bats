@@ -976,6 +976,13 @@ cached_meta() {
   grep -qx "HTTPS_PROXY=${HTTPS_PROXY}" "${WORK}/stub/helper-env"
   grep -qx "http_proxy=${http_proxy}" "${WORK}/stub/helper-env"
   grep -qx "NO_PROXY=127.0.0.1,localhost" "${WORK}/stub/helper-env"
+  # The helper image's own build (apk add) needs the proxy too, on a network that has nothing
+  # else (review of #43: its first build failed there).
+  helper_build="$(grep '^buildx build --load -q -t brokersre-ib-gateway-build-helper:local ' "${WORK}/stub/calls")"
+  [[ "${helper_build}" == *"--build-arg HTTPS_PROXY "* ]]
+  [[ "${helper_build}" == *"--build-arg http_proxy "* ]]
+  [[ "${helper_build}" == *"--build-arg NO_PROXY "* ]]
+  [[ "${helper_build}" != *"${secret}"* ]]
   ! grep -q '^HTTP_PROXY=' "${WORK}/stub/helper-env" || false
   grep '^run ' "${WORK}/stub/calls" | grep -- '-e HTTPS_PROXY ' >/dev/null
   grep '^run ' "${WORK}/stub/calls" | grep -- '-e http_proxy ' >/dev/null

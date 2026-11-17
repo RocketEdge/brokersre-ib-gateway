@@ -277,6 +277,11 @@ Describe 'Invoke-BuildImage' {
             $build = (Get-TestCall -Calls $script:calls -Marker '--platform')[0]
             Test-Sequence -Actual $build -Expected @('--build-arg', 'HTTPS_PROXY') | Should -BeTrue
             Test-Sequence -Actual $build -Expected @('--build-arg', 'NO_PROXY') | Should -BeTrue
+            # The helper image's build (apk add) needs the proxy as well (review of #43).
+            $helperBuild = (Get-TestCall -Calls $script:calls -Marker 'brokersre-ib-gateway-build-helper:local')[0]
+            Test-Sequence -Actual $helperBuild -Expected @('buildx', 'build', '--load', '-q', '-t', 'brokersre-ib-gateway-build-helper:local') | Should -BeTrue
+            Test-Sequence -Actual $helperBuild -Expected @('--build-arg', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual $helperBuild -Expected @('--build-arg', 'NO_PROXY') | Should -BeTrue
             foreach ($call in $script:calls) { ($call -join ' ') | Should -Not -Match $secret }
             ($script:messages -join "`n") | Should -Not -Match $secret
             ($script:results -join "`n") | Should -Not -Match $secret

@@ -168,22 +168,25 @@ if [ -z "${cache_dir}" ]; then cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/brok
 # Created here, so that Docker does not create it (as root, on Linux) for the bind mount.
 mkdir -p "${cache_dir}" "${repo_root}/downloads"
 
-# `buildx build --load`, not `docker build`: with a docker-container default builder (what
-# docker/setup-buildx-action installs) a plain build leaves the image in the build cache only.
-if ! docker buildx build --load -q -t "${helper_image}" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
-  say "could not build the helper image from scripts/build-helper"
-  exit 1
-fi
-
 # The proxy variables of the caller's environment, by name. Docker takes their values from this
 # process's environment (`-e NAME`, `--build-arg NAME`), so a value, which may hold a password,
 # is never in an argument list or in the output. They are predefined build arguments: usable in
 # RUN steps, kept out of `docker history` and the image configuration (the Dockerfile declares
-# none). A proxy in Docker's config.json still applies when none of these is set.
+# none). A proxy in Docker's config.json still applies when none of these is set. Collected
+# before the helper image is built: its `apk add` needs the proxy too on a proxy-only network.
 proxy_names=""
 for proxy_name in HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy; do
   if [ -n "${!proxy_name:-}" ]; then proxy_names="${proxy_names} ${proxy_name}"; fi
 done
+
+# `buildx build --load`, not `docker build`: with a docker-container default builder (what
+# docker/setup-buildx-action installs) a plain build leaves the image in the build cache only.
+set -- buildx build --load -q -t "${helper_image}"
+for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+if ! docker "$@" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
+  say "could not build the helper image from scripts/build-helper"
+  exit 1
+fi
 
 # helper ARGS...: run scripts/resolve-installer.sh ARGS in the helper container, with the cache,
 # the repository (read-only), downloads/ and the --installer directory mounted. On Linux it

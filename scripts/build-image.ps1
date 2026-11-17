@@ -389,9 +389,14 @@ function Invoke-BuildImage {
     }
     $cacheDir = (Resolve-Path -LiteralPath $cacheDir).ProviderPath
 
+    # The shell's proxy variables, by name only (Get-BiProxyName): for the helper image's build
+    # (its apk add needs them on a proxy-only network), the helper container and the build.
+    $proxyNames = @(Get-BiProxyName)
     # 'buildx build --load', not 'docker build': with a docker-container default builder a plain
     # build leaves the image in the build cache only, and 'docker run' would not find it.
-    $built = Invoke-BiDockerCapture -ArgumentList @('buildx', 'build', '--load', '-q', '-t', $script:HelperImage, (Join-Path (Join-Path $RepoRoot 'scripts') 'build-helper'))
+    $helperBuild = @('buildx', 'build', '--load', '-q', '-t', $script:HelperImage)
+    foreach ($name in $proxyNames) { $helperBuild += @('--build-arg', $name) }
+    $built = Invoke-BiDockerCapture -ArgumentList ($helperBuild + @((Join-Path (Join-Path $RepoRoot 'scripts') 'build-helper')))
     if ($built.ExitCode -ne 0) {
         Write-BiMessage -Message 'could not build the helper image from scripts/build-helper'
         return 1
@@ -404,8 +409,6 @@ function Invoke-BuildImage {
     }
     # The helper's messages name the cache as this host does, not by its mount /cache.
     $helperPrefix += @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $cacheDir))
-    # The shell's proxy variables, by name only (Get-BiProxyName); also passed to the build.
-    $proxyNames = @(Get-BiProxyName)
     foreach ($name in $proxyNames) { $helperPrefix += @('-e', $name) }
     # BROKERSRE_HOST_SHELL and BROKERSRE_HOST_DOWNLOADS let the helper's advice name PowerShell's
     # command, -Installer and the Windows path of downloads\ (it sees only its mount /downloads).
