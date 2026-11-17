@@ -5,6 +5,23 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Package access proven: outsiders refused, workflows still publish
+
+- **What changed:** documentation only: an ADR 0018 note and the owner checklist record two
+  proofs after the owner switched off inherited access.
+- **Result:**
+  - A signed-in non-member with `read:packages` is refused `stable` and `latest` (403), and the
+    API answers it "Package not found" (20:53 UTC; again after the next publish).
+  - The stable update to IB Gateway 10.50.1h opened by `detect-releases.yml` (run 44171904504)
+    merged itself, and `publish.yml` run 44174758312 (20:57 UTC) published both channels through
+    both "not public" checks and the signature verification.
+  - Release `v10.50.1h-stable` names `sha256:99cb19e1…`; anonymous reads stay refused (401).
+- **What did NOT work / root cause:** nothing; the earlier outsider test was only suggestive
+  because its token lacked `read:packages`, which this one has.
+- **Next step:** the BrokerSRE repository's Read grant (its next `image-pin.yml` run), one
+  `qualify-paper.yml` run against a digest of the package, the first scheduled `rebuild.yml`
+  scan.
+
 ### 2026-11-17 — First publish to the non-public package
 
 - **What changed:** documentation only: the ADR 0018 note of 2026-11-17 and the owner checklist
