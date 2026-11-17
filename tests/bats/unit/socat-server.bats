@@ -20,14 +20,18 @@ teardown() {
   rm -rf "${WORK}"
 }
 
-@test "serve listens even when PORT names a client's port that is still in TIME_WAIT" {
-  serve 'exit 0'
-  # The client closes first, so its own port stays in TIME_WAIT (60 s on Linux). The old
-  # readiness probe and every test client did exactly this.
+@test "serve listens even when PORT names a port an earlier client still holds" {
+  # The server only reads, so the client always closes first: its own port waits in
+  # FIN-WAIT-2 until the server closes, then in TIME_WAIT for 60 s. Both states keep the port
+  # bound without SO_REUSEADDR. (With a server that closes first, the TIME_WAIT lands on the
+  # server's side and nothing is held on the client's: review of #47.) The old readiness probe
+  # and every test client left ports like this.
+  serve 'cat >/dev/null'
   bash -c "exec 3<>/dev/tcp/127.0.0.1/${PORT}"
   held=""
-  for _ in $(seq 1 20); do
-    held="$(ss -Htan state time-wait "dport = :${PORT}" | awk '{ split($3, a, ":"); print a[2]; exit }')"
+  for _ in $(seq 1 50); do
+    # With two states ss prints the State column too: the local address is the second-last field.
+    held="$(ss -Htan state time-wait state fin-wait-2 "dport = :${PORT}" | awk '{ n = split($(NF - 1), a, ":"); print a[n]; exit }')"
     if [ -n "${held}" ]; then break; fi
     sleep 0.1
   done
