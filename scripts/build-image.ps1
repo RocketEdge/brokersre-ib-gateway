@@ -236,6 +236,28 @@ function Get-BiRevision {
     return 'unknown'
 }
 
+function ConvertTo-BiTrimmedPath {
+    <#
+    .SYNOPSIS
+    A directory path without trailing separators (a drive root such as C:\ is kept).
+    .DESCRIPTION
+    Windows PowerShell 5.1 wraps a native argument that contains a space in double quotes
+    without doubling a final backslash, so "...\ps cache dir\" reaches docker as an escaped
+    quote and the rest of the command line shifts ("Unable to find image 'cache:latest'").
+    A path this script builds an argument from must therefore not end in a separator.
+    .PARAMETER Path
+    The path.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $trimmed = $Path.TrimEnd([char]92, [char]47)
+    if ($trimmed -eq '' -or $trimmed.EndsWith(':')) { return $Path }
+    return $trimmed
+}
+
 function Get-BiPlanValue {
     <#
     .SYNOPSIS
@@ -387,7 +409,7 @@ function Invoke-BuildImage {
     foreach ($directory in @($cacheDir, $downloads)) {
         if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
     }
-    $cacheDir = (Resolve-Path -LiteralPath $cacheDir).ProviderPath
+    $cacheDir = ConvertTo-BiTrimmedPath -Path (Resolve-Path -LiteralPath $cacheDir).ProviderPath
 
     # The shell's proxy variables, by name only (Get-BiProxyName): for the helper image's build
     # (its apk add needs them on a proxy-only network), the helper container and the build.

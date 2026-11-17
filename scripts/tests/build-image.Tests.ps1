@@ -333,6 +333,19 @@ Describe 'Invoke-BuildImage' {
         Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_INSTALLER={0}' -f $installer)) | Should -BeTrue
     }
 
+    It 'drops a trailing separator from -CacheDir: Windows PowerShell 5.1 turns "\ + quote" into an escaped quote' {
+        # "...\ps cache dir\" (a space and a trailing backslash): 5.1 quoted the argument
+        # BROKERSRE_HOST_CACHE=...\ps cache dir\ as "...dir\" and docker read a garbled command
+        # ("Unable to find image 'cache:latest'"; review of #43).
+        $dir = Join-Path $TestDrive 'ps cache dir'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Invoke-BuildImage -ArgumentList @('-PrintPlan', '-CacheDir', ($dir + [IO.Path]::DirectorySeparatorChar)) -RepoRoot $script:repo | Should -Be 0
+        $resolve = (Get-TestCall -Calls $script:calls -Marker 'resolve')[0]
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $dir)) | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-v', ('{0}:/cache' -f $dir)) | Should -BeTrue
+        foreach ($argument in $resolve) { $argument.EndsWith('\') | Should -BeFalse -Because $argument }
+    }
+
     It 'without Docker it returns 1' {
         Mock Test-BiDockerAvailable { return $false }
         Invoke-BuildImage -ArgumentList @() -RepoRoot $script:repo | Should -Be 1
