@@ -5,6 +5,49 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — A build that survives IBKR replacing its installers (ADR 0018, phase 1)
+
+- **What changed:** `scripts/build-image.sh` and `scripts/build-image.ps1` build the image on
+  any host with Docker; `scripts/resolve-installer.sh` decides, downloads, verifies and caches
+  the installer inside a helper container (`scripts/build-helper/Dockerfile`, Docker CLI
+  pinned by digest). When IBKR serves another version than the pin the build falls forward:
+  IBKR's `version.json` must be the same before and after the download (one retry), the
+  installer's stamp and the installed stamp must equal it, and the image is labelled
+  `com.rocketedge.brokersre.qualified=no` (`--strict`: exit 4). `fetch-installer.sh
+  --check-stamp` fails a Dockerfile build whose installed `applicationVersion` or version
+  differs from `IB_GATEWAY_BUILD_STAMP`; the bake path passes the pinned stamp from
+  `build_datetime`. New labels `ibkr.version`, `ibkr.build_stamp`, `installer.sha256` (per
+  platform, through one label stage per architecture) and `qualified`.
+  `tests/container/run.sh --only ibc-smoke` runs the IBC smoke test alone (secrets from a
+  volume). CI's `build-test` builds with the helper, without the private archive. Spec,
+  ADR 0018 (amends 0007 and 0009), L35, L36.
+- **Result:** the first red: a clean build of `main` (bake arguments of `versions.json`)
+  failed at 02:05 UTC with `fetch-installer: SHA-256 MISMATCH for
+  ibgateway-10.50.1g-standalone-linux-x64.sh`, actual `eb578b23…`, which is IBKR's 10.50.1h.
+  With the helper on live IBKR: Git Bash built 10.50.1h in 4 min 40 s (download, build, smoke
+  test), `qualified_by_project: no`, warning printed; the image's configuration equals the
+  published 10.50.1g image's apart from the version, and the full container suite passed on
+  it (86 checks, including the new label check, which fails on the published image). Tests:
+  29 bats tests of the helper against a fake IBKR server (mutations of the before/after check,
+  `--strict`, the stamp comparison, the pin check and the cache fallback each fail them),
+  3 Dockerfile-level stamp tests with fake installers, 10 unit tests of the stamp reader,
+  3 bake tests, 25 Pester tests under Windows PowerShell 5.1 and PowerShell 7.
+- **What did NOT work / root cause:** PowerShell's binder ends a script with exit 1, before
+  it runs, when a parameter is given without its value, so typed parameters could not keep
+  exit 2 for usage errors: `build-image.ps1` parses `$args` itself. Pester: `$script:` inside
+  a function defined in `BeforeAll` did not reach the variables the mocks wrote (eight tests
+  passed or failed on nothing), and `return @(...)` unrolled an array of calls so that `[0]`
+  was the first argument. `docker build` of the helper with a `docker-container` default
+  builder would have kept the image in the build cache only: the helper is built with
+  `buildx build --load`. `git -c core.autocrlf=false clone` of bats-core still checked out
+  CRLF on Windows (bats-core's `* text=auto` follows `core.eol`); the documented command now
+  sets both. `BATS_TEST_TIMEOUT` exported from `setup_file` left all three Docker tests
+  waiting on bats' `sleep` watchdog after their builds had finished (not isolated; not used).
+  A failed resolve first left its 360 MB download in the cache for a day; it now removes it.
+- **Next step:** phase 2 (README recipe, compose defaults to the local tag, Windows kit builds
+  a missing image), phase 3 (private publishing, hourly detection), phase 4 (delete the public
+  package). A paper login with a self-built 10.50.1h image would qualify it (L35).
+
 ### 2026-11-17 — The published sidecar 0.2.2 against a paper login (L20)
 
 - **What changed:** documentation only: L20 records what the published sidecar 0.2.2

@@ -1,6 +1,8 @@
 # ADR 0007 — IBC from the RocketEdge fork; IBKR binaries never redistributed
 
-- **Status:** Accepted (2026-11-01)
+- **Status:** Accepted (2026-11-01); amended by
+  [ADR 0018](0018-private-image-public-build-recipe.md) (2026-11-17: no public image either;
+  users build from this repository, and a build no longer needs the archive)
 
 ## Context
 

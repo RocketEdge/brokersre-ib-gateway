@@ -1,7 +1,9 @@
 # ADR 0009 — Stable IB Gateway updates merge themselves; latest and re-uploads stay human
 
 - **Status:** Accepted (2026-11-11, owner decision); supersedes the "human merge" step of
-  [upgrade-policy.md](../upgrade-policy.md) for the `stable` channel
+  [upgrade-policy.md](../upgrade-policy.md) for the `stable` channel; amended by
+  [ADR 0018](0018-private-image-public-build-recipe.md) (2026-11-17: `main` builds while IBKR
+  is ahead of the pin, and the published image becomes private)
 
 ## Context
 

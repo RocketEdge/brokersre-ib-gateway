@@ -6,7 +6,7 @@
 flowchart LR
   vj["versions.json\n(base digest, Gateway versions + SHA-256, IBC tag + SHA-256)"] --> env["scripts/bake-env.sh"]
   env --> bake["docker buildx bake (docker-bake.hcl)"]
-  bake --> df["Dockerfile stage 1: fetch-installer.sh verifies SHA-256, installs Gateway; downloads IBC from RocketEdge/ibc, verifies SHA-256"]
+  bake --> df["Dockerfile stage 1: fetch-installer.sh verifies SHA-256, installs Gateway, checks its build stamp (--check-stamp); downloads IBC from RocketEdge/ibc, verifies SHA-256"]
   df --> rt["Dockerfile stage 2: ubuntu:26.04@digest + tini, Xvfb, socat, x11vnc, Java libs; uid 1000; rootfs/"]
   vj --> plan["plan: channel list (publish-channels.sh), no tag in both channels (check-bake-tags.sh)"]
   rt --> push["multi-arch build, no cache, pushed BY DIGEST (no tag)"]
@@ -18,6 +18,32 @@ flowchart LR
   daily["rebuild.yml (daily): scan the published images"] -. "fixable CRITICAL/HIGH -> issue, rebuild request" .-> plan
   ibkr["IBKR version.json (daily)"] -. "detect-releases.yml -> PR" .-> vj
   ibc["RocketEdge/ibc releases (daily)"] -. "detect-ibc-release.yml -> PR" .-> vj
+```
+
+## Building the image yourself (and in CI)
+
+`scripts/build-image.sh` and `scripts/build-image.ps1` build one platform of the image on any
+host with Docker (ADR 0018). The decision, the download, the verification and the cache are
+one bash script, `scripts/resolve-installer.sh`, run in a helper container; the wrappers only
+pass arguments, run the build and the smoke test with the host's Docker, and print the
+result. CI's `build-test` job builds with `build-image.sh`.
+
+```mermaid
+flowchart TB
+  user["build-image.sh / build-image.ps1<br/>--channel --strict --installer --platform --tag --no-smoke --cache-dir --print-plan"]
+  user --> helperimg["docker buildx build --load scripts/build-helper<br/>(docker:29.10.0-cli@digest + bash, curl, jq)"]
+  helperimg --> resolve["resolve-installer.sh resolve (in the helper container)"]
+  vj["versions.json: pin, build_datetime, SHA-256"] --> resolve
+  vjson["IBKR channel version.json"] --> resolve
+  resolve -->|"IBKR serves the pin"| pin["cache or download; SHA-256 must equal the pin<br/>qualified=yes"]
+  resolve -->|"IBKR serves another version"| ff["--strict: exit 4<br/>else cache (same stamp) or download;<br/>version.json equal before and after (one retry);<br/>installer stamp equals it; qualified=no"]
+  resolve -->|"--installer FILE"| own["stamp in the installer names version, channel, arch;<br/>SHA-256 recorded; qualified only if both equal the pin"]
+  resolve -->|"IBKR unreachable"| off["cached pin, else newest cached version of the channel<br/>(not with --strict), else exit 3"]
+  pin & ff & own & off --> ctx["installer -> downloads/ of the build context<br/>plan + build arguments -> the wrapper"]
+  ctx --> build["docker buildx build --load<br/>Dockerfile: SHA-256 check, install, --check-stamp<br/>labels ibkr.version, ibkr.build_stamp, installer.sha256, qualified"]
+  build --> smoke["tests/container/run.sh --only ibc-smoke<br/>(.ps1: in the helper container via the Docker socket)"]
+  smoke --> accept["resolve-installer.sh accept: installer -> cache/installers/&lt;version&gt;/&lt;arch&gt;/<br/>warning when not qualified; summary lines"]
+  accept --> out["last lines: version, channel, qualified_by_project,<br/>installer_sha256, ibkr_build_stamp, image, image_id"]
 ```
 
 ## Runtime process tree
