@@ -16,7 +16,7 @@ One of two things, both reported by the gateway itself:
 - Now: `docker stats --no-stream <container>`.
 - The gateway's last sample (`mem_working_set_bytes`, `mem_limit_bytes`, `java_rss_bytes`,
   `oom_kills`):
-  `docker compose ... exec ib-gateway tail -n 1 /var/log/ibgateway/metrics/metrics.jsonl`.
+  `docker compose ... exec ib-gateway tail -n 1 //var/log/ibgateway/metrics/metrics.jsonl`.
 - The two settings that decide it: the container's memory limit (`IBGW_MEM_LIMIT` in the
   reference compose file, 2g by default) and the Java heap (`JAVA_HEAP_MB`).
 - After a kill: does the Gateway still run? If the kernel killed the Gateway itself,

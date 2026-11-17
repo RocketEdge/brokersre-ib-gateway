@@ -130,3 +130,12 @@
 - [ ] Track owed resolutions until a channel accepts them (sidecar 0.2.3, L34): a `resolved` is sent once today, so a stop or kill while it is queued, or every attempt failing, loses it; also resolve or drop the episodes of a class switched off before a restart. Weigh the option the review inferred (not probed): queue resolutions and heartbeats before the state write and announcements and escalations after it, which narrows that window
 - [ ] Observe with a real paper login: a daily restart, a second-factor prompt and a competing session (L01, L02, L09, L12)
 - [ ] Decide what `tail-gateway-logs.sh` should do about `ibgateway.*.log`, a name that was not seen (L03), and correct its header (lines 4 to 7, which call the name unverified documentation) with that decision: a change under `rootfs/` rebuilds the image
+
+## The README's examples, run as written (2026-11-16/17, branch `docs/readme-examples-checked`)
+
+- [x] Secret blocks exact and portable in bash, zsh and sh (D1, D2); typed into through a pty by `tests/bats/ci/doc-commands.bats` in the lint job
+- [x] Container paths of documented exec commands in the `//` form that Git Bash passes unchanged (D3); `docs/evidence.md` carries the `MSYS_NO_PATHCONV=1` note
+- [x] The C# client and `examples/compose-with-client.yml` recorded as run against a paper Gateway (D5); the weekly login cited from IBKR's auto-restart guide
+- [x] D4 (`sidecar/README.md`, `docker compose run` without `-f`) fixed in pull request #32 (merged 2026-11-16)
+- [x] Review of #37: each secret block is one subshell with `trap 'stty echo; exit 130' INT`; tested pasted into interactive bash and zsh (bracketed paste off and on) and sh, and with Ctrl-C at the password prompt; bash 3.2 and busybox sh checked by hand in containers
+- [ ] Not covered: a run on a Mac (Terminal.app or iTerm2 with its own paste behaviour)

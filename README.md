@@ -85,17 +85,25 @@ try { [IO.File]::WriteAllText("$PWD\compose\secrets\ib-password", [Runtime.Inter
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 ```
 
-Linux, macOS, WSL or Git Bash:
+Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 
-```bash
-mkdir -p compose/secrets
-read -r -p 'IBKR username: ' u && printf '%s' "$u" > compose/secrets/ib-username
-read -r -s -p 'IBKR password: ' p && printf '%s' "$p" > compose/secrets/ib-password && echo
-unset u p
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
+```sh
+(
+  trap 'stty echo; exit 130' INT
+  mkdir -p compose/secrets
+  printf 'IBKR username: '; IFS= read -r u; printf '%s' "$u" > compose/secrets/ib-username
+  printf 'IBKR password: '; stty -echo; IFS= read -r p; stty echo; echo
+  printf '%s' "$p" > compose/secrets/ib-password
+)
 ```
 
 You should see two files, `compose/secrets/ib-username` and `compose/secrets/ib-password`, and
-the password never appeared on screen.
+the password never appeared on screen. The files hold exactly what you typed, blanks at either
+end and backslashes included. The parentheses make the shell read the whole block before it
+asks anything, so it also works when pasted into a shell without bracketed paste; Ctrl-C at a
+prompt stops it, turns echo back on and writes no password file.
 
 ### 2. Start the gateway
 
@@ -116,13 +124,18 @@ The image never answers a second factor for you. Stop following the log with Ctr
 ### 3. Check that it is logged in
 
 ```bash
-docker compose -f compose/docker-compose.example.yml exec ib-gateway cat /var/log/ibgateway/state/phase
+docker compose -f compose/docker-compose.example.yml exec ib-gateway cat //var/log/ibgateway/state/phase
 docker compose -f compose/docker-compose.example.yml ps
 ```
 
 You should see `logged-in`, and `(healthy)` in the status column. The API is then reachable on
 `127.0.0.1:4002` (paper) or `127.0.0.1:4001` (live). While the phase is `login` or
 `2fa-pending` the container reports `unhealthy` on purpose.
+
+The two slashes in `//var/log/...` are on purpose: Git Bash on Windows rewrites an argument
+that starts with a single `/` into a Windows path (`C:/Program Files/Git/var/...`) and the
+command fails, while Linux reads `//var` as `/var`. The line works unchanged in bash, zsh,
+Git Bash and PowerShell.
 
 ### 4. If it does not log in
 
@@ -185,13 +198,17 @@ Paper first. Before the same setup holds a live session, check each line:
 ## The weekly login
 
 IBKR asks for a full login with the second factor about once a week; the daily restart in
-between does not ask again. IBKR's own page puts it as "the weekly authentication cycle
-starts on every Monday"
-([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication));
-IBC's user guide says authentication is required "the first time during the week that TWS or
-Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
-prompt, and no setting of this image changes that: the image never answers, types or bypasses
-a second factor.
+between does not ask again. IBKR's guide to the automatic restart says: "This procedure will
+require manual authentication once a week" and "This security process occurs each Sunday at
+1:00 am ET"
+([Auto Restart Considerations](https://www.ibkrguides.com/traderworkstation/auto-restart-considerations.htm),
+read on 2026-11-17). The sources do not name the same day: IBKR's page for third-party
+integrations says "the weekly authentication cycle starts on every Monday"
+([Daily & Weekly Reauthentication](https://www.interactivebrokers.com/docs/third-party-integrations/tws-settings/daily-weekly-reauthentication)),
+and IBC's user guide says authentication is required "the first time during the week that
+TWS or Gateway run after 01:00 ET on Sunday". Either way, once a week a person must approve a
+prompt. The image behaves the same whichever day it comes, and no setting of this image
+changes that: the image never answers, types or bypasses a second factor.
 
 What happens: the phase becomes `2fa-pending` and the event `twofa_initiated` appears, with
 `twofa_dialog` only where the Gateway opens a separate dialog (according to IBC's source,
@@ -235,8 +252,13 @@ words (wait for healthy, stop sending on IBKR code 1100, continue on 1102, re-su
 expect the daily restart) and ships read-only samples that follow them: `wait-for-gateway.sh`,
 a compose file with the strategy on a private network, and a Python and a C# client.
 `wait-for-gateway.sh` and the Python client ran against a logged-in paper Gateway
-(2026-11-15/16 UTC); the C# client and the compose file with the strategy were run against
-stand-ins only.
+(2026-11-15/16 UTC). The C# client and the compose file with the strategy did too on
+2026-11-16 UTC, with IB Gateway 10.50.1g in the published stable image `7773ff7`: the C#
+client, compiled against a `CSharpAPI.dll` built locally from IBKR's TWS API 10.48.01
+source, logged `connected to 127.0.0.1:4002, client id 101` and then IBKR's server time
+every 30 s (08:18:58 to 08:20:09 UTC); with the compose file the gateway was healthy after
+12 s, then the strategy logged `ready: ib-gateway:4004 answered the API handshake (server
+version 178) after 0 s`.
 
 ## Environment variables
 

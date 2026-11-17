@@ -18,7 +18,7 @@ as "the gateway is down".
 ## Check first
 
 - The gateway itself, directly: `docker compose ... ps` and
-  `docker compose ... exec ib-gateway cat /var/log/ibgateway/state/phase`.
+  `docker compose ... exec ib-gateway cat //var/log/ibgateway/state/phase`.
 - The sidecar's mounts and its `GATEWAY_LOG_DIR`:
   `docker inspect --format '{{json .Mounts}}' <sidecar container>`.
 - The versions of the two images, when the phase is not known to the sidecar.

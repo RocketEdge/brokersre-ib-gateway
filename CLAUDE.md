@@ -13,7 +13,7 @@ docker buildx bake stable --set '*.platform=linux/amd64' --load      # local bui
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
 git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
-tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table), on the host (needs jq)
+tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table, documented commands), on the host (needs jq; doc-commands.bats needs python3, zsh and sh)
 scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json                     # VEX document valid (add Trivy `--pkg-types library --list-all-pkgs --format json` reports to compare)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy, console override); offline
@@ -122,6 +122,7 @@ scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-repo
 scripts/rebuild-decision.sh, rebuild-channels.sh, rebuild-issue.sh   decisions of rebuild.yml (fixable CRITICAL/HIGH -> rebuild request; one issue per channel, one comment per day, stop after REBUILD_MAX_ATTEMPTS days)
 scripts/check-vex.sh, security/vex/               OpenVEX statements for IBKR's bundled jars and their drift check; docs/evidence.md maps due-diligence questions to artefacts
 tests/bats/ci/workflows.bats, workflow-steps.awk    workflow policy as tests (gate flags, pins, no expression in a script, cron strings); tests/bats/ci/fixtures/ real Trivy reports
+tests/bats/ci/doc-commands.bats, doc-block.awk, doc-exec-paths.awk, pty-answers.py   documented commands as tests: marked secret blocks typed into through a pty under bash, zsh and sh; container paths of exec commands in the Git Bash-safe `//` form
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
 schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
@@ -203,7 +204,7 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - On Windows the Docker Desktop file share can be very slow (listing 500 files took 42 s on
   2026-11-12), which makes `run-in-image.sh` take an hour. To iterate, start the image with
   `sleep`, stream the tree in (`tar -C <repo> --exclude=.git -cf - . | docker exec -i <name>
-  tar -C /tmp/work -xf -`) and run bats there. In a test, wait for your own background
+  tar -C //tmp/work -xf -`) and run bats there. In a test, wait for your own background
   processes by pid: a bare `wait` never returns when `BATS_TEST_TIMEOUT` is set.
 - A Windows host records a new script as `100644` and still shows and runs it as executable
   (Git Bash, the Docker Desktop share, a tree streamed with `tar`), so a missing execute bit
@@ -434,3 +435,22 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   under both (above +1.5 s, below −2 s, plus RTT/2); do not tighten a side without evidence
   of which IBKR does (`tests/test_notify_rules.py` models both). `clock_skew_s` is the raw
   reading: a correct clock reads about −1 to +0.5 s.
+- Documented commands are tested (`tests/bats/ci/doc-commands.bats`, lint job). A block in
+  which a person types a secret into a POSIX shell is marked with the HTML comment that names
+  that file and runs under bash, zsh (the macOS default) and sh through a pty
+  (`pty-answers.py`), as a script, pasted into an interactive shell (bracketed paste off and
+  on) and with Ctrl-C at the password prompt: exact file bytes, no password on the screen or
+  in the history, echo on afterwards. Write it as one subshell `( ... )` whose first line is
+  `trap 'stty echo; exit 130' INT`, with a `printf` prompt, `stty -echo` around `IFS= read
+  -r`, and `printf '%s'`: zsh has no `read -p` (`-p: no coprocess`), dash no `read -s`, and
+  `read` without `IFS=` drops the blanks at both ends (all three found with the README's
+  block on 2026-11-16); without bracketed paste (dash, busybox, macOS's bash 3.2) a shell
+  reads a pasted block line by line and the first `read` takes the next pasted line unless
+  the block is one compound command, and braces with that trap go on after Ctrl-C and write
+  the password file (review of #37). A new marked block needs its own tests there. A path inside the container in a documented `docker exec` or `docker compose
+  ... exec` command starts with `//` (`cat //var/log/...`): Git Bash, which the README names
+  for Windows, rewrites a single leading `/` into `C:/Program Files/Git/...`, Linux reads
+  `//var` as `/var`. Keep such a command on one line and outside a PowerShell fence, or the
+  check does not see it. `docker run` lines with `-v`/`-e`/`-w` container paths (in
+  `docs/evidence.md`, and the bats-in-the-image line of this file) need
+  `MSYS_NO_PATHCONV=1` in Git Bash.

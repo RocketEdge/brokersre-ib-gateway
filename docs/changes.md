@@ -5,6 +5,112 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #37: zsh's "without bracketed paste" tests ran with it on
+
+- **What changed:** `pty-answers.py` loads zle (`zmodload zsh/zle`) before `unset
+  zle_bracketed_paste` in the test's `.zshrc`. Before pasting it now checks, for every shell,
+  that the bracketed-paste mode the shell switched on (`ESC[?2004h` on the screen) is the one
+  `--bracketed-paste` asks for, and otherwise pastes nothing and fails; the Ctrl-C tests ask
+  for `off` in sh. New test: the driver against stand-in shells that show the other mode.
+- **Result:** with the fixed driver the four zsh "without bracketed paste" tests fail on the
+  blocks of the first review round (`254f448`, no subshell) and pass on the subshell blocks;
+  with the driver of `761517a` they had passed on both, and the new guard test fails there.
+- **What did NOT work / root cause:** `zle_bracketed_paste` belongs to the zle module; the
+  `unset` in `.zshrc` ran before zle was loaded and zle set it again at the first prompt.
+  Ubuntu's `/etc/zsh/zshrc` had loaded zle earlier, so the tests were right until `f57f6e2`
+  skipped that file (`GLOBAL_RCS` unset), and nothing checked the mode the shell was in.
+  The comment of `f57f6e2` also said that no host start-up file runs: zsh still reads
+  `/etc/zsh/zshenv` and bash `/etc/bash.bashrc`; the comments now say so.
+- **Next step:** none planned; a start-up file that changes the mode now fails the test
+  instead of weakening it.
+
+### 2026-11-17 — Review of #37: pasted secret blocks, Ctrl-C, the C# wording
+
+- **What changed:** the independent review of pull request #37 pasted each secret block in
+  one write into an interactive shell and then typed the answers. Each of the four blocks
+  (README quick start, `compose/README.md`, `docs/console.md`, `docs/recipes/README.md`) is
+  now one subshell `( ... )` whose first line is `trap 'stty echo; exit 130' INT`; `unset`
+  is gone (the variables live in the subshell). `pty-answers.py` gained a paste mode (an
+  interactive shell with its own start-up file, the block in one write, the bracketed-paste
+  markers only while the shell has that mode on, Enter when nothing runs), an `interrupt`
+  answer (Ctrl-C), a history check and a `stty -a` check at the shell's prompt;
+  `doc-commands.bats` pastes each block into bash and zsh with bracketed paste off and on
+  and into sh, and presses Ctrl-C at the first password prompt. The README and
+  `examples/csharp` now both say the `CSharpAPI.dll` was built locally from IBKR's TWS API
+  10.48.01 source. `origin/main` (#32) was merged in.
+- **Result:** on the blocks of the first review round the new cases failed as the review
+  found: pasted without bracketed paste (bash and zsh with it off, dash) 12 of 12 failed
+  (the first `read` took the next pasted line; the typed password was shown and saved in
+  the history), Ctrl-C at the password prompt left echo off (4 of 4 failed), and the 4
+  cases with bracketed paste on passed. With the subshells all 39 tests of
+  `doc-commands.bats` pass (Ubuntu 24.04: bash 5, zsh 5.9, dash), and the whole
+  `tests/bats/ci` 310 of 310 after the merge. By hand, outside CI: in the `bash:3.2` image
+  (macOS's bash version; busybox sh) every block pasted and answered gave the exact bytes,
+  and Ctrl-C wrote no password file and left echo on (16 of 16).
+- **What did NOT work / root cause:** without bracketed paste (dash, busybox sh, bash 3.2,
+  or bash and zsh with it switched off) a shell reads and runs a pasted block line by line,
+  so the lines not yet run wait in the terminal's input and the first `read` takes one;
+  a compound command is read whole before it runs. The first round tested each block as a
+  script only, where that cannot happen. Rejected: braces with a note to run `stty echo`
+  after Ctrl-C (bash and dash left echo off), and braces with `trap 'stty echo' INT` (after
+  the trap the shell went on and wrote the password file: 7 bytes of the next typed line in
+  bash and zsh, an empty file in dash). A subshell confines the trap and its `exit`. The
+  first push of the new tests failed on the GitHub runner only: Ubuntu's `/etc/zsh/zshrc`
+  runs `compinit`, which found an insecure directory there and waited at "Ignore insecure
+  directories and continue [y] or abort compinit [n]?", so the test's zsh never showed its
+  prompt (12 zsh cases). Reproduced locally with a world-writable
+  `/usr/local/share/zsh/site-functions`; the test's zsh now unsets `GLOBAL_RCS` in its own
+  `.zshenv`, so no host start-up file runs.
+- **Next step:** a Mac with Terminal.app or iTerm2 was not used; their paste settings are
+  not modelled beyond bracketed paste on and off.
+
+### 2026-11-17 — The README's examples, run as written: the secret blocks, Git Bash paths and the C# record
+
+- **What changed:** on 2026-11-16 UTC the README's examples were run as written, on a Windows
+  11 host with Docker Desktop, against a logged-in paper Gateway (the published stable image
+  `7773ff7`, IB Gateway 10.50.1g). Five defects were found (D1 to D5); four are fixed here
+  on 2026-11-17, and D4, `docker compose run` without `-f` in `sidecar/README.md`, is handled
+  in pull request #32. D1, D2: the blocks in which a person types a secret into a POSIX
+  shell (the quick start, `compose/README.md`, the console's VNC password, the Loki recipe)
+  now print the prompt with `printf`, wrap `IFS= read -r` in `stty -echo` / `stty echo` and
+  write with `printf '%s'`. D3: every documented `docker exec` / `docker compose ... exec`
+  command writes the container path as `//var/...`, with a note in the README,
+  `compose/README.md` and the runbooks' command table; `docs/evidence.md` keeps its recorded
+  commands and tells Git Bash users to `export MSYS_NO_PATHCONV=1`. D5: the README and
+  `examples/csharp` record that the C# client (`connected to 127.0.0.1:4002, client id 101`, IBKR's server time every
+  30 s, 08:18:58 to 08:20:09 UTC) and `examples/compose-with-client.yml` (gateway healthy
+  after 12 s, then the strategy's handshake answered, server version 178) ran against that
+  Gateway. The README and `docs/passkeys.md` cite IBKR's "Auto Restart Considerations" for
+  the weekly login ("each Sunday at 1:00 am ET"), keeping the "every Monday" page and IBC's
+  guide as the disagreeing sources. New test `tests/bats/ci/doc-commands.bats` (with
+  `pty-answers.py`, `doc-block.awk`, `doc-exec-paths.awk`), run by the lint job, which now
+  installs zsh.
+- **Result:** before the fixes, 12 of the 12 secret-block cases failed in Ubuntu 24.04 (bash:
+  the blanks at both ends of the typed value were dropped; zsh 5.9: `read: -p: no coprocess`,
+  no file; dash: `read: Illegal option -s`) and the exec-path check reported 13 paths in the
+  README, `compose/README.md` and the runbooks; after them all 19 tests pass, under gawk and
+  under mawk. `//` was checked on 2026-11-17 with throwaway containers: from Git Bash
+  (`docker exec` and `docker compose exec` with cat, tail, grep and df; the single-slash form
+  failed there), PowerShell 7, and busybox sh running the docker CLI in `docker:29-cli`; GNU
+  coreutils of ubuntu 26.04, the gateway's base, read the paths. `export MSYS_NO_PATHCONV=1`
+  was checked for `docker exec` and for `docker run -v "$PWD/...:/run/secrets:ro" -e
+  NAME=/run/...` in Git Bash.
+- **What did NOT work / root cause:** D1: `read` without `IFS=` strips IFS whitespace at both
+  ends of the line, and no check had typed a value with blanks at either end. D2: `read -p`
+  means "read from the coprocess" in zsh, and dash has no `-s`; the block was bash-only and
+  had only been run in bash, although the README offers it for macOS, whose default shell is
+  zsh. D3: Git Bash's MSYS layer converts an argument that starts with one `/` (and
+  `NAME=/...`) to a Windows path before `docker` sees it; the commands had been run on Linux
+  and in PowerShell only. Rejected for D3: a `MSYS_NO_PATHCONV=1` prefix in the command
+  (PowerShell cannot run it), a note alone (Git Bash readers still copy the failing line),
+  `sh -c '...'` around the command (works, but longer and needs quoting in every shell). D5:
+  the "stand-ins only" sentence was true when written and was not updated when the run
+  happened: a statement about what was verified needs revisiting after each real session.
+- **Next step:** the test runs each block as a script through a pty, not as an interactive
+  paste: a terminal without bracketed paste would feed the following lines of a pasted block
+  to `read`, and no Mac (bash 3.2, zsh) was used. The exec-path check reads one line at a
+  time and does not look at `docker run`; `docs/evidence.md` relies on its note.
+
 ### 2026-11-16 — A "resolved" is no longer lost when an alert clears while it is being sent (sidecar 0.2.2)
 
 - **What changed:** in the first session of the published sidecar 0.2.1 next to a logged-in

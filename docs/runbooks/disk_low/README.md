@@ -10,7 +10,7 @@ the logs, and can damage the Gateway's settings.
 
 ## Check first
 
-- Which volume: `docker compose ... exec ib-gateway df -h /var/log/ibgateway /home/ibgateway/Jts/settings`.
+- Which volume: `docker compose ... exec ib-gateway df -h //var/log/ibgateway //home/ibgateway/Jts/settings`.
 - What uses the disk on the host: `docker system df`, and the host's own tools.
 
 The gateway's own files are bounded: every log is capped at `LOG_MAX_BYTES` with `LOG_KEEP`

@@ -12,7 +12,7 @@ gateway's own; the sidecar only relays the pair `login_stalled` / `login_resumed
 ## Check first
 
 - The last window IBC saw (on the host only, the log can show the username):
-  `docker compose ... exec ib-gateway grep -a entitled /var/log/ibgateway/ibc/ibc.log`,
+  `docker compose ... exec ib-gateway grep -a entitled //var/log/ibgateway/ibc/ibc.log`,
   last lines.
 - An `unknown_window` event shortly before: `docker compose ... logs --since 30m ib-gateway`.
 - Whether IBKR's login servers are reachable from the container:

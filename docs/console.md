@@ -51,11 +51,16 @@ written for bash and zsh; in PowerShell replace `grep` with `Select-String`.
 
 The VNC protocol uses the first eight characters of a password, so make those eight count.
 
-Linux, macOS, WSL or Git Bash:
+Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 
-```bash
-read -r -s -p 'VNC password: ' p && printf '%s' "$p" > compose/secrets/vnc-password && echo
-unset p
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
+```sh
+(
+  trap 'stty echo; exit 130' INT
+  printf 'VNC password: '; stty -echo; IFS= read -r p; stty echo; echo
+  printf '%s' "$p" > compose/secrets/vnc-password
+)
 ```
 
 Windows (PowerShell 5.1 or 7):

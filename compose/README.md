@@ -76,18 +76,25 @@ foreach ($instance in 'live', 'paper') {
 }
 ```
 
-Linux, macOS, WSL or Git Bash:
+Linux, macOS, WSL or Git Bash (bash, zsh or sh):
 
-```bash
-for instance in live paper; do
-  mkdir -p "compose/secrets/${instance}"
-  read -r -p "IBKR username for ${instance}: " u && printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
-  read -r -s -p "IBKR password for ${instance}: " p && printf '%s' "$p" > "compose/secrets/${instance}/ib-password" && echo
-done
-unset u p
+<!-- tested by tests/bats/ci/doc-commands.bats -->
+
+```sh
+(
+  trap 'stty echo; exit 130' INT
+  for instance in live paper; do
+    mkdir -p "compose/secrets/${instance}"
+    printf 'IBKR username for %s: ' "${instance}"; IFS= read -r u; printf '%s' "$u" > "compose/secrets/${instance}/ib-username"
+    printf 'IBKR password for %s: ' "${instance}"; stty -echo; IFS= read -r p; stty echo; echo
+    printf '%s' "$p" > "compose/secrets/${instance}/ib-password"
+  done
+)
 ```
 
-You should see four files, and no password appeared on screen. Then run the username check
+You should see four files, and no password appeared on screen. The parentheses keep a paste
+working in every shell and Ctrl-C safe
+([quick start](../README.md#1-store-the-two-secrets-as-files)). Then run the username check
 from the section above.
 
 ### 2. Start
@@ -119,15 +126,16 @@ logs) stay; add `-v` only if you want to delete them.
 
 ```bash
 docker compose -f compose/docker-compose.multi.yml --profile live --profile paper ps
-docker compose -f compose/docker-compose.multi.yml exec ib-gateway-live cat /var/log/ibgateway/state/phase
-docker compose -f compose/docker-compose.multi.yml exec ib-gateway-paper cat /var/log/ibgateway/state/phase
+docker compose -f compose/docker-compose.multi.yml exec ib-gateway-live cat //var/log/ibgateway/state/phase
+docker compose -f compose/docker-compose.multi.yml exec ib-gateway-paper cat //var/log/ibgateway/state/phase
 ```
 
 You should see `logged-in` for each, and `(healthy)` in the status column of `ps`. While the
 phase is `login` or `2fa-pending` a gateway reports `unhealthy` on purpose. The phases are
 `starting`, `login`, `2fa-pending`, `logged-in`, `restarting`, `existing-session`,
 `needs-human`, `stopping`, `stopped`, `exited` and `test-mode`
-([docs/log-contract.md](../docs/log-contract.md)).
+([docs/log-contract.md](../docs/log-contract.md)). The two slashes of `//var/log/...` keep
+Git Bash from rewriting the path ([quick start](../README.md#3-check-that-it-is-logged-in)).
 
 Every gateway labels its events with its instance name: the first event of each start,
 `container_start`, carries `"data": {"instance": "live", ...}`, which is how a log collector
