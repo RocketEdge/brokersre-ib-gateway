@@ -175,14 +175,43 @@ mkdir -p "${cache_dir}" "${repo_root}/downloads"
 # none). A proxy in Docker's config.json still applies when none of these is set. Collected
 # before the helper image is built: its `apk add` needs the proxy too on a proxy-only network.
 proxy_names=""
+proxy_credentials=no
 for proxy_name in HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy; do
   if [ -n "${!proxy_name:-}" ]; then proxy_names="${proxy_names} ${proxy_name}"; fi
+  case "${!proxy_name:-}" in *@*) proxy_credentials=yes ;; esac
 done
+
+# But Docker's build records keep every build argument's value (`docker buildx history
+# inspect`, `history export`, Docker Desktop's Builds view) until they are removed. When a
+# proxy value carries a user name or password, each build writes its metadata file (which names
+# its record, and can hold the same provenance, so it is deleted at once), and the end of the
+# run names the records to remove; never the value.
+metadata_dir=""
+if [ "${proxy_credentials}" = yes ]; then metadata_dir="$(mktemp -d)"; fi
+# build_record FILE: the build record's ref in buildx's metadata FILE, or nothing.
+build_record() {
+  if [ -f "$1" ]; then sed -n 's/.*"buildx.build.ref": *"\([^"]*\)".*/\1/p' "$1" | sed -n 1p | sed 's#.*/##'; fi
+}
+# on_exit: the EXIT trap: remove the installer this run put into downloads/, and name the build
+# records that keep a proxy's credentials.
+# shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
+on_exit() {
+  local records=""
+  if [ -n "${context_path:-}" ]; then remove_context_installer; fi
+  if [ -n "${metadata_dir}" ]; then
+    records="$(build_record "${metadata_dir}/helper.json") $(build_record "${metadata_dir}/image.json")"
+    rm -rf "${metadata_dir}"
+    records="$(printf '%s' "${records}" | tr -s ' ' | sed 's/^ //; s/ $//')"
+    say "a proxy variable holds a user name or password (not shown): the image does not keep it, but Docker's build records do (docker buildx history inspect, Docker Desktop's Builds view). Remove them: docker buildx history rm ${records:-<ref> (docker buildx history ls)}"
+  fi
+}
+trap on_exit EXIT
 
 # `buildx build --load`, not `docker build`: with a docker-container default builder (what
 # docker/setup-buildx-action installs) a plain build leaves the image in the build cache only.
 set -- buildx build --load -q -t "${helper_image}"
 for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+if [ -n "${metadata_dir}" ]; then set -- "$@" --metadata-file "$(host_path "${metadata_dir}/helper.json")"; fi
 if ! docker "$@" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
   say "could not build the helper image from scripts/build-helper"
   exit 1
@@ -248,12 +277,10 @@ discard() {
 }
 context_path="${repo_root}/${context_file}"
 # remove_context_installer: remove the installer this run put into downloads/ (and only that:
-# a file that was there before, the user's, is never removed).
-# shellcheck disable=SC2329  # invoked through the EXIT trap
+# a file that was there before, the user's, is never removed). Also run by on_exit.
 remove_context_installer() {
   if [ "$(value context_owned)" = yes ]; then rm -f "${context_path}"; fi
 }
-trap remove_context_installer EXIT
 
 set -- buildx build --platform "${platform}" --load
 for tag in "${tags[@]}"; do set -- "$@" -t "${tag}"; done
@@ -263,6 +290,7 @@ done <<EOF
 ${plan}
 EOF
 for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+if [ -n "${metadata_dir}" ]; then set -- "$@" --metadata-file "$(host_path "${metadata_dir}/image.json")"; fi
 # The build's own OCI labels (the bake path sets the same through bake-env.sh): the build time
 # in UTC, to the second, and the commit of this checkout, or unknown when it is not a git work
 # tree (a downloaded archive). Without them the image showed the Ubuntu base image's `created`

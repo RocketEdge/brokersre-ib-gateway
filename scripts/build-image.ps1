@@ -337,14 +337,49 @@ function ConvertFrom-BiArgument {
     return $settings
 }
 
+function Write-BiBuildRecordReminder {
+    <#
+    .SYNOPSIS
+    After a run whose proxy value carried credentials: name the build records that keep it.
+    .DESCRIPTION
+    Docker's build records keep every build argument's value (docker buildx history inspect,
+    history export, Docker Desktop's Builds view) until they are removed. The builds of such a
+    run wrote metadata files into $script:BiMetadataDir; this reads each record's ref from them,
+    deletes the directory (the files can hold the provenance, build arguments included) and
+    says which records to remove. Never prints the value. Does nothing for other runs.
+    .OUTPUTS
+    None.
+    #>
+    [CmdletBinding()]
+    param()
+    if (-not $script:BiMetadataDir) { return }
+    $records = @()
+    foreach ($name in @('helper.json', 'image.json')) {
+        $file = Join-Path $script:BiMetadataDir $name
+        if (Test-Path -LiteralPath $file) {
+            $ref = ''
+            try { $ref = [string]((Get-Content -LiteralPath $file -Raw | ConvertFrom-Json).'buildx.build.ref') }
+            catch { $ref = '' }
+            if ($ref) { $records += ($ref -split '/')[-1] }
+        }
+    }
+    Remove-Item -LiteralPath $script:BiMetadataDir -Recurse -Force -ErrorAction SilentlyContinue
+    $script:BiMetadataDir = ''
+    $list = '<ref> (docker buildx history ls)'
+    if ($records.Count -gt 0) { $list = $records -join ' ' }
+    $text = 'a proxy variable holds a user name or password (not shown): the image does not keep it, ' +
+    "but Docker's build records do (docker buildx history inspect, Docker Desktop's Builds view). " +
+    ('Remove them: docker buildx history rm {0}' -f $list)
+    Write-BiMessage -Message $text
+}
+
 function Invoke-BuildImage {
     <#
     .SYNOPSIS
     Does the whole build and returns the exit code of the contract.
     .DESCRIPTION
-    See the script's help. Every docker call goes through Invoke-BiDockerCapture or
-    Invoke-BiDockerStream, every message through Write-BiMessage and every result line through
-    Write-BiResult, so that Pester can run this function without Docker.
+    See the script's help. Runs Invoke-BiBuildCore and then, whatever its outcome, names the
+    build records that keep a proxy's credentials (Write-BiBuildRecordReminder).
     .PARAMETER ArgumentList
     The script's arguments.
     .PARAMETER RepoRoot
@@ -355,6 +390,30 @@ function Invoke-BuildImage {
     [CmdletBinding()]
     [OutputType([int])]
     param([AllowEmptyCollection()][object[]]$ArgumentList = @(), [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot))
+    $script:BiMetadataDir = ''
+    try { return [int](Invoke-BiBuildCore -ArgumentList $ArgumentList -RepoRoot $RepoRoot) }
+    finally { Write-BiBuildRecordReminder }
+}
+
+function Invoke-BiBuildCore {
+    <#
+    .SYNOPSIS
+    The build's steps; returns the exit code of the contract.
+    .DESCRIPTION
+    See the script's help. Every docker call goes through Invoke-BiDockerCapture or
+    Invoke-BiDockerStream, every message through Write-BiMessage and every result line through
+    Write-BiResult, so that Pester can run this function without Docker. When a proxy value
+    carries credentials it sets $script:BiMetadataDir, where the builds write their metadata.
+    .PARAMETER ArgumentList
+    The script's arguments.
+    .PARAMETER RepoRoot
+    The repository root.
+    .OUTPUTS
+    System.Int32: 0, 1, 2, 3 or 4.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param([AllowEmptyCollection()][object[]]$ArgumentList = @(), [Parameter(Mandatory = $true)][string]$RepoRoot)
     $settings = ConvertFrom-BiArgument -ArgumentList $ArgumentList
     if ($settings.Error -ne '') {
         Write-BiMessage -Message $settings.Error
@@ -414,10 +473,19 @@ function Invoke-BuildImage {
     # The shell's proxy variables, by name only (Get-BiProxyName): for the helper image's build
     # (its apk add needs them on a proxy-only network), the helper container and the build.
     $proxyNames = @(Get-BiProxyName)
+    # Docker's build records keep build arguments: with credentials in a proxy value, each
+    # build writes its metadata here, and Write-BiBuildRecordReminder names the records.
+    foreach ($name in $proxyNames) {
+        if ([string][Environment]::GetEnvironmentVariable($name) -like '*@*' -and -not $script:BiMetadataDir) {
+            $script:BiMetadataDir = Join-Path ([IO.Path]::GetTempPath()) ('brokersre-build-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $script:BiMetadataDir | Out-Null
+        }
+    }
     # 'buildx build --load', not 'docker build': with a docker-container default builder a plain
     # build leaves the image in the build cache only, and 'docker run' would not find it.
     $helperBuild = @('buildx', 'build', '--load', '-q', '-t', $script:HelperImage)
     foreach ($name in $proxyNames) { $helperBuild += @('--build-arg', $name) }
+    if ($script:BiMetadataDir) { $helperBuild += @('--metadata-file', (Join-Path $script:BiMetadataDir 'helper.json')) }
     $built = Invoke-BiDockerCapture -ArgumentList ($helperBuild + @((Join-Path (Join-Path $RepoRoot 'scripts') 'build-helper')))
     if ($built.ExitCode -ne 0) {
         Write-BiMessage -Message 'could not build the helper image from scripts/build-helper'
@@ -478,6 +546,7 @@ function Invoke-BuildImage {
         }
         # Predefined build arguments: usable in RUN, kept out of docker history and the image.
         foreach ($name in $proxyNames) { $build += @('--build-arg', $name) }
+        if ($script:BiMetadataDir) { $build += @('--metadata-file', (Join-Path $script:BiMetadataDir 'image.json')) }
         # The build's own OCI labels, as build-image.sh and the bake path set them: the build
         # time in UTC, to the second, and the commit of this checkout (Get-BiRevision).
         $created = [DateTime]::UtcNow.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", [Globalization.CultureInfo]::InvariantCulture)

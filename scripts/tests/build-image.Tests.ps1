@@ -88,6 +88,9 @@ Describe 'Invoke-BuildImage' {
         Mock Get-BiUserArgument { return @() }
         Mock Invoke-BiDockerCapture {
             [void]$script:calls.Add([string[]]$ArgumentList)
+            # Like buildx: a build asked for a metadata file writes one that names its record.
+            $at = [array]::IndexOf([string[]]$ArgumentList, '--metadata-file')
+            if ($at -ge 0) { Set-Content -LiteralPath $ArgumentList[$at + 1] -Value '{ "buildx.build.ref": "desktop-linux/desktop-linux/stubhelperref" }' }
             if ($script:daemonDown -and @('info', 'version') -contains $ArgumentList[0]) { return [pscustomobject]@{ ExitCode = 1; Lines = [string[]]@() } }
             if ($ArgumentList[0] -eq 'version') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('29.9.3') } }
             if ($ArgumentList[0] -eq 'context') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('desktop-linux') } }
@@ -102,6 +105,8 @@ Describe 'Invoke-BuildImage' {
         }
         Mock Invoke-BiDockerStream {
             [void]$script:calls.Add([string[]]$ArgumentList)
+            $at = [array]::IndexOf([string[]]$ArgumentList, '--metadata-file')
+            if ($at -ge 0) { Set-Content -LiteralPath $ArgumentList[$at + 1] -Value '{ "buildx.build.ref": "desktop-linux/desktop-linux/stubimageref" }' }
             if ($ArgumentList[0] -eq 'buildx') { return $script:buildExit }
             return $script:smokeExit
         }
@@ -344,6 +349,38 @@ Describe 'Invoke-BuildImage' {
         Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $dir)) | Should -BeTrue
         Test-Sequence -Actual $resolve -Expected @('-v', ('{0}:/cache' -f $dir)) | Should -BeTrue
         foreach ($argument in $resolve) { $argument.EndsWith('\') | Should -BeFalse -Because $argument }
+    }
+
+    It 'a proxy URL with credentials ends the build (<outcome>) with the records to remove; the value stays hidden' -TestCases @(
+        @{ outcome = 'built'; buildExit = 0; code = 0 }, @{ outcome = 'failed'; buildExit = 1; code = 1 }
+    ) {
+        $secret = 'pw-' + ('SYN{0}' -f 'THETIC')
+        $saved = [Environment]::GetEnvironmentVariable('HTTPS_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', ('http://synthetic:{0}@proxy.invalid:3128' -f $secret))
+            $script:buildExit = $buildExit
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be $code
+            $text = $script:messages -join "`n"
+            $text | Should -Match 'build records'
+            $text | Should -Match 'docker buildx history rm stubhelperref stubimageref'
+            $text | Should -Not -Match $secret
+            foreach ($call in $script:calls) {
+                $at = [array]::IndexOf([string[]]$call, '--metadata-file')
+                if ($at -ge 0) { Test-Path -LiteralPath $call[$at + 1] | Should -BeFalse }
+            }
+        }
+        finally { [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $saved) }
+    }
+
+    It 'a proxy URL without credentials asks for no metadata and prints no reminder' {
+        $saved = [Environment]::GetEnvironmentVariable('HTTPS_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', 'http://proxy.invalid:3128')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match 'build records'
+            foreach ($call in $script:calls) { $call | Should -Not -Contain '--metadata-file' }
+        }
+        finally { [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $saved) }
     }
 
     It 'without Docker it returns 1' {

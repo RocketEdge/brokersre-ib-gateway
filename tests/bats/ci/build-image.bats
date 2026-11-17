@@ -89,6 +89,19 @@ write_stub_docker() {
 #!/usr/bin/env bash
 # Stub docker for build-image.bats: records each call in ${STUB_DIR}/calls.
 printf '%s\n' "$*" >>"${STUB_DIR}/calls"
+# meta_out REF ARGS...: like buildx, write the build's metadata file when ARGS ask for one.
+meta_out() {
+  local ref="$1" prev="" file=""
+  shift
+  for a in "$@"; do
+    if [ "${prev}" = --metadata-file ]; then file="${a}"; fi
+    prev="${a}"
+  done
+  if [ -n "${file}" ]; then
+    printf '{\n  "buildx.build.ref": "desktop-linux/desktop-linux/%s"\n}\n' "${ref}" >"${file}"
+    printf '%s\n' "${file}" >>"${STUB_DIR}/metadata-files"
+  fi
+}
 case "$1" in
   info)
     if [ -n "${STUB_DAEMON_DOWN:-}" ]; then echo "error during connect: daemon not running" >&2 && exit 1; fi
@@ -104,10 +117,15 @@ case "$1" in
     case "$2" in
       version) echo "github.com/docker/buildx v0.38.1 stub" ;;
       build)
-        case " $* " in *" brokersre-ib-gateway-build-helper:local "*) echo "sha256:helper" && exit 0 ;; esac
+        case " $* " in *" brokersre-ib-gateway-build-helper:local "*)
+          meta_out stubhelperref "$@"
+          echo "sha256:helper" && exit 0
+          ;;
+        esac
         shift 2
         printf '%s\n' "$@" >"${STUB_DIR}/buildx-args"
         ls "${*: -1}/downloads" >"${STUB_DIR}/context-downloads" 2>&1
+        meta_out stubimageref "$@"
         exit "${STUB_BUILD_RC:-0}"
         ;;
       *) exit 1 ;;
@@ -1110,4 +1128,37 @@ cached_meta() {
   [ "$status" -ne 0 ]
   [[ "$stderr" == *"socks9://***@host.invalid:1"* ]]
   [[ "$stderr" != *"${secret}"* ]]
+}
+
+# --- Docker's build records keep build arguments, proxy credentials included (review of #43).
+
+@test "a proxy URL with credentials ends the build with the records to remove; the value stays hidden" {
+  local secret
+  secret="pw-$(printf 'SYN%s' THETIC)"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://synthetic:${secret}@proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"build records"* ]]
+  [[ "$stderr" == *"docker buildx history rm stubhelperref stubimageref"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+  # The metadata files (they can hold the provenance, build arguments included) are gone.
+  while read -r file; do [ ! -e "${file}" ]; done <"${WORK}/stub/metadata-files"
+  # A failed build has records too.
+  STUB_BUILD_RC=1 build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"docker buildx history rm stubhelperref stubimageref"* ]]
+}
+
+@test "a proxy URL without credentials asks for no metadata and prints no reminder" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" != *"build records"* ]]
+  ! grep -q -- '--metadata-file' "${WORK}/stub/calls" || false
 }
