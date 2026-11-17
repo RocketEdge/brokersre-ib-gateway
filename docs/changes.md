@@ -5,6 +5,24 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — The published sidecar 0.2.2 against a paper login (L20)
+
+- **What changed:** documentation only: L20 records what the published sidecar 0.2.2
+  (`sha256:a7372f1f…`) did against a logged-in paper Gateway on 2026-11-16 21:01 to 21:34 UTC,
+  and that all three sidecar workflows have now run.
+- **Result:** with Teams unreachable next to a working webhook, a stop and start of the
+  gateway sent `firing` and then `resolved` to the webhook; after a hard kill of the sidecar
+  right after the webhook got `firing`, the restarted sidecar sent the `resolved` it owed (the
+  defect 0.2.2 fixed). A self-hosted ntfy server received `notify test`, whose runbook link is
+  now the index, and `gateway_stopped` with its `resolved` 4 s apart. No username or
+  account-shaped word in any container log or message. The README's `//var` phase command
+  (#37) returned `logged-in`, exit 0, in Git Bash and PowerShell 7.6 against a logged-in
+  Gateway (23:27 UTC); the single-slash form failed in Git Bash, as #37 states.
+- **What did NOT work / root cause:** nothing new; L20 had still said the weekly rescan never
+  ran, but it ran on schedule on 2026-11-16 17:01 UTC (success, on 0.2.1).
+- **Next step:** one test message per channel to the real services (Teams, Slack, Telegram,
+  PagerDuty, e-mail, ntfy.sh) when the owner provides targets; a rescan of 0.2.2.
+
 ### 2026-11-17 — Re-review of #37: zsh's "without bracketed paste" tests ran with it on
 
 - **What changed:** `pty-answers.py` loads zle (`zmodload zsh/zle`) before `unset
