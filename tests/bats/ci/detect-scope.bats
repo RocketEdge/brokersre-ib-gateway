@@ -150,6 +150,41 @@ teardown() {
   grep -q -F 'update-${channel}-to-${remote}' "${SCRIPT}"
 }
 
+# automerge_problems FILE: fail unless the step that enables auto-merge runs only when the
+# repository variable STABLE_AUTOMERGE is not `false`: its condition must be a pure
+# conjunction (no `||`, no `!` around a group) with that comparison as one of its terms.
+automerge_problems() {
+  local condition
+  condition="$(awk '/^      - name: Enable auto-merge/ { inside = 1; next } inside && /^      - / { inside = 0 } inside' "$1" \
+    | awk '/^        if: / { cond = 1; sub(/^        if: *(>-)?/, ""); print; next } cond && /^          / { print; next } { cond = 0 }' \
+    | tr -s ' \n' '  ')"
+  if [ -z "${condition// /}" ]; then
+    echo "the auto-merge step has no condition"
+    return 1
+  fi
+  if [[ "${condition}" == *"||"* ]] || [[ "${condition}" == *"!("* ]]; then
+    echo "the auto-merge condition is not a pure conjunction: ${condition}"
+    return 1
+  fi
+  if [[ "${condition}" != *"&& vars.STABLE_AUTOMERGE != 'false'"* ]] && [[ "${condition}" != *"vars.STABLE_AUTOMERGE != 'false' &&"* ]]; then
+    echo "the auto-merge condition does not test STABLE_AUTOMERGE: ${condition}"
+    return 1
+  fi
+}
+
+@test "STABLE_AUTOMERGE=false stops the step that enables auto-merge" {
+  run automerge_problems "${WF}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Without the comparison, or with it in an alternative, the switch would not stop the step.
+  sed "s/ && vars.STABLE_AUTOMERGE != 'false'//; s/^          && vars.STABLE_AUTOMERGE != 'false'$//" "${WF}" > "${WORK}/no-switch.yml"
+  run automerge_problems "${WORK}/no-switch.yml"
+  [ "$status" -eq 1 ]
+  sed "s/^          && vars.STABLE_AUTOMERGE != 'false'$/          || vars.STABLE_AUTOMERGE != 'false'/" "${WF}" > "${WORK}/or.yml"
+  run automerge_problems "${WORK}/or.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"pure conjunction"* ]]
+}
+
 @test "two runs of detect-releases.yml never overlap" {
   grep -q -x 'concurrency:' "${WF}"
   grep -A2 -x 'concurrency:' "${WF}" | grep -q -x '  group: detect-releases'

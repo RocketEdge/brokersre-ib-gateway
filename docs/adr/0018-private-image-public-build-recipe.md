@@ -105,15 +105,21 @@ publishing (Phase 3): they do, see below.
   ADR 0009's other behaviour is unchanged: a re-upload is found within a day, an open pull
   request is refreshed daily, a closed one is opened again by the next daily run. Runs never
   overlap (one concurrency group).
-- **Stable updates keep merging themselves** (ADR 0009). With the image private, an
-  auto-merged bump (1) moves RocketEdge's private image, which reaches production only through
-  digest pins that BrokerSRE verifies (`cosign verify`) and regresses on a paper account
-  (runbook R10) before use, and (2) makes `main`'s CI build the pin again (`qualified=yes`)
-  instead of IBKR's newer build. The label `qualified=yes` on such a pin means that the pinned
-  bytes passed the offline tests and the Trivy gate, not that a paper login passed (L04), as
-  for every pin before. The repository variable `STABLE_AUTOMERGE=false` stops the automatic
-  merges without a code change; it is the switch if the owner wants a pin to mean
-  "paper-qualified" (the resolution L35 describes).
+- **Stable updates keep merging themselves** (ADR 0009; behaviour unchanged). With the image
+  private, the consumers of a pin are the people who build from this repository, and
+  RocketEdge's private image, which BrokerSRE verifies (`cosign verify`) and regresses on a
+  paper account (runbook R10) before use. An auto-merged stable bump becomes `main`'s pin and a
+  release whose notes say "build this"; from then on a build of that version prints
+  `qualified_by_project: yes` (and `--strict` accepts it), about an hour after IBKR's release,
+  with no person and no paper login involved. So `qualified_by_project: yes` (the label
+  `com.rocketedge.brokersre.qualified=yes`) means: **the version and the installer's SHA-256
+  equal the repository's pin, which passed the project's offline CI** (the build, the offline
+  container tests and the Trivy gate). A paper login is a separate qualification
+  (`scripts/qualify-paper.sh`, ADR 0014, L04); it is not part of `yes`. The build scripts'
+  help, the spec's interface and L35 say the same. Setting the repository variable
+  `STABLE_AUTOMERGE` to `false` makes every pin wait for a human, who can run the paper
+  qualification first; `tests/bats/ci/detect-scope.bats` checks that the variable stops the
+  step that enables auto-merge.
 
 ## Consequences
 
