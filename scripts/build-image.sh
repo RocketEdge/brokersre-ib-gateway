@@ -90,6 +90,27 @@ die_usage() {
 # say MESSAGE...: one progress line on stderr.
 say() { printf 'build-image: %s\n' "$*" >&2; }
 
+# proxy_url_valid VALUE: whether VALUE is a proxy URL that curl, apt and the helper read the
+# same way: scheme://[user[:password]@]host[:port][/], the scheme one of http, https, socks4,
+# socks4a, socks5, socks5h; the host a name, an IPv4 address or a bracketed IPv6 address; the
+# port 1 to 65535; in the user name and password only RFC 3986's unreserved and sub-delims
+# characters, anything else percent-encoded (@, /, :, %, ?, #, spaces); no whitespace anywhere.
+# Why: curl's error for a value it cannot parse quotes the value in full, password included
+# (review of #43), and the Dockerfile's apt-get and curl get the same value. The C locale keeps
+# the ranges ASCII.
+proxy_url_valid() {
+  local LC_ALL=C
+  local user_char="([A-Za-z0-9._~!\$&'()*+,;=-]|%[0-9A-Fa-f]{2})"
+  local url_re="^(http|https|socks4|socks4a|socks5|socks5h)://(${user_char}*(:${user_char}*)?@)?(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:[0-9]{1,5})?/?$"
+  [[ "$1" =~ ${url_re} ]] || return 1
+  # The port, when there is one, is the only `:digits` at the end (a host has no colon outside
+  # its brackets).
+  if [[ "$1" =~ :([0-9]{1,5})/?$ ]]; then
+    [ $((10#${BASH_REMATCH[1]})) -ge 1 ] && [ $((10#${BASH_REMATCH[1]})) -le 65535 ] || return 1
+  fi
+  return 0
+}
+
 # host_path PATH: PATH as the Docker CLI on this host understands it (C:/... under Git Bash).
 host_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
@@ -133,6 +154,22 @@ if [ -n "${installer}" ]; then
   installer_dir="$(cd "$(dirname "${installer}")" && pwd)"
   installer_name="$(basename "${installer}")"
 fi
+# The proxy variables, before anything runs (proxy_url_valid): a usage error names the variable,
+# never its value. NO_PROXY is a list of hosts; it must not hold a control character.
+for proxy_name in HTTPS_PROXY HTTP_PROXY https_proxy http_proxy; do
+  if [ -n "${!proxy_name:-}" ] && ! proxy_url_valid "${!proxy_name}"; then
+    say "${proxy_name} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)"
+    exit 2
+  fi
+done
+for proxy_name in NO_PROXY no_proxy; do
+  case "${!proxy_name:-}" in
+    *[[:cntrl:]]*)
+      say "${proxy_name} holds a control character (a tab or a line break); expected host names separated by commas"
+      exit 2
+      ;;
+  esac
+done
 
 command -v docker >/dev/null 2>&1 || {
   say "Docker is required (Docker Desktop, or Docker Engine 23 or later with buildx)"

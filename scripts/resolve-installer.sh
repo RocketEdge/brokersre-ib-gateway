@@ -94,18 +94,69 @@ stamp_of() { printf '(.%s) %s' "${1##*.}" "$2"; }
 # sha256_of FILE: lower-case hex SHA-256 of FILE.
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
+# percent_decoded TEXT: TEXT with every %XX replaced by its byte (a % not followed by two hex
+# digits stays as it is).
+percent_decoded() {
+  local text="$1" decoded="" hex
+  while [[ "${text}" == *%* ]]; do
+    decoded="${decoded}${text%%\%*}"
+    text="${text#*%}"
+    hex="${text:0:2}"
+    if [[ "${hex}" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+      decoded="${decoded}$(printf '%b' "\\x${hex}")"
+      text="${text:2}"
+    else
+      decoded="${decoded}%"
+    fi
+  done
+  printf '%s' "${decoded}${text}"
+}
+
+# hide_proxy_values: copy standard input to standard output with every proxy value replaced by
+# `***`: for each of HTTPS_PROXY, HTTP_PROXY, ALL_PROXY (and lower case) that is set, the value
+# as written and percent-decoded, its user information and its password, each as written and
+# decoded. curl's error for a value it cannot parse quotes the value in full, password
+# included ("Unsupported proxy syntax in 'u:password@[::1'"), in shapes no URL pattern finds
+# (review of #43), so the values themselves are looked for. A user name or password that is
+# also an ordinary word masks that word too: masking too much is the safe side. A remaining
+# `//user:password@` (a URL curl rewrote) loses its user information as well.
+hide_proxy_values() {
+  local text name value rest userinfo piece
+  text="$(
+    cat
+    printf x
+  )"
+  text="${text%x}"
+  for name in HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy; do
+    value="${!name:-}"
+    [ -n "${value}" ] || continue
+    set -- "${value}"
+    rest="${value#*://}"
+    if [[ "${rest}" == *@* ]]; then
+      userinfo="${rest%@*}"
+      set -- "$@" "${userinfo}"
+      if [[ "${userinfo}" == *:* ]]; then set -- "$@" "${userinfo#*:}"; fi
+    fi
+    for piece in "$@"; do
+      [ -n "${piece}" ] || continue
+      text="${text//"${piece}"/***}"
+      piece="$(percent_decoded "${piece}")"
+      if [ -n "${piece}" ]; then text="${text//"${piece}"/***}"; fi
+    done
+  done
+  printf '%s' "${text}" | sed -E 's#://[^/@[:space:]]*@#://***@#g'
+}
+
 # curl_ibkr ARGS...: curl with the protocol policy: HTTPS only, bounded connection time, no
 # progress meter. The test override may name an http:// server, but a redirect must lead to
 # HTTPS even then, so that a redirect away from HTTPS is refused in tests as it is in use.
-# curl's own errors can quote a proxy value in full, password included ("Unsupported proxy
-# syntax in 'http://user:password@[::1'"), so its standard error is shown with every
-# `//user:password@` replaced by `//***@`.
+# curl's standard error is shown through hide_proxy_values: it can quote a proxy value in full.
 curl_ibkr() {
   local proto="=https" errors rc=0
   if [ -n "${BROKERSRE_TEST_IBKR_BASE_URL:-}" ]; then proto="=http,https"; fi
   errors="$(mktemp)"
   curl -fsS --proto "${proto}" --proto-redir "=https" --connect-timeout 20 "$@" 2>"${errors}" || rc=$?
-  if [ -s "${errors}" ]; then sed -E 's#://[^/@[:space:]]*@#://***@#g' "${errors}" >&2; fi
+  if [ -s "${errors}" ]; then hide_proxy_values <"${errors}" >&2; fi
   rm -f "${errors}"
   return "${rc}"
 }

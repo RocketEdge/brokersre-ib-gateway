@@ -1151,21 +1151,115 @@ created_label() {
   done <"${WORK}/stub/git-calls"
 }
 
-@test "curl's error about a malformed proxy value is shown without the user name and password" {
-  local secret
-  secret="pw-$(printf 'SYN%s' THETIC)"
+# --- Proxy values (review of #43 at 2e059b1): curl quotes a value it cannot parse in full,
+# password included ("Unsupported proxy syntax in '...'"), in shapes no URL pattern finds. The
+# wrappers refuse a malformed value before anything runs; the helper hides every proxy value in
+# curl's errors as well. The synthetic password's marker is assembled at run time (gitleaks).
+
+# helper_resolve: the helper's `resolve --print-plan`, run on this host as in its container;
+# stdout in $output, stderr in $stderr.
+helper_resolve() {
+  run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads" --print-plan
+}
+
+@test "a malformed proxy value is a usage error that names the variable, before any docker call, never the value" {
+  local token bad name
+  token="SYN$(printf 'THETIC')"
   serve_version stable 10.50.1g "20261109 16:10:13"
-  # The fake server is http://, so the helper's curl takes http_proxy.
-  http_proxy="http://user:${secret}@[::1" build --no-smoke
-  [ "$status" -ne 0 ]
-  [[ "$stderr" == *"proxy"* ]]
-  [[ "$stderr" == *"://***@"* ]]
-  [[ "$stderr" != *"${secret}"* ]]
-  [[ "$stderr" != *"user:"* ]]
-  http_proxy="socks9://user:${secret}@host.invalid:1" build --no-smoke
-  [ "$status" -ne 0 ]
-  [[ "$stderr" == *"socks9://***@host.invalid:1"* ]]
-  [[ "$stderr" != *"${secret}"* ]]
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # The reviewer's four (no scheme; a slash, a space, an unencoded @ in the password), then the
+  # scheme, port and host rules, a broken percent escape and a line break at the end.
+  for bad in "u:pw-${token}@[::1" "http://u:pw-${token}/x@h:1" "http://u:pw-${token} 9x@h:1" \
+    "http://u:pw@${token}@[::1]:1" "ftp://u:pw-${token}@h:1" "http://u:pw-${token}@h:0" \
+    "http://u:pw-${token}@h:65536" "http://u:pw-${token}@:3128" "http://u:pw%4-${token}@h:1" \
+    "http://u:pw-${token}@h:1"$'\n'; do
+    for name in HTTPS_PROXY http_proxy; do
+      rm -f "${WORK}/stub/calls"
+      export "${name}=${bad}"
+      build --no-smoke
+      unset "${name}"
+      [ "$status" -eq 2 ]
+      [ "$stderr" = "build-image: ${name} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)" ]
+      [[ "$output" != *"${token}"* ]]
+      [ ! -e "${WORK}/stub/calls" ]
+    done
+  done
+}
+
+@test "well-formed proxy URLs pass: plain, percent-encoded credentials, IPv6 SOCKS, no port" {
+  local token good
+  token="SYN$(printf 'THETIC')"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # HTTPS_PROXY does not apply to the fake http:// server, so each build completes; NO_PROXY
+  # may have spaces after its commas.
+  for good in "http://proxy.invalid:3128" "http://u:p%40ss%2Fw%20d-${token}@proxy.invalid:3128/" \
+    "socks5h://[::1]:1080" "https://u@10.0.0.1"; do
+    export HTTPS_PROXY="${good}" NO_PROXY="127.0.0.1, localhost"
+    build --no-smoke
+    unset HTTPS_PROXY NO_PROXY
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"${token}"* ]]
+    [[ "$stderr" != *"${token}"* ]]
+  done
+}
+
+@test "a control character in NO_PROXY is a usage error, before any docker call" {
+  local name
+  for name in NO_PROXY no_proxy; do
+    rm -f "${WORK}/stub/calls"
+    export "${name}=localhost"$'\t'"127.0.0.1"
+    build --no-smoke
+    unset "${name}"
+    [ "$status" -eq 2 ]
+    [ "$stderr" = "build-image: ${name} holds a control character (a tab or a line break); expected host names separated by commas" ]
+    [ ! -e "${WORK}/stub/calls" ]
+  done
+}
+
+@test "the helper hides a proxy value curl quotes, whatever its shape" {
+  local token value
+  token="SYN$(printf 'THETIC')"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  # The fake server is http://, so curl takes http_proxy. These reach the helper only when it
+  # runs without a wrapper; curl quotes each in full.
+  for value in "u:pw-${token}@[::1" "http://u:pw-${token}/x@h:1" "http://u:pw-${token} 9x@h:1" "http://u:pw@${token}@[::1"; do
+    http_proxy="${value}" helper_resolve
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"Unsupported proxy syntax in '***'"* ]]
+    [[ "$stderr" != *"${token}"* ]]
+    [[ "$output" != *"${token}"* ]]
+  done
+  # Values the wrappers accept that curl still fails with: an unresolvable and a closed SOCKS
+  # proxy, the second with a percent-encoded password.
+  for value in "socks5h://u:pw-${token}@unreachable.invalid:1080" "socks5h://u:pw%40${token}@127.0.0.1:1"; do
+    http_proxy="${value}" helper_resolve
+    [ "$status" -eq 3 ]
+    [[ "$stderr" == *"curl: ("* ]]
+    [[ "$stderr" != *"${token}"* ]]
+    [[ "$output" != *"${token}"* ]]
+  done
+}
+
+@test "the helper also hides a proxy value's percent-decoded form, its user information and its password" {
+  local token value
+  token="SYN$(printf 'THETIC')"
+  value="http://u:pw%40${token}%2Fx@proxy.invalid:3128"
+  # A stand-in curl that quotes the value as written, decoded, and in parts.
+  mkdir -p "${WORK}/curlbin"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${STUB_CURL_ERRORS}" >&2' 'exit 7' >"${WORK}/curlbin/curl"
+  chmod +x "${WORK}/curlbin/curl"
+  STUB_CURL_ERRORS="as written: ${value}
+decoded: http://u:pw@${token}/x@proxy.invalid:3128
+user information: u:pw@${token}/x
+password: pw%40${token}%2Fx" PATH="${WORK}/curlbin:${PATH}" http_proxy="${value}" helper_resolve
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"as written: ***"* ]]
+  [[ "$stderr" == *"decoded: ***"* ]]
+  [[ "$stderr" == *"user information: ***"* ]]
+  [[ "$stderr" == *"password: ***"* ]]
+  [[ "$stderr" != *"${token}"* ]]
 }
 
 # --- Docker's build records keep build arguments, proxy credentials included (review of #43).

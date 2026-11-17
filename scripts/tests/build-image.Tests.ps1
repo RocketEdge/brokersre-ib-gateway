@@ -296,6 +296,67 @@ Describe 'Invoke-BuildImage' {
         }
     }
 
+    It 'a malformed proxy value in <name> is a usage error before any docker call, never echoed: <shape>' -TestCases @(
+        @{ name = 'HTTPS_PROXY'; shape = 'no scheme'; template = 'u:pw-{0}@[::1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a slash in the password'; template = 'http://u:pw-{0}/x@h:1' },
+        @{ name = 'HTTP_PROXY'; shape = 'a space in the password'; template = 'http://u:pw-{0} 9x@h:1' },
+        @{ name = 'HTTP_PROXY'; shape = 'an unencoded @ in the password'; template = 'http://u:pw@{0}@[::1]:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'scheme ftp'; template = 'ftp://u:pw-{0}@h:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'port 0'; template = 'http://u:pw-{0}@h:0' },
+        @{ name = 'HTTPS_PROXY'; shape = 'port 65536'; template = 'http://u:pw-{0}@h:65536' },
+        @{ name = 'HTTPS_PROXY'; shape = 'no host'; template = 'http://u:pw-{0}@:3128' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a broken percent escape'; template = 'http://u:pw%4-{0}@h:1' },
+        @{ name = 'HTTPS_PROXY'; shape = 'a line break at the end'; template = "http://u:pw-{0}@h:1`n" }
+    ) {
+        # Review of #43 at 2e059b1: curl quotes a value it cannot parse in full, password included.
+        $token = 'SYN{0}' -f 'THETIC'
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        $saved = @{}
+        foreach ($each in $names) { $saved[$each] = [Environment]::GetEnvironmentVariable($each) }
+        try {
+            foreach ($each in $names) { [Environment]::SetEnvironmentVariable($each, $null) }
+            [Environment]::SetEnvironmentVariable($name, ($template -f $token))
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 2
+            $script:messages | Should -Contain ('{0} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)' -f $name)
+            $script:calls.Count | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match $token
+            ($script:results -join "`n") | Should -Not -Match $token
+        }
+        finally {
+            foreach ($each in $saved.Keys) { [Environment]::SetEnvironmentVariable($each, $saved[$each]) }
+        }
+    }
+
+    It 'accepts a well-formed proxy URL: <value>' -TestCases @(
+        @{ value = 'http://proxy.invalid:3128' }, @{ value = 'http://u:p%40ss%2Fw%20d@proxy.invalid:3128/' },
+        @{ value = 'socks5h://[::1]:1080' }, @{ value = 'https://u@10.0.0.1' }
+    ) {
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        $saved = @{}
+        foreach ($each in $names) { $saved[$each] = [Environment]::GetEnvironmentVariable($each) }
+        try {
+            foreach ($each in $names) { [Environment]::SetEnvironmentVariable($each, $null) }
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $value)
+            [Environment]::SetEnvironmentVariable('NO_PROXY', '127.0.0.1, localhost')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            ($script:messages -join "`n") | Should -Not -Match 'p%40ss|p@ss'
+        }
+        finally {
+            foreach ($each in $saved.Keys) { [Environment]::SetEnvironmentVariable($each, $saved[$each]) }
+        }
+    }
+
+    It 'a control character in NO_PROXY is a usage error before any docker call' {
+        $saved = [Environment]::GetEnvironmentVariable('NO_PROXY')
+        try {
+            [Environment]::SetEnvironmentVariable('NO_PROXY', "localhost`t127.0.0.1")
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 2
+            $script:messages | Should -Contain 'NO_PROXY holds a control character (a tab or a line break); expected host names separated by commas'
+            $script:calls.Count | Should -Be 0
+        }
+        finally { [Environment]::SetEnvironmentVariable('NO_PROXY', $saved) }
+    }
+
     It 'without proxy variables no proxy name is passed' {
         $saved = @{}
         $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')

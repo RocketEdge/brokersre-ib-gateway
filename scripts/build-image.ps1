@@ -212,6 +212,65 @@ function Get-BiProxyName {
     return [string[]]$names
 }
 
+function Test-BiProxyUrl {
+    <#
+    .SYNOPSIS
+    Whether Value is a proxy URL that curl, apt and the helper read the same way.
+    .DESCRIPTION
+    scheme://[user[:password]@]host[:port][/], as build-image.sh's proxy_url_valid: the scheme
+    one of http, https, socks4, socks4a, socks5, socks5h; the host a name, an IPv4 address or a
+    bracketed IPv6 address; the port 1 to 65535; in the user name and password only RFC 3986's
+    unreserved and sub-delims characters, anything else percent-encoded (@, /, :, %, ?, #,
+    spaces); no whitespace anywhere. Why: curl's error for a value it cannot parse quotes the
+    value in full, password included (review of #43), and the Dockerfile's apt-get and curl get
+    the same value. \A and \z, not ^ and $: .NET's $ also matches before a final line break.
+    .PARAMETER Value
+    The variable's value.
+    .OUTPUTS
+    System.Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([AllowEmptyString()][string]$Value)
+    $userChar = '(?:[A-Za-z0-9._~!$&''()*+,;=-]|%[0-9A-Fa-f]{2})'
+    $pattern = '\A(?:http|https|socks4|socks4a|socks5|socks5h)://(?:' + $userChar + '*(?::' + $userChar + '*)?@)?' +
+    '(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(?::(?<port>[0-9]{1,5}))?/?\z'
+    $match = [regex]::Match($Value, $pattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) { return $false }
+    $port = $match.Groups['port'].Value
+    if ($port -ne '' -and ([int]$port -lt 1 -or [int]$port -gt 65535)) { return $false }
+    return $true
+}
+
+function Get-BiProxyProblem {
+    <#
+    .SYNOPSIS
+    The usage error for the first malformed proxy variable, or an empty string.
+    .DESCRIPTION
+    HTTPS_PROXY, HTTP_PROXY and their lower-case forms must pass Test-BiProxyUrl; NO_PROXY and
+    no_proxy (lists of hosts) must not hold a control character. The message names the
+    variable, never its value, which may hold a password.
+    .OUTPUTS
+    System.String.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value -and -not (Test-BiProxyUrl -Value $value)) {
+            return ('{0} is not a valid proxy URL (expected scheme://host:port; percent-encode @, / and spaces in a user name or password)' -f $name)
+        }
+    }
+    foreach ($name in @('NO_PROXY', 'no_proxy')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value -and $value -match '[\x00-\x1F\x7F]') {
+            return ('{0} holds a control character (a tab or a line break); expected host names separated by commas' -f $name)
+        }
+    }
+    return ''
+}
+
 function Get-BiRevision {
     <#
     .SYNOPSIS
@@ -454,6 +513,12 @@ function Invoke-BiBuildCore {
     if ($settings.Error -ne '') {
         Write-BiMessage -Message $settings.Error
         Write-BiUsage
+        return 2
+    }
+    # The proxy variables, before anything runs (Get-BiProxyProblem): never their values.
+    $proxyProblem = Get-BiProxyProblem
+    if ($proxyProblem -ne '') {
+        Write-BiMessage -Message $proxyProblem
         return 2
     }
     if (-not (Test-BiDockerAvailable)) {
