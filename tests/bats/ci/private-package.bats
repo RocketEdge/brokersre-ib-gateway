@@ -169,6 +169,33 @@ package_workflows() {
   done
 }
 
+# pulling_steps FILE: print every script line of FILE that pulls an image: `docker pull`,
+# `docker image pull`, a compose `pull`, or a compose `up`/`run`/`create` with `--pull`
+# (an indirect pull through a compose file's default image, the review's mutation M9).
+pulling_steps() {
+  awk -f "${LISTER}" "$1" | awk -F '\t' '$2 == "run" { print "step " $1 ": " $3 }' \
+    | grep -E 'docker (image )?pull |(docker[ -])?compose([^|;&]*)? pull( |$)|(docker[ -])?compose[^|;&]* (up|run|create)[^|;&]*--pull' || true
+}
+
+@test "no workflow pulls an image in a script, except the qualification's pull of the digest it was given" {
+  for file in "${WF}"/*.yml; do
+    found="$(pulling_steps "${file}")"
+    if [ "$(basename "${file}")" = qualify-paper.yml ]; then
+      [ "${found}" = "$(printf '%s\n' "${found}" | grep -F 'docker pull "${IMAGE}"')" ]
+      [ "$(printf '%s\n' "${found}" | grep -c .)" -eq 1 ]
+    else
+      [ -z "${found}" ] || { echo "$(basename "${file}"): ${found}"; false; }
+    fi
+  done
+  # The shapes are caught: a compose pull with the shipped file's default image, `up --pull`.
+  for line in 'docker compose -f compose/docker-compose.example.yml pull' \
+    'docker compose -f compose/docker-compose.example.yml up -d --pull always' \
+    'docker-compose pull ib-gateway' 'docker pull ghcr.io/rocketedge/brokersre-ib-gateway:stable'; do
+    printf '%s\n' 'jobs:' '  x:' '    steps:' "      - run: ${line}" > "${WORK}/pull.yml"
+    [ -n "$(pulling_steps "${WORK}/pull.yml")" ] || { echo "not caught: ${line}"; false; }
+  done
+}
+
 @test "every job that reads the package logs in to ghcr.io with the workflow's token first" {
   run logs_in_before "${WF}/publish.yml" publish id push
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -231,6 +258,10 @@ package_workflows() {
   [ -n "${release}" ]
   notes="$(printf '%s\n' "${output}" | awk -F '\t' -v step="${release}" '$1 == step && $2 == "run" { print $3 }')"
   [[ "${notes}" != *"Pin this exact build"* ]]
+  # No pull instruction of any kind (the review's mutation M7: `docker pull $IMAGE@$DIGEST`):
+  # the only "pull" the notes may contain is "cannot be pulled".
+  run ! grep -q -i -E '(docker|podman|nerdctl|crane|oras|skopeo)( image)? (pull|copy|run)|compose[^"]* (pull|up)' <<<"${notes}"
+  run ! grep -q -i 'pull' <<<"${notes//cannot be pulled/}"
   [[ "${notes}" == *"private"* ]]
   [[ "${notes}" == *"scripts/build-image.sh --channel \$CHANNEL"* ]]
   # The notes still carry the digest RocketEdge pins, and the release is checked for it.

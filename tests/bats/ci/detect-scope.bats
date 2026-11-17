@@ -133,6 +133,16 @@ teardown() {
   printf '%s\n' "${crons}" | grep -q -x -F "${daily}"
 }
 
+@test "a manual dispatch always does the full check" {
+  # A dispatch has no cron string: github.event.schedule is empty, and '' != '0 6 * * *' is
+  # true. Without `github.event_name == 'schedule' &&` a dispatch would count as hourly and
+  # could skip (the review's mutation M3). The expression is pinned as written.
+  facts="$(awk -f "${LISTER}" "${WF}")"
+  scope="$(printf '%s\n' "${facts}" | awk -F '\t' '$2 == "id" && $3 == "scope" { print $1 }')"
+  check="$(printf '%s\n' "${facts}" | awk -F '\t' -v step="${scope}" '$1 == step && $2 == "env.CHECK" { print $3 }')"
+  [ "${check}" = "\${{ (github.event_name == 'schedule' && github.event.schedule != '0 6 * * *') && 'hourly' || 'full' }}" ]
+}
+
 @test "detect-releases.yml downloads and decides only when the scope says full" {
   facts="$(awk -f "${LISTER}" "${WF}")"
   scope="$(printf '%s\n' "${facts}" | awk -F '\t' '$2 == "id" && $3 == "scope" { print $1 }')"
