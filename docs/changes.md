@@ -5,6 +5,95 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #42: "not public" in generated text, the audit log's times
+
+- **What changed:** `publish.yml`'s release notes and `detect-releases.yml`'s update pull
+  request body say RocketEdge's image "is not public" instead of "private" (true for internal
+  and private; owner step 1 is optional). The same wording goes into the comments of six
+  workflows, the gate job and step names ("the package is not public", "still not public"),
+  the placeholder's text, the gate's error message (change the visibility, never delete the
+  package: a workflow would re-create it public), the header of
+  `scripts/check-package-private.sh` (it proves "not anonymously readable", L40), the two bats
+  files and the Windows kit's doc comment; ids, conditions and the script's output are
+  unchanged. ADR 0018, this log and `tasks/todo.md` use the audit log's times (the refusal
+  after the deletion held until the push at 08:10, public from 08:10:35 to 08:46:22, created
+  again at 08:46:43) and name the token generically (a classic token with `write:packages`).
+  Owner step 1 says to update L39 and the ADR's decision bullet when it is taken; the recovery
+  block says to run it in bash.
+- **Result:** the release-notes test now requires "is not public" and refuses "private"; bats
+  `private-package`, `check-package-private`, `workflows` and `detect-scope` 58/58 on Linux;
+  shellcheck, shfmt, actionlint 1.7.12 and PSScriptAnalyzer clean; markdownlint clean. zsh
+  refused `read -p` ("no coprocess") and dash refused `read -s` ("Illegal option") in a
+  container.
+- **What did NOT work / root cause:** the first version of this pull request corrected the
+  documents but left the generated text alone (release notes, update pull request bodies)
+  because it lives in workflow files, which were out of scope then, although it is what a
+  reader of a release or an update pull request sees; and it gave the hand re-creation an
+  approximate time ("about 08:45") and a refusal "from then on" that the push at 08:10 had
+  already ended.
+- **Next step:** the owner's steps (1) to (5) in `tasks/todo.md`; a decision on L40.
+
+### 2026-11-17 — The README and the upgrade policy say detection runs hourly
+
+- **What changed:** README ("Upgrade policy", "Automatic updates and repository secrets") and
+  `docs/upgrade-policy.md` step 1 describe what `detect-releases.yml` does since #40: it reads
+  IBKR's `version.json` every hour at minute 23; the full check (both installers downloaded and
+  hashed, `scripts/release-decision.sh`) runs in the daily run at 06:00 UTC, on a dispatch and
+  in an hourly run at the first sight of a version (`scripts/detect-scope.sh`). The README says
+  the run that creates an update pull request (hourly or daily) is the one that enables
+  auto-merge, and that the workflow is disabled since 2026-11-17 until the package's access
+  settings are done.
+- **Result:** read against the workflow on `main` (`7841934`): `cron: "0 6 * * *"` and
+  `cron: "23 * * * *"`, the scope step's condition and `detect-scope.sh`'s contract; markdownlint
+  clean.
+- **What did NOT work / root cause:** #40 changed the schedule and ADR 0018 but not the two
+  user-facing pages, which kept "daily" (recorded as a follow-up in #40's entry).
+- **Next step:** none for this text; `tasks/todo.md` keeps the follow-up on downloading less
+  (`Last-Modified`, `Content-Length`).
+
+### 2026-11-17 — Phase 4: the public package withdrawn, the package created again by hand
+
+- **What changed:** documentation only, no workflow or script. ADR 0018 gets a dated
+  amendment: what happened on 2026-11-17 (UTC) with the run ids, what GitHub did, the decision
+  (the package is created by hand, once, never by a workflow of this repository; it is not
+  public, private or internal; workflows reach it through "Manage Actions access"), the owner
+  steps and the recovery path as commands; the spec gets a correction, L39 the outcome, L40 is
+  new, `tasks/todo.md` records steps (0) to (c) as done and lists the remaining ones. The
+  documents say that the former public package was withdrawn on 2026-11-17, that no RocketEdge
+  image is published at the moment and that the next publish goes to a package ghcr.io does
+  not serve anonymously, after two checks (README, SECURITY, NOTICE, evidence, upgrade policy,
+  architecture, the Azure pack's and the Windows kit's READMEs, the contract files); the
+  upgrade policy's rollback says the digests published until then are gone; the README's
+  advice for a user's own GHCR package says a new package is not always private.
+- **Result:** what happened: the public package was deleted at 08:09 (anonymous token request
+  403 and API "Package not found" until the push at 08:10); `publish.yml` run 44044468594
+  (08:10) re-created it PUBLIC with its placeholder push (08:10:35) and its job
+  `private-package` failed at the anonymous-read check, `publish` skipped; at 08:46:22 the
+  public placeholder package was deleted, and at 08:46:43 the package was created by hand with
+  a personal token (internal, `check-package-private.sh` exit 0, no repository linked); run 44049788033 (08:47) failed at the placeholder push with
+  `permission_denied: write_package`, `publish` skipped. The visibility gate worked as designed
+  both times and no IBKR software was pushed. The state was read again before this entry was
+  written: anonymous token request 401; the package API answers `visibility: internal`, no
+  `repository`, three versions (the placeholder's index tagged `visibility-probe`, its
+  linux/amd64 image and Docker's attestation manifest); the workflows "Publish", "Rebuild" and
+  "Detect IB Gateway releases" `disabled_manually`. The recovery procedure's build and its push
+  from a throwaway `DOCKER_CONFIG` ran against a local `registry:2`.
+- **What did NOT work / root cause:** the plan assumed that a package created again after the
+  deletion would be private and linked to this repository (spec, ADR 0018 Context item 4 and
+  Phase 3, owner step (c)). GitHub gives a package that a workflow creates "the visibility and
+  permissions model of the repository where the workflow is run", public here; the review of
+  #40 had found that sentence and added the gate, which is why nothing leaked, but the owner
+  steps still expected the workflow to create the package. The hand-made package has two
+  properties nobody planned: a personal-token push into an organisation of a GitHub enterprise
+  made it internal, which the gate cannot tell from private because it checks anonymous reads
+  only (L40); and the `org.opencontainers.image.source` label, which GitHub documents as the
+  way to link an image before publishing, did not link it (cause not established), so the
+  workflow's token was refused until the package's Actions access grants the repository.
+- **Next step:** the owner's steps (1) to (5) in `tasks/todo.md`; a decision on L40 (a gate
+  that reads the visibility setting); the comments in the workflows, a bats file and the
+  Windows kit that still call the package private or "being withdrawn", with the next change
+  to those files.
+
 ### 2026-11-17 — Re-review of #41: no credentials in the WSL copy or the build context
 
 - **What changed:** the Windows kit's WSL build packs a named list of what

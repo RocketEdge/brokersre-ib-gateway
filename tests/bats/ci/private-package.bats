@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
-# Tests that keep the workflows correct for a PRIVATE gateway package (ADR 0018, spec phase 3).
-# Needs bash, awk, grep and sed:
+# Tests that keep the workflows correct for a gateway package that is NOT PUBLIC (ADR 0018, spec
+# phase 3; private or internal, docs/limitations.md L40). Needs bash, awk, grep and sed:
 #   tests/.bats-core/bin/bats tests/bats/ci
 #
-# RocketEdge's own image, ghcr.io/rocketedge/brokersre-ib-gateway, is private from phase 4 on:
+# RocketEdge's own image, ghcr.io/rocketedge/brokersre-ib-gateway, is not public from phase 4 on:
 # an anonymous pull fails, and a pull request from a fork never gets access to it. So:
 #   * CI and the sidecar's end-to-end job test an image they built from the commit, under a
 #     name no registry serves (nothing can be pulled in its place, not even by accident);
@@ -315,14 +315,16 @@ pulling_steps() {
   # the only "pull" the notes may contain is "cannot be pulled".
   run ! grep -q -i -E '(docker|podman|nerdctl|crane|oras|skopeo)( image)? (pull|copy|run)|compose[^"]* (pull|up)' <<<"${notes}"
   run ! grep -q -i 'pull' <<<"${notes//cannot be pulled/}"
-  [[ "${notes}" == *"private"* ]]
+  # True for a private and an internal package alike (L40): never "private".
+  [[ "${notes}" == *"is not public"* ]]
+  [[ "${notes}" != *"private"* ]]
   [[ "${notes}" == *"scripts/build-image.sh --channel \$CHANNEL"* ]]
   # The notes still carry the digest RocketEdge pins, and the release is checked for it.
   [[ "${notes}" == *'$IMAGE@$DIGEST'* ]]
   [[ "${notes}" == *'--expect-in-notes "$DIGEST"'* ]]
 }
 
-@test "publish.yml proves the package private before any job can push the gateway image" {
+@test "publish.yml proves the package is not public before any job can push the gateway image" {
   text="$(job "${WF}/publish.yml" private-package)"
   [ -n "${text}" ]
   run logs_in_before "${WF}/publish.yml" private-package id probe

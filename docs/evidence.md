@@ -6,11 +6,14 @@ code, your host, your network and your IBKR account settings are yours to eviden
 
 **RocketEdge no longer distributes a public image** (decided 2026-11-17,
 [ADR 0018](adr/0018-private-image-public-build-recipe.md); the former public package
-`ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn): you build the image from this
-repository ([README, "Build the image"](../README.md#build-the-image)). The commands marked
-**[P]** below were run against the image RocketEdge published; RocketEdge's image keeps its
-signature, SBOMs, provenance and releases for its BrokerSRE service, and once the public
-package is withdrawn only those who may pull it privately can repeat them.
+`ghcr.io/rocketedge/brokersre-ib-gateway` was withdrawn the same day, deleted with every image
+in it): you build the image from this repository
+([README, "Build the image"](../README.md#build-the-image)). The commands marked **[P]** below
+were run against an image RocketEdge published then; that digest was deleted with the
+package, so nobody can repeat them against it. No RocketEdge image is published at the moment.
+The next one keeps the signature, SBOMs, provenance and releases for its BrokerSRE service, in
+a package that ghcr.io does not serve to anonymous users: only those granted read access can
+repeat the **[P]** commands on it.
 For an image you built, start with [An image you built](#an-image-you-built); the questions
 from "Who can reach the API?" on concern what the image does at run time and apply to any
 image built from this repository.
@@ -19,7 +22,8 @@ Every command below was run on 2026-11-12 and its result seen, unless it is mark
 
 - **[P]** run against the image RocketEdge published then
   `ghcr.io/rocketedge/brokersre-ib-gateway@sha256:693bd6306d94708a87e5b0c43180874f671010a5edf142796eb8f46f51e869ea`
-  (`stable`, IB Gateway 10.50.1g, published 2026-11-11);
+  (`stable`, IB Gateway 10.50.1g, published 2026-11-11, deleted with the former public package
+  on 2026-11-17);
 - **[L]** run against a local build of this repository's image, started from the reference
   compose **without a login** (`IBC_LAUNCH=no`, dummy secret files): it proves what the image
   does around the Gateway, not what a logged-in Gateway does. The image published on

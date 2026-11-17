@@ -36,8 +36,8 @@ jobs:
     environment: paper-qualification
     permissions:
       contents: read
-      # The pull needs read access to the private package (ADR 0018), and cosign stores the
-      # attestation next to the image (only with `attest`); `write` includes `read`.
+      # The pull needs read access to the package, which is not public (ADR 0018), and cosign
+      # stores the attestation next to the image (only with `attest`); `write` includes `read`.
       packages: write
       id-token: write # keyless signing of the attestation
     env:
@@ -55,7 +55,7 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v7.0.1
-      # RocketEdge's image is private (ADR 0018): an anonymous pull fails. One login for the
+      # RocketEdge's image is not public (ADR 0018): an anonymous pull fails. One login for the
       # whole job, after the digest check above, and the pull, both before the credential files
       # exist: no third-party action and no registry round trip runs while they are on disk.
       # The attestation below uses the same login; the action's post step logs out.

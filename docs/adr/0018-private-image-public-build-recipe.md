@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-17, owner decision); amends
   [ADR 0007](0007-ibc-from-rocketedge-fork-no-ibkr-redistribution.md) and
-  [ADR 0009](0009-stable-updates-merge-themselves.md)
+  [ADR 0009](0009-stable-updates-merge-themselves.md); amended 2026-11-17
+  ([how the package was created again](#amendment-2026-11-17-how-the-package-was-created-again))
 - **Spec:** [docs/specs/2026-11-17-private-image-public-recipe.md](../specs/2026-11-17-private-image-public-recipe.md)
 
 ## Context
@@ -30,7 +31,7 @@
    carries the same file in the gzip archive install4j appends to it.
 4. GitHub: a package linked to a repository takes over its permissions "but not the
    visibility"; a package created again after deletion is private by default (spec, owner
-   answers).
+   answers). (Not so for this repository: see the amendment below.)
 
 ## Decision
 
@@ -85,7 +86,9 @@ publishing (Phase 3): they do, see below.
 - `publish.yml` keeps publishing under `ghcr.io/rocketedge/brokersre-ib-gateway`. After the
   public package is deleted (Phase 4), its first push creates the package again: private (the
   default for a new package), linked to this repository (a push with the workflow's token
-  links it), so this repository's workflows keep access. No workflow sets a visibility. Every
+  links it), so this repository's workflows keep access. (Observed otherwise on 2026-11-17:
+  the workflow's push created a public package, and the package was then created by hand;
+  see the amendment below.) No workflow sets a visibility. Every
   registry step (push, Trivy's remote source, the SBOM tool, cosign, the provenance push,
   `imagetools`) reads the credential `docker/login-action` writes. The release stays public:
   its notes name the digest for RocketEdge's own pins and tell everyone else to build from the
@@ -156,3 +159,122 @@ publishing (Phase 3): they do, see below.
 
 IBKR publishes versioned or checksummed installers; IBKR or counsel clears redistribution of
 the installed Gateway; or a fall-forward build is found to differ from what IBKR announced.
+
+## Amendment 2026-11-17: how the package was created again
+
+Phase 4 ran on 2026-11-17 and did not go as the Context (item 4) and the Phase 3 decision
+assumed. What happened (UTC; every line observed, the runs read in their logs):
+
+| Time | Action | Result |
+|---|---|---|
+| 08:09 | The public package `ghcr.io/rocketedge/brokersre-ib-gateway` deleted | Until the push at 08:10 an anonymous token request for it was refused (403) and the API answered "Package not found". Every image published until then is gone with it |
+| 08:10 | `publish.yml` dispatched (run 44044468594) | Its job `private-package` pushed the placeholder `visibility-probe` (FROM scratch, one text file), and that push created the package again, **public**. `scripts/check-package-private.sh` reported PUBLIC (exit 1), the job failed, `publish` was skipped: no IBKR software was pushed. From 08:10:35 until 08:46:22 the public package held only the placeholder |
+| 08:46:22 | The public placeholder package deleted | No package of that name until 08:46:43 |
+| 08:46:43 | The same kind of placeholder (with the label `org.opencontainers.image.source=https://github.com/RocketEdge/brokersre-ib-gateway`) pushed with a classic personal access token with `write:packages`, from an operator machine, without `docker login`, through a throwaway `DOCKER_CONFIG` | The push created the package, **internal**. `check-package-private.sh` exit 0: an anonymous token request is refused (401). The API's record of the package names **no repository**: the source label did not link it |
+| 08:47 | `publish.yml` dispatched again (run 44049788033) | The placeholder push with the workflow's token failed, `permission_denied: write_package`; the job failed, `publish` was skipped, nothing was pushed |
+| after 08:47 | `publish.yml`, `rebuild.yml` and `detect-releases.yml` disabled again | No RocketEdge gateway image is published. The package exists, not public, and holds only the placeholder (an index, its one image and Docker's attestation manifest) |
+
+**The visibility gate worked as designed, twice.** The job `private-package` stopped both
+runs before `publish` could start: the first at the anonymous-read check (a public package),
+the second at the placeholder push (no write access). No IBKR software reached the registry.
+
+**What GitHub does, as observed here** (with what GitHub documents, read on 2026-11-17):
+
+1. A package that a workflow of this public repository creates is **public**. GitHub
+   documents it: a package a workflow creates with `GITHUB_TOKEN` "inherits the visibility
+   and permissions model of the repository where the workflow is run"
+   ([Publishing and installing a package with GitHub Actions](https://docs.github.com/en/enterprise-cloud@latest/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)).
+   Context item 4 ("private by default") and the Phase 3 statement that the workflow's first
+   push creates it private and linked were wrong for this repository.
+2. A package pushed with a personal token into this organisation, which belongs to a GitHub
+   enterprise, came out **internal**. GitHub: an internal package of an organisation in an
+   enterprise is "visible to all enterprise members"
+   ([Configuring a package's access control and visibility](https://docs.github.com/en/enterprise-cloud@latest/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)),
+   and "all workflows running in any repository owned by the Enterprise account can download
+   the package" (the Actions page above). ghcr.io refuses it to anonymous users, so
+   `check-package-private.sh` cannot tell it from a private one
+   ([limitations](../limitations.md) L40).
+3. The label `org.opencontainers.image.source` did **not** link the package to the
+   repository, although GitHub documents the label as the way to link an image before it is
+   published (the access-control page above). Why is not established.
+4. A package without a link refuses the workflow's token until its settings grant the
+   repository under **Manage Actions access**; GitHub notes that this is not the same as
+   connecting the package to a repository, and that a new version can be uploaded only by
+   "workflows running in repositories that are given write permission on that package".
+
+**Decision.**
+
+- The package is created by hand, once, with a personal token (the recovery path below),
+  never by a workflow of this repository: such a workflow creates a public package. Its
+  visibility is changed in its settings; deleting it again is not a way to change it.
+- The package is **not public**: private, or internal (its state since 2026-11-17). Internal
+  keeps IBKR's software from anonymous users, but every member of the enterprise, and by
+  GitHub's description every workflow in the enterprise, may read it; private limits it to the
+  people and repositories it names. The owner chooses; the gate accepts both (L40).
+- Workflows reach the package only through **Manage Actions access**: this repository with
+  role **Write** (`publish.yml`, the scan of `rebuild.yml`, `qualify-paper.yml`) and the
+  BrokerSRE repository with role **Read** (its pin job). Not a repository connection with
+  inherited access: by GitHub's description ("a user who has read access to the linked
+  repository will also have read access to the package") that would extend read access to
+  everyone who can read this public repository, and the anonymous check would not see it
+  (inference, not tested).
+- No workflow or script changes. `publish.yml`'s gate already refuses a public package and
+  refuses to push without write access; what it cannot see is recorded in L40.
+- The name was taken again at 08:10, so the deleted public package cannot be restored (GitHub
+  restores a deleted package only while no new package has taken its name, `tasks/todo.md`
+  step (a)). The releases still name the digests published until 2026-11-17; no registry
+  serves them.
+
+**Owner steps** (web UI, package settings,
+<https://github.com/orgs/RocketEdge/packages/container/brokersre-ib-gateway/settings>; the
+checklist is in `tasks/todo.md`):
+
+1. Optional: *Change visibility* from Internal to Private; then update L39 and the second
+   bullet of the decision above, which say internal.
+2. *Manage Actions access*, *Add repository*: `RocketEdge/brokersre-ib-gateway` with role
+   Write; `RocketEdge/brokersre` with role Read.
+3. Re-enable `publish.yml` and `detect-releases.yml`; dispatch `publish.yml` with
+   `channels="stable latest"`; read the run through the job "the package is not public" (its log
+   says `private: an anonymous read ... was refused`), the same check right before the push,
+   and each channel's "Verify the signature and attestations".
+4. Then re-enable `rebuild.yml`: its scan fails while the package holds no channel tags.
+
+**Recovery path: create the package by hand.** Only when the package has to be created
+again (it does not exist, or it was deleted). The procedure of 2026-11-17, written out (the
+build and a push from a throwaway Docker configuration were checked against a local registry;
+the push to ghcr.io ran on 2026-11-17). A personal access token (classic) with
+`write:packages` is typed at the prompt; no token is stored in a file of your usual
+configuration or a credential store. Run it in bash (Git Bash on Windows): zsh refuses
+`read -p` ("no coprocess") and sh (dash) refuses `read -s` ("Illegal option").
+
+```bash
+# Run in bash: zsh refuses read -p, sh (dash) refuses read -s.
+# 1. The placeholder, built with your usual Docker configuration: FROM scratch, one text
+#    file, no IBKR software, the source label of this repository.
+probe="$(mktemp -d)"
+printf '%s\n' 'Placeholder of ghcr.io/rocketedge/brokersre-ib-gateway. It holds no IBKR software.' > "$probe/README.txt"
+printf '%s\n' 'FROM scratch' 'COPY README.txt /README.txt' > "$probe/Dockerfile"
+docker build --label org.opencontainers.image.source=https://github.com/RocketEdge/brokersre-ib-gateway \
+  -t ghcr.io/rocketedge/brokersre-ib-gateway:visibility-probe "$probe"
+# 2. The push, from a throwaway Docker configuration (no docker login), removed afterwards.
+export DOCKER_CONFIG="$(mktemp -d)"
+read -r -p 'GitHub user: ' gh_user
+read -r -s -p 'Token (classic, write:packages): ' gh_token; echo
+printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$(printf '%s:%s' "$gh_user" "$gh_token" | base64 | tr -d '\n')" > "$DOCKER_CONFIG/config.json"
+unset gh_token
+docker push ghcr.io/rocketedge/brokersre-ib-gateway:visibility-probe
+rm -rf "$DOCKER_CONFIG" "$probe"; unset DOCKER_CONFIG
+# 3. publish.yml's gate on it. The repository WITHOUT the ghcr.io/ prefix. Exit 0 means
+#    ghcr.io refused the anonymous token request: private OR internal, so read the visibility
+#    in the package settings (L40).
+scripts/check-package-private.sh rocketedge/brokersre-ib-gateway visibility-probe
+```
+
+Then the owner steps above: the package comes out unlinked, so step 2 is what lets the
+workflows in.
+
+Rejected: letting `publish.yml` create the package and making it private afterwards (the
+package is public in between, and the gate stops that run anyway); a workflow step that sets
+the visibility (the decision above keeps "no workflow sets a visibility"); deleting the
+internal package to try again (a push with a personal token creates it internal again, a
+push from a workflow of this repository public).

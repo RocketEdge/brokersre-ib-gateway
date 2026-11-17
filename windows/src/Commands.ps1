@@ -335,8 +335,8 @@ function Initialize-GwGatewayImage {
     Makes sure the gateway image is on this computer before setup starts the stack.
     .DESCRIPTION
     RocketEdge no longer distributes a public image of the gateway: it holds IBKR's installed
-    software (ADR 0018; the former public package is being withdrawn), so each operator builds
-    it from the repository.
+    software (ADR 0018; the former public package was withdrawn on 2026-11-17), so each
+    operator builds it from the repository.
     Decision, in this order:
     - the image is on this computer (Test-GwImagePresent, read-only): nothing to do;
     - it is brokersre-ib-gateway:stable or :latest (Get-GwImageBuildChannel): build it with the

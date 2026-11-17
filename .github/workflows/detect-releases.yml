@@ -16,7 +16,7 @@
 #                under ibgateway-<channel>@<version>-<x64 hash prefix>, open one issue per set of
 #                bytes and change nothing; a human decides whether to re-pin.
 #   none         nothing to do.
-# A merged update makes publish.yml publish RocketEdge's image, which is private (ADR 0018);
+# A merged update makes publish.yml publish RocketEdge's image, which is not public (ADR 0018);
 # nobody outside RocketEdge pulls it, and RocketEdge's own consumers pin digests.
 # RocketEdge never redistributes IBKR binaries from this public repository (ADR 0007).
 #
@@ -199,7 +199,7 @@ jobs:
             - x64 SHA-256: `${{ steps.dl.outputs.sha_x64 }}`
             - arm SHA-256: `${{ steps.dl.outputs.sha_arm }}`
 
-            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes RocketEdge''s private image. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
+            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes RocketEdge''s image, which is not public. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
             Downstream, BrokerSRE's `image-pin.yml` picks the new digest up only after `cosign verify`
             and the operator-run paper regression (runbook R10).
       - name: Enable auto-merge (stable; needs BOT_TOKEN)
