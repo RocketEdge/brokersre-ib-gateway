@@ -30,7 +30,10 @@
 #
 # Output: progress and warnings on stderr; on success the last seven lines of stdout are
 #   version, channel, qualified_by_project, installer_sha256, ibkr_build_stamp, image, image_id
-#   as `key: value` (with --print-plan: the plan's `key: value` lines).
+#   as `key: value` (with --print-plan: the plan's `key: value` lines). qualified_by_project:
+#   yes means the version and the installer's SHA-256 equal the pin in versions.json, which
+#   passed the project's offline CI; a paper login is a separate qualification
+#   (scripts/qualify-paper.sh), and a stable pin can move without a person (ADR 0018).
 # Exit codes: 0 built (and smoke-tested unless --no-smoke); 1 download, verification, build or
 #   smoke test failed; 2 usage; 3 IBKR unreachable and no usable cached installer; 4 --strict
 #   and IBKR serves (or the installer is) a version other than the pin.
@@ -69,6 +72,11 @@ usage: scripts/build-image.sh [--channel stable|latest] [--strict] [--installer 
 
 Exit codes: 0 built, 1 download/verification/build/smoke test failed, 2 usage,
 3 IBKR unreachable and no usable cached installer, 4 --strict and IBKR serves another version.
+
+qualified_by_project: yes means the version and the installer's SHA-256 equal the pin in
+versions.json, which passed the project's offline CI; a paper login is a separate
+qualification (scripts/qualify-paper.sh). A stable pin can move without a person
+(STABLE_AUTOMERGE, ADR 0018).
 EOF
 }
 

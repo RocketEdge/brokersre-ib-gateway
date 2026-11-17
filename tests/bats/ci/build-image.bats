@@ -202,6 +202,16 @@ last_lines() {
   [[ "$output" == *"--installer FILE"* ]]
 }
 
+@test "--help says what qualified_by_project: yes means, and that a paper login is separate" {
+  # A stable bump can become the pin without a person (ADR 0009, 0018): `yes` means "equals
+  # the pin, which passed the offline CI", never "logged in with".
+  run "${REPO}/scripts/build-image.sh" --help
+  [ "$status" -eq 0 ]
+  text="$(printf '%s\n' "$output" | tr -s ' \n' '  ')"
+  [[ "${text}" == *"qualified_by_project: yes means the version and the installer's SHA-256 equal the pin in versions.json, which passed the project's offline CI"* ]]
+  [[ "${text}" == *"a paper login is a separate qualification (scripts/qualify-paper.sh)"* ]]
+}
+
 @test "usage errors exit 2: unknown option, bad channel, bad platform, installer file missing" {
   build --bogus
   [ "$status" -eq 2 ]
