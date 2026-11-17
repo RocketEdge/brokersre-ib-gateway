@@ -4,13 +4,21 @@
 # replaced by a stub on PATH; nothing reaches ghcr.io.
 #   tests/.bats-core/bin/bats tests/bats/ci
 #
+# What ghcr.io answered without credentials, observed 2026-11-17 07:15 UTC (the cases below):
+#   private package rocketedge/brokersre-agent:stable    token 401 UNAUTHORIZED
+#   no such package rocketedge/does-not-exist-probe-xyz  token 403 DENIED
+#   public package  rocketedge/brokersre-ib-gateway:stable  token 200, manifest 200
+#   public package  rocketedge/brokersre-ib-gateway-sidecar:no-such-tag-xyz
+#                                                        token 200, manifest 404 MANIFEST_UNKNOWN
+# A package that may not be read anonymously is refused at the TOKEN request; a token granted
+# anonymously means anonymous pulls are allowed, whatever the manifest request answers.
+#
 # The contract under test:
-#   * private (exit 0) only when an ANONYMOUS read is refused: the anonymous token request is
-#     refused (401/403, what ghcr.io answers for a package nobody may read anonymously), or the
-#     manifest request with the anonymous token is refused (401/403/404);
-#   * public (exit 1) when the anonymous read returns the manifest;
-#   * anything else is inconclusive (exit 3), never private: a network error, a server error,
-#     a rate limit, a token answer without a token;
+#   * private (exit 0) only when the anonymous token request is refused (401/403);
+#   * public (exit 1) when the anonymous token is granted and the manifest request returns 200;
+#   * anything else is inconclusive (exit 3), never private: a granted token with any other
+#     manifest answer (a 404 of a public package's missing tag looked private to the first
+#     version), a network error, a server error, a rate limit, a token answer without a token;
 #   * no request carries a credential, and the manifest request carries only the anonymous
 #     token;
 #   * bad input is refused with exit 2 before any request.
@@ -67,27 +75,38 @@ answer() {
 }
 
 @test "a refused anonymous token request means private, and no manifest is asked for" {
+  # Observed: a package that does not exist (403 DENIED) and the private brokersre-agent
+  # package (401 UNAUTHORIZED).
   answer token 403 '{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}'
   run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway visibility-probe
   [ "$status" -eq 0 ]
   [[ "$output" == "private: "*"ghcr.io/rocketedge/brokersre-ib-gateway:visibility-probe"*"HTTP 403"* ]]
   [ "$(wc -l < "${CALLS}")" -eq 1 ]
-  answer token 401 '{"errors":[{"code":"UNAUTHORIZED"}]}'
-  run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway visibility-probe
+  answer token 401 '{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}'
+  run --separate-stderr "${SCRIPT}" rocketedge/brokersre-agent stable
   [ "$status" -eq 0 ]
+  [[ "$output" == "private: "*"HTTP 401"* ]]
 }
 
-@test "an anonymous token that cannot read the manifest means private" {
+@test "a token granted anonymously is never private, whatever the manifest request answers" {
+  # Observed: the public sidecar package with a tag it does not have answers token 200,
+  # manifest 404 MANIFEST_UNKNOWN. The first version read that as private.
+  answer token 200 '{"token":"anonymous-token"}'
+  answer manifest 404 '{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}'
+  run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway-sidecar no-such-tag-xyz
+  [ "$status" -eq 3 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"INCONCLUSIVE"*"anonymous"*"HTTP 404"* ]]
   for code in 401 403 404; do
-    answer token 200 '{"token":"anonymous-token"}'
     answer manifest "${code}" '{"errors":[{"code":"DENIED"}]}'
     run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway visibility-probe
-    [ "$status" -eq 0 ] || { echo "manifest ${code} -> ${status}"; false; }
-    [[ "$output" == "private: "*"HTTP ${code}"* ]]
+    [ "$status" -eq 3 ] || { echo "manifest ${code} -> ${status}"; false; }
+    [ -z "$output" ]
   done
 }
 
 @test "an anonymous read that returns the manifest means public (exit 1)" {
+  # Observed: the public gateway package's tag stable answers token 200, manifest 200.
   answer token 200 '{"token":"anonymous-token"}'
   answer manifest 200 '{"schemaVersion":2}'
   run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway visibility-probe
@@ -129,9 +148,9 @@ answer() {
 
 @test "the requests are anonymous, over HTTPS, for the right scope and tag" {
   answer token 200 '{"token":"anonymous-token"}'
-  answer manifest 404 ''
+  answer manifest 200 '{"schemaVersion":2}'
   GH_TOKEN=must-not-be-sent GITHUB_TOKEN=must-not-be-sent run --separate-stderr "${SCRIPT}" rocketedge/brokersre-ib-gateway visibility-probe
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [ "$(wc -l < "${CALLS}")" -eq 2 ]
   sed -n 1p "${CALLS}" | grep -q -F 'https://ghcr.io/token?scope=repository:rocketedge/brokersre-ib-gateway:pull&service=ghcr.io | '
   sed -n 2p "${CALLS}" | grep -q -F 'https://ghcr.io/v2/rocketedge/brokersre-ib-gateway/manifests/visibility-probe | '

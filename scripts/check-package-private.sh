@@ -14,17 +14,21 @@
 #   repository  the package path below ghcr.io, lower case, e.g. rocketedge/brokersre-ib-gateway
 #   tag         a tag that exists in the package (publish.yml pushed it just before)
 #   stdout      on exit 0 one line: private: <why>
-#   exit        0 private: the anonymous token request was refused (401/403, what ghcr.io
-#                 answers for a package nobody may read anonymously), or the manifest request
-#                 with the anonymous token was refused (401/403/404)
-#               1 PUBLIC: the anonymous read returned the manifest (message on stderr)
+#   exit        0 private: the anonymous token request was refused (401/403)
+#               1 PUBLIC: the anonymous token was granted and the manifest request with it
+#                 returned the manifest (message on stderr)
 #               2 bad input (nothing requested)
-#               3 inconclusive: a network or TLS error, a server error, a rate limit, a redirect,
-#                 a token answer without a token. Never read as private.
+#               3 inconclusive: an anonymous token granted but any manifest answer other than
+#                 200, a network or TLS error, a server error, a rate limit, a redirect, a token
+#                 answer without a token. Never read as private.
 #
-# How ghcr.io answers (checked 2026-11-17 against the then public package and a repository
-# that does not exist): anonymous token request -> 200 {"token": ...} for a public package,
-# 403 DENIED for one that cannot be read anonymously; manifest with that token -> 200.
+# How ghcr.io answers without credentials (observed 2026-11-17 07:15 UTC): the private package
+# rocketedge/brokersre-agent -> token 401 UNAUTHORIZED; a package that does not exist -> token
+# 403 DENIED; the public gateway package, tag stable -> token 200, manifest 200; the public
+# sidecar package with a tag it does not have -> token 200, manifest 404 MANIFEST_UNKNOWN. A
+# package that may not be read anonymously is refused at the token request: a granted token
+# means anonymous pulls are allowed, so a manifest 401/403/404 after it is no evidence of a
+# private package (the first version read the 404 as private).
 #
 # Side effects: two HTTPS requests to ghcr.io, without any credential (the script never reads
 # GH_TOKEN, GITHUB_TOKEN or the Docker configuration, and passes no user or netrc to curl).
@@ -82,9 +86,5 @@ case "${code}" in
     printf 'check-package-private: PUBLIC: an anonymous read of %s returned its manifest (HTTP 200)\n' "${reference}" >&2
     exit 1
     ;;
-  401 | 403 | 404)
-    printf 'private: an anonymous read of %s was refused (manifest request: HTTP %s)\n' "${reference}" "${code}"
-    exit 0
-    ;;
-  *) inconclusive "the anonymous manifest request answered HTTP ${code}" ;;
+  *) inconclusive "an anonymous token was granted (anonymous pulls are allowed), and the manifest request answered HTTP ${code}" ;;
 esac
