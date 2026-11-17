@@ -5,6 +5,34 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #42: "not public" in generated text, the audit log's times
+
+- **What changed:** `publish.yml`'s release notes and `detect-releases.yml`'s update pull
+  request body say RocketEdge's image "is not public" instead of "private" (true for internal
+  and private; owner step 1 is optional). The same wording goes into the comments of six
+  workflows, the gate job and step names ("the package is not public", "still not public"),
+  the placeholder's text, the gate's error message (change the visibility, never delete the
+  package: a workflow would re-create it public), the header of
+  `scripts/check-package-private.sh` (it proves "not anonymously readable", L40), the two bats
+  files and the Windows kit's doc comment; ids, conditions and the script's output are
+  unchanged. ADR 0018, this log and `tasks/todo.md` use the audit log's times (the refusal
+  after the deletion held until the push at 08:10, public from 08:10:35 to 08:46:22, created
+  again at 08:46:43) and name the token generically (a classic token with `write:packages`).
+  Owner step 1 says to update L39 and the ADR's decision bullet when it is taken; the recovery
+  block says to run it in bash.
+- **Result:** the release-notes test now requires "is not public" and refuses "private"; bats
+  `private-package`, `check-package-private`, `workflows` and `detect-scope` 58/58 on Linux;
+  shellcheck, shfmt, actionlint 1.7.12 and PSScriptAnalyzer clean; markdownlint clean. zsh
+  refused `read -p` ("no coprocess") and dash refused `read -s` ("Illegal option") in a
+  container.
+- **What did NOT work / root cause:** the first version of this pull request corrected the
+  documents but left the generated text alone (release notes, update pull request bodies)
+  because it lives in workflow files, which were out of scope then, although it is what a
+  reader of a release or an update pull request sees; and it gave the hand re-creation an
+  approximate time ("about 08:45") and a refusal "from then on" that the push at 08:10 had
+  already ended.
+- **Next step:** the owner's steps (1) to (5) in `tasks/todo.md`; a decision on L40.
+
 ### 2026-11-17 — The README and the upgrade policy say detection runs hourly
 
 - **What changed:** README ("Upgrade policy", "Automatic updates and repository secrets") and
