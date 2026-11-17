@@ -328,6 +328,13 @@ Describe 'Invoke-BuildImage' {
         }
     }
 
+    It 'builds the image without a provenance attestation, which holds the build time and would change the image id' {
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $builds = Get-TestCall -Calls $script:calls -Marker '--platform'
+        $builds.Count | Should -Be 1
+        $builds[0] | Should -Contain '--provenance=false'
+    }
+
     It 'Get-BiCreated gives the commit time in UTC in a git work tree (a new commit, a new time) and the stamp elsewhere' {
         Get-BiCreated -RepoRoot $script:repo -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-09T16:10:13Z'
         if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {

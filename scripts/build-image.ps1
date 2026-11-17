@@ -588,6 +588,10 @@ function Invoke-BiBuildCore {
         $created = Get-BiCreated -RepoRoot $RepoRoot -Stamp (Get-BiPlanValue -Plan $plan -Key 'ibkr_build_stamp')
         $build += @('--label', ('org.opencontainers.image.created={0}' -f $created),
             '--label', ('org.opencontainers.image.revision={0}' -f (Get-BiRevision -RepoRoot $RepoRoot)))
+        # No provenance attestation (as build-image.sh): with Docker's containerd image store the
+        # image id covers it, and it records the build's start and end time, so two builds of
+        # the same inputs had one image manifest but two ids (measured 2026-11-17).
+        $build += @('--provenance=false')
         $build += @('-f', (Join-Path $RepoRoot 'Dockerfile'), $RepoRoot)
         Write-BiMessage -Message ('building {0}: IB Gateway {1} ({2}) for {3}' -f $image, $version, $channel, $platform)
         if ((Invoke-BiDockerStream -ArgumentList $build) -ne 0) {

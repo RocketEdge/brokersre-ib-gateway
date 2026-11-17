@@ -1071,6 +1071,17 @@ created_label() {
   [ "$(created_label)" = "2026-11-18T08:00:00Z" ]
 }
 
+@test "the image build attaches no provenance attestation: it holds the build's start and end time" {
+  # Measured 2026-11-17 (Docker Desktop, containerd image store): with buildx's default
+  # provenance two warm builds of one commit had one manifest but two image ids (the index
+  # with the attestation); with --provenance=false the id was the same.
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx -- --provenance=false "${WORK}/stub/buildx-args"
+}
+
 @test "the image's url label points at the README's build section, not the retired package page" {
   grep -q 'org.opencontainers.image.url="https://github.com/RocketEdge/brokersre-ib-gateway#build-the-image"' "${SRC}/Dockerfile"
   grep -q '^## Build the image$' "${SRC}/README.md"

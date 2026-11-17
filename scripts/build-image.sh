@@ -310,6 +310,11 @@ if ! [[ "${build_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9
 fi
 set -- "$@" --label "org.opencontainers.image.created=${build_created}" \
   --label "org.opencontainers.image.revision=${build_revision}"
+# No provenance attestation: buildx attaches one by default, and where the image store keeps
+# it (Docker's containerd image store) the image id is the index over the image and that
+# attestation, which records the build's start and end time; two builds of the same inputs
+# then had one image manifest but two ids (measured 2026-11-17). It holds no build arguments.
+set -- "$@" --provenance=false
 set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
 say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
 if ! docker "$@" >&2; then
