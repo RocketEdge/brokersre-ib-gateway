@@ -1,7 +1,8 @@
 # Lint, build the stable channel for amd64 with the build helper (scripts/build-image.sh, which
 # follows IBKR's channel when IBKR is ahead of the pin, ADR 0018), run the unit suite inside the
 # image, run the container tests offline, scan with Trivy, test the PowerShell build wrapper.
-# No IBKR credentials exist here and the IBC smoke test runs with --network none, so nothing
+# Every test reads the image built in the job, never RocketEdge's published image (private,
+# ADR 0018), so a pull request from a fork runs the same jobs. No IBKR credentials exist here and the IBC smoke test runs with --network none, so nothing
 # ever contacts IBKR's login servers (the installer is downloaded from IBKR's public URL).
 name: CI
 
@@ -77,7 +78,11 @@ jobs:
       actions: read          # upload-sarif reads the run for telemetry
     env:
       # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
-      TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+      # A name without a registry (the build helper's default tag): every step tests the image
+      # this job built from the commit. RocketEdge's own image is private (ADR 0018) and a pull
+      # request from a fork can never read it; under this name nothing can be pulled in place
+      # of the build, not even by accident (Docker Hub has no library image of that name).
+      TEST_IMAGE: brokersre-ib-gateway:stable
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Build stable (amd64) with the build helper, and its IBC smoke test
@@ -106,8 +111,13 @@ jobs:
       # CI builds and scans linux/amd64 only: an arm64 build under emulation is too slow for a
       # pull request. publish.yml scans both platforms of the exact digest it publishes, with
       # this same gate, before any tag moves.
+      # TRIVY_IMAGE_SRC=docker on the three scanner steps: Trivy reads the image this job built
+      # from the local daemon and never falls back to a registry (its default order ends with
+      # `remote`), so a missing build fails the step instead of scanning something else.
       - name: Trivy gate (fixable CRITICAL/HIGH in OS packages)
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: docker
         with:
           version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
@@ -126,6 +136,8 @@ jobs:
       - name: Trivy report of IBKR-bundled jars (not gated, docs/limitations.md L08)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: docker
         with:
           version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
@@ -144,6 +156,8 @@ jobs:
         if: always()
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: docker
         with:
           version: v0.76.2
           image-ref: ${{ env.TEST_IMAGE }}
