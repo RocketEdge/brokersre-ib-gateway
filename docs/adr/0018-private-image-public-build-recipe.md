@@ -78,7 +78,42 @@ moved a public image. `main` now builds while IBKR is ahead of the pin (CI falls
 a bump changes what the project has qualified and what RocketEdge's private image holds, not
 whether anyone can build. "Published publicly without review" reads "published to the
 private package". Whether stable bumps keep merging themselves is decided with private
-publishing (Phase 3).
+publishing (Phase 3): they do, see below.
+
+**Private publishing (Phase 3, 2026-11-17).**
+
+- `publish.yml` keeps publishing under `ghcr.io/rocketedge/brokersre-ib-gateway`. After the
+  public package is deleted (Phase 4), its first push creates the package again: private (the
+  default for a new package), linked to this repository (a push with the workflow's token
+  links it), so this repository's workflows keep access. No workflow sets a visibility. Every
+  registry step (push, Trivy's remote source, the SBOM tool, cosign, the provenance push,
+  `imagetools`) reads the credential `docker/login-action` writes. The release stays public:
+  its notes name the digest for RocketEdge's own pins and tell everyone else to build from the
+  tag; the assets (digests, SBOMs, OpenVEX) hold no IBKR binary.
+- Nothing started by a push or a pull request reads the package. CI's `build-test` and the
+  sidecar's end-to-end job build the gateway image with `scripts/build-image.sh` and test it
+  under the local name `brokersre-ib-gateway:stable`, which no registry serves; Trivy reads
+  the local daemon (`TRIVY_IMAGE_SRC=docker`). The end-to-end job needs no secret any more
+  and runs for pull requests from forks too.
+- The jobs that do read the package log in to `ghcr.io` with the workflow's token first: the
+  daily scan of `rebuild.yml` (`packages: read`) and `qualify-paper.yml` (one login before the
+  pull, used by the attestation too; it still takes a digest only, from `main` only, behind its
+  environment).
+- `detect-releases.yml` runs hourly. The full check (download both installers, hash, decide)
+  runs daily at 06:00 UTC, on a manual dispatch, and at the first sight of a version: a label
+  other than the pin with no pull request from its branch yet (`scripts/detect-scope.sh`).
+  ADR 0009's other behaviour is unchanged: a re-upload is found within a day, an open pull
+  request is refreshed daily, a closed one is opened again by the next daily run. Runs never
+  overlap (one concurrency group).
+- **Stable updates keep merging themselves** (ADR 0009). With the image private, an
+  auto-merged bump (1) moves RocketEdge's private image, which reaches production only through
+  digest pins that BrokerSRE verifies (`cosign verify`) and regresses on a paper account
+  (runbook R10) before use, and (2) makes `main`'s CI build the pin again (`qualified=yes`)
+  instead of IBKR's newer build. The label `qualified=yes` on such a pin means that the pinned
+  bytes passed the offline tests and the Trivy gate, not that a paper login passed (L04), as
+  for every pin before. The repository variable `STABLE_AUTOMERGE=false` stops the automatic
+  merges without a code change; it is the switch if the owner wants a pin to mean
+  "paper-qualified" (the resolution L35 describes).
 
 ## Consequences
 
@@ -89,6 +124,9 @@ publishing (Phase 3).
 - Each image says which Gateway build it holds, which stamp it was checked against, which
   installer bytes it came from and whether the project qualified that build.
 - A version once built can be rebuilt after IBKR has moved on, offline from IBKR.
+- Pull requests from forks run every check, the sidecar's end-to-end job included; no job
+  started by a pull request depends on a package or a secret.
+- A new IBKR build is seen within the hour instead of the next day.
 
 ### Negative
 
@@ -99,6 +137,11 @@ publishing (Phase 3).
   of pulling it, and need Docker with buildx.
 - The PowerShell wrapper's smoke test reaches the daemon through `/var/run/docker.sock`; the
   helper's packages come from Alpine's index when it is first built (L36).
+- No pull request, and nobody outside RocketEdge, can test or verify the bytes `publish.yml`
+  publishes: CI tests a build of the pull request, which may hold a newer Gateway than the pin
+  (L39).
+- Each scheduled detection run calls GitHub once per channel when IBKR serves a label other
+  than the pin (24 times a day per channel), and IBKR's `version.json` 24 times a day.
 
 ## Revisit trigger
 

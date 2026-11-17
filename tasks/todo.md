@@ -139,3 +139,16 @@
 - [x] D4 (`sidecar/README.md`, `docker compose run` without `-f`) fixed in pull request #32 (merged 2026-11-16)
 - [x] Review of #37: each secret block is one subshell with `trap 'stty echo; exit 130' INT`; tested pasted into interactive bash and zsh (bracketed paste off and on) and sh, and with Ctrl-C at the password prompt; bash 3.2 and busybox sh checked by hand in containers
 - [ ] Not covered: a run on a Mac (Terminal.app or iTerm2 with its own paste behaviour)
+
+## Private image, public build recipe: phase 3 (2026-11-17, branch `ci/private-publish`)
+
+- [x] CI `build-test` and the sidecar's end-to-end job test a local build (`brokersre-ib-gateway:stable`, build helper); Trivy reads the local daemon; the end-to-end job runs for forks
+- [x] `rebuild.yml` daily scan and `qualify-paper.yml` log in to ghcr.io before their first read; `publish.yml` release notes tell readers to build, not to pull
+- [x] `detect-releases.yml` hourly; full check daily, on dispatch and at the first sight of a version (`scripts/detect-scope.sh`); stable bumps keep merging themselves (ADR 0018)
+- [ ] Owner, in this order, after this pull request merges (each step proves something; L39):
+  - [ ] (a) Delete the public package. Check first that no version has more than 5,000 downloads (GitHub then refuses and only Support can delete it). Package settings, Danger zone, "Delete this package"; or `gh auth refresh -s read:packages,delete:packages` and `gh api -X DELETE orgs/RocketEdge/packages/container/brokersre-ib-gateway`. Proves: an anonymous `docker pull ghcr.io/rocketedge/brokersre-ib-gateway:stable` fails. A deleted package can be restored for 30 days only while no new package takes its name: step (c) ends that option.
+  - [ ] (b) Re-enable `publish.yml`, `rebuild.yml` and `detect-releases.yml` (`gh workflow enable <file> -R RocketEdge/brokersre-ib-gateway`). Proves nothing yet; the first hourly detection run shows `scope=` in its log.
+  - [ ] (c) Dispatch `publish.yml` for both channels (`gh workflow run publish.yml -R RocketEdge/brokersre-ib-gateway -f channels="stable latest"`) and read each channel's run to the end. Proves: the workflow's token creates the package again, Trivy (remote), the SBOM tool, cosign sign/attest/verify and the provenance push work against the private package, tags move, the release notes carry the digest and the build instructions.
+  - [ ] (d) In the package settings: visibility reads Private, the repository link is RocketEdge/brokersre-ib-gateway; then an anonymous pull fails and `docker login ghcr.io` plus `docker pull` and `cosign verify` of the digest pass. Under "Manage Actions access" add, with role Read, every repository whose workflows read the image: the BrokerSRE monorepo (`image-pin.yml`) and each client repository exported from its template (`image-pin.yml`); those workflows also need a registry login (phase 5).
+  - [ ] Then: the next daily scan of `rebuild.yml` passes its login and both scans; one `qualify-paper.yml` run against a private digest
+- [ ] After the build-recipe pull request merges: README "Automatic updates" and `docs/upgrade-policy.md` still say the detection runs daily (now hourly, full check daily)

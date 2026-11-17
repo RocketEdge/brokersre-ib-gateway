@@ -5,6 +5,41 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Workflows ready for a private gateway package (ADR 0018, phase 3)
+
+- **What changed:** CI's `build-test` and the sidecar's end-to-end job test the image they
+  build with `scripts/build-image.sh` under the local name `brokersre-ib-gateway:stable` (was
+  `ghcr.io/rocketedge/brokersre-ib-gateway:stable`); CI's three Trivy steps read the local
+  daemon only (`TRIVY_IMAGE_SRC=docker`); the end-to-end job lost its archive pre-fetch, its
+  bake build and its fork condition, and its trigger paths name the build helper's inputs.
+  `rebuild.yml`'s daily scan and `qualify-paper.yml` log in to `ghcr.io` before their first
+  read (the qualification once, before the pull, instead of only for the attestation).
+  `publish.yml`'s release notes no longer say "Pin this exact build": they tell readers to
+  build from the tag and name the digest as RocketEdge's private image. `detect-releases.yml`
+  runs hourly (`23 * * * *`) besides 06:00 UTC; `scripts/detect-scope.sh` decides whether a
+  run downloads and hashes (daily, dispatch, first sight of a version) or stops after
+  `version.json`; one concurrency group. ADR 0018 records these and that stable bumps keep
+  merging themselves; L39.
+- **Result:** `tests/bats/ci/private-package.bats` (9 tests) and `detect-scope.bats` (11)
+  were red on `main` for the reasons above (two are guards of properties `main` already had)
+  and are green; `workflows.bats` stays green; actionlint 1.7.12 clean. CI and Sidecar runs
+  of the pull request: see its description.
+- **What did NOT work / root cause:** `rebuild.yml`'s daily scan read the channel tag
+  (`docker buildx imagetools inspect`) and scanned with `TRIVY_IMAGE_SRC=remote` without a
+  login: against a private package it would have failed every day. `qualify-paper.yml` logged
+  in only to attach the attestation, after `docker pull`. CI tagged its own build with the
+  public package's name, so a Trivy fallback to its remote source (Trivy's default order ends
+  with `remote`) could have scanned the published image instead of the build. A first draft
+  of the visibility test grepped whole workflow files and failed on the comment that says no
+  workflow sets one; it now reads step scripts and inputs only. Hourly detection with the full
+  check every hour would have downloaded about 27 GB a day from IBKR (565 MB per channel per
+  run) and reopened a closed pull request within the hour instead of the next day (ADR 0009).
+- **Next step:** the owner's steps in `tasks/todo.md` (delete the public package, re-enable
+  the three workflows, publish both channels, check the package is private and grant read
+  access); the first publish after the deletion is what proves the private path (L39). After
+  the build-recipe pull request merges, the README and `docs/upgrade-policy.md` still say the
+  detection is daily.
+
 ### 2026-11-17 — Review of #39: cache provenance and key, the user's files, the trust tests
 
 - **What changed:** the helper's cache is keyed by version and SHA-256
