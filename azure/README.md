@@ -142,6 +142,33 @@ no public IP, every inbound connection denied, a NAT gateway for outbound traffi
 a daily patch window that never reboots on its own. It takes **no IBKR credential as a
 parameter**.
 
+**The gateway image.** There is no public image of the gateway (it contains IBKR's software;
+[README, "Why there is no public image"](../README.md#why-there-is-no-public-image)). Build it
+on your workstation ([README, "Build the image"](../README.md#build-the-image)), push it to a
+private registry of your own, here Azure Container Registry, and pass its digest as
+`gatewayImage`:
+
+```bash
+scripts/build-image.sh
+az acr create --resource-group <resource-group> --name <registry> --sku Basic
+az acr login --name <registry>
+docker tag brokersre-ib-gateway:stable <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
+docker push <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
+docker image inspect <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h --format '{{index .RepoDigests 0}}'
+```
+
+The last line prints `<registry>.azurecr.io/brokersre-ib-gateway@sha256:<digest>`: that is
+`gatewayImage`. Leave anonymous pull off on the registry. **Not tested**: none of these
+commands ran against a real ACR (the tag, push and digest lines ran against a local
+`registry:2`), and ACR Tasks (`az acr build`) were not tried: the build needs its helper
+container next to the build, so build locally and push. **The VM cannot log in to a private
+registry yet** ([limitations](../docs/limitations.md) L37): it has no registry credential and
+its identity has no `AcrPull` role, so with a private registry its first `docker compose up`
+fails at the pull. Until that is built, put a registry login on the VM yourself before the
+stack starts, for example a repository-scoped ACR token that may only read, entered with
+`sudo docker login <registry>.azurecr.io` in an SSH session (`adminSourceCidr`); the stack runs
+as root and uses root's Docker login. Not tested either.
+
 ```bash
 az deployment group create -g <resource-group> -n vm \
   -f azure/bicep/vm.bicep -p <your-copy-of-vm>.bicepparam
@@ -335,6 +362,9 @@ pricing pages). Retention beyond the included days is extra.
   metrics wait; raw lines are dropped instead, so they can never hold back the rows the alerts
   depend on.
 - The dead-man rule knows a gateway for two days after its last row.
+- The optional VM pulls the gateway image without a registry login, and there is no public
+  image: with the image in a private registry the stack does not start until someone logs the
+  VM in to that registry ([One-click VM](#one-click-vm-optional), limitations L37).
 - The alert rules run with the access of whoever deployed them last.
 - An account id is recognised by its shape only, and the shape is IBKR's documented prefixes
   plus one observed paper id, not a specification. An id written without its prefix, with

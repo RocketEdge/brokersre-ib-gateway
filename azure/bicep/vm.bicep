@@ -89,7 +89,7 @@ param patchWindowStartDate string = dateTimeAdd(utcNow(), 'P1D', 'yyyy-MM-dd')
 ])
 param patchRebootSetting string = 'Never'
 
-@description('Gateway image pinned by digest, for example ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<64 hex>. Take the digest from the release you verified; a tag is refused. Changeable later (userData + apply-config.sh --restart-gateway).')
+@description('Gateway image pinned by digest, in a private registry YOU own, for example <registry>.azurecr.io/brokersre-ib-gateway@sha256:<64 hex>. There is no public image (ADR 0018): build it with scripts/build-image.sh, push it to your registry and take the digest the push printed. A tag is refused. The VM pulls it without a registry login (azure/README.md, docs/limitations.md L37). Changeable later (userData + apply-config.sh --restart-gateway).')
 param gatewayImage string
 
 @description('Vector image pinned by digest. The default is the image this repository tests (compose/docker-compose.azure.yml); azure/tests/run.sh fails when the two differ. Changeable later (userData + apply-config.sh).')
