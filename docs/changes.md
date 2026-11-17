@@ -5,6 +5,29 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — First publish to the non-public package
+
+- **What changed:** documentation only: the ADR 0018 note of 2026-11-17 and the owner checklist
+  in `tasks/todo.md` record the first publish to the re-created package. The owner kept the
+  package internal (L40 accepted) and granted this repository Write under *Manage Actions
+  access*; `publish.yml`, `detect-releases.yml` and `rebuild.yml` were enabled again.
+- **Result:** run 44166458142 (dispatched 20:10 UTC, both channels) succeeded through both "not
+  public" checks and the signature verification. Checked from outside at 20:20 UTC:
+  - an anonymous token request answers 401;
+  - with a token that can read packages, `stable` is `sha256:8ff97ed6…` (10.50.1g,
+    `qualified=yes`) and `latest` is `sha256:fd4ecd55…`;
+  - the pull of the stable digest and `cosign verify` against `publish.yml`'s identity passed;
+  - the release `v10.50.1g-stable` names the new digest and says the image is not public.
+- **What did NOT work / root cause:** the first publish linked the package to this public
+  repository (the API names it from 20:19:57 UTC), so it could inherit the repository's
+  access; the owner switched inherited access off and granted the repositories explicitly. A
+  signed-in non-member was then refused `stable` and `latest` (403) while reading the public
+  sidecar (200); that token lacked `read:packages`, so the test is strong, not conclusive
+  (ADR 0018, note of 2026-11-17).
+- **Next step:** read the first scan of `rebuild.yml` and the first hourly run of
+  `detect-releases.yml` against the package; one `qualify-paper.yml` run against a digest of
+  it; confirm the BrokerSRE repository's Read grant with its next `image-pin.yml` run.
+
 ### 2026-11-17 — Re-review of #43: malformed proxy values refused, every proxy value masked
 
 - **What changed:** both wrappers check every set proxy variable before anything runs (no

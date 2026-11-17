@@ -278,3 +278,36 @@ package is public in between, and the gate stops that run anyway); a workflow st
 the visibility (the decision above keeps "no workflow sets a visibility"); deleting the
 internal package to try again (a push with a personal token creates it internal again, a
 push from a workflow of this repository public).
+
+## Note 2026-11-17: the first publish to the non-public package
+
+- **Visibility:** the owner kept the package **internal** (2026-11-17), accepting what L40
+  describes: every member of the enterprise, and every workflow in it, may read the image.
+- **Access:** the owner granted this repository Write under *Manage Actions access*, which let
+  the workflow's token push. That publish then **linked** the package to this repository (the
+  API names `RocketEdge/brokersre-ib-gateway` from 20:19:57 UTC; at 08:46 it named none): the
+  push with the workflow's token linked it, as the Phase 3 decision expected, where the
+  personal-token push with the source label had not (finding 3 above). A linked package can inherit the repository's access, and
+  everyone can read a public repository (the decision above), so the owner then switched off
+  "Inherit access from repository" in the package settings and granted the repositories
+  explicitly (the owner's report; the API does not expose that setting).
+- **An outsider is refused (20:41 UTC):** a signed-in GitHub account that is not a member of
+  the organisation got a ghcr.io token for the package but was refused the manifests of
+  `stable` and `latest` (403), while the same token read the public sidecar's (200). That token
+  lacked `read:packages`; whether ghcr.io refuses on the missing scope first for a non-public
+  package is not established, so this is strong but not conclusive evidence.
+- **Publish:** `publish.yml` was dispatched at 20:10 UTC (run 44166458142, both channels) and
+  succeeded. The job "the package is not public" pushed the placeholder with the workflow's
+  token and saw the anonymous read refused; each channel passed the same check right before
+  its push and "Verify the signature and attestations".
+- **Checked from outside the workflow (20:20 UTC):** an anonymous token request answers 401;
+  with a token that can read packages, `stable` is
+  `sha256:8ff97ed6d53980ad95ea9bfdf2049ad36a6d206f206cc0cce3873adf6806e633` (IB Gateway
+  10.50.1g, `qualified=yes`) and `latest` is
+  `sha256:fd4ecd5504ac19a773e8f05d7ee77298c709e3cd15235ed4124a592a1d285fa6`; the pull of the
+  stable digest and `cosign verify` of it against `publish.yml`'s identity on `main` passed.
+  The release `v10.50.1g-stable` names the new digest and says the image is not public.
+- **Workflows:** `publish.yml`, `detect-releases.yml` and `rebuild.yml` are enabled again.
+- **Still open:** one `qualify-paper.yml` run against a digest of this package (owner-gated
+  environment), and the first scan of `rebuild.yml` and the first hourly run of
+  `detect-releases.yml` against it.
