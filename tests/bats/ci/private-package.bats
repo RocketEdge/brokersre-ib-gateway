@@ -82,6 +82,12 @@ logs_in_before() {
     echo "$(basename "${file}") ${name}: the job's permissions do not name packages"
     return 1
   fi
+  # The step that receives the token is pinned by commit, with its version as a comment.
+  if ! job_steps "${file}" "${name}" | awk -F '\t' -v step="${login}" '$1 == step && $2 == "uses"' \
+    | grep -q -E 'docker/login-action@[0-9a-f]{40} # v[0-9]+(\.[0-9]+)*$'; then
+    echo "$(basename "${file}") ${name}: the login action is not pinned by commit"
+    return 1
+  fi
 }
 
 # workflow_jobs FILE: the names of the jobs of a workflow, in order.
@@ -193,6 +199,20 @@ package_workflows() {
   run logs_in_before "${WORK}/rebuild.yml" scan-published id published
   [ "$status" -eq 1 ]
   [[ "$output" == *"do not name packages"* ]]
+}
+
+@test "the paper qualification logs in and pulls before the credential files exist" {
+  credentials="$(step_where "${WF}/qualify-paper.yml" qualify name "Write the paper credentials to files")"
+  pull="$(step_where "${WF}/qualify-paper.yml" qualify name "Pull the image")"
+  login="$(login_step "${WF}/qualify-paper.yml" qualify)"
+  [ -n "${credentials}" ] && [ -n "${pull}" ] && [ -n "${login}" ]
+  [ "${login}" -lt "${pull}" ]
+  [ "${pull}" -lt "${credentials}" ]
+  # A tag-pinned login is caught.
+  sed -E 's/docker\/login-action@[0-9a-f]{40} # (v[0-9.]+)/docker\/login-action@\1/' "${WF}/qualify-paper.yml" > "${WORK}/tag.yml"
+  run logs_in_before "${WORK}/tag.yml" qualify name "Pull the image"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not pinned by commit"* ]]
 }
 
 @test "the paper qualification still takes a digest only, from main only, behind its environment" {

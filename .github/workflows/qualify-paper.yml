@@ -55,6 +55,17 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v7.0.1
+      # RocketEdge's image is private (ADR 0018): an anonymous pull fails. One login for the
+      # whole job, after the digest check above, and the pull, both before the credential files
+      # exist: no third-party action and no registry round trip runs while they are on disk.
+      # The attestation below uses the same login; the action's post step logs out.
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the image
+        run: docker pull "${IMAGE}"
       - name: Write the paper credentials to files
         env:
           PAPER_USERID: ${{ secrets.PAPER_USERID }}
@@ -72,16 +83,6 @@ jobs:
           # uid 1000 inside the container must be able to read the bind-mounted files.
           chmod 0755 "${RUNNER_TEMP}/secrets"
           chmod 0644 "${RUNNER_TEMP}/secrets/ib-username" "${RUNNER_TEMP}/secrets/ib-password"
-      # RocketEdge's image is private (ADR 0018): an anonymous pull fails. One login for the
-      # whole job, after the digest check above and before the pull; the attestation below
-      # uses it too, and the action's post step logs out.
-      - uses: docker/login-action@v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull the image
-        run: docker pull "${IMAGE}"
       - name: Qualify (one login attempt; approve a second factor on the phone if IBKR asks)
         run: scripts/qualify-paper.sh --image "${IMAGE}" --secrets-dir "${RUNNER_TEMP}/secrets" --out qualify-out
       - name: Remove the credential files
