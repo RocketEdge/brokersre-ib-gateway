@@ -205,9 +205,11 @@ def interactive_shell(
 
     The start-up file sets the prompt (``SHELL_PROMPT``), a history file ``HOME/history`` and,
     for bash and zsh, the bracketed-paste setting. Other shells (dash, busybox sh) read it
-    through ``ENV`` and have no bracketed paste. The environment is clean apart from PATH, so
-    no start-up file of the test host changes what the block does. ``paste_block`` refuses
-    to paste when the bracketed-paste mode the shell switched on is not the one asked for.
+    through ``ENV`` and have no bracketed paste. The environment is clean apart from PATH.
+    Host start-up files that still run: bash's ``/etc/bash.bashrc`` (before ``--rcfile``, on
+    Debian and Ubuntu) and zsh's ``/etc/zsh/zshenv`` (always first); zsh skips the other
+    global files (``GLOBAL_RCS`` unset). Whatever they do, ``paste_block`` refuses to paste
+    when the bracketed-paste mode the shell switched on is not the one asked for.
     """
     os.makedirs(home, exist_ok=True)
     env = {
@@ -226,13 +228,17 @@ def interactive_shell(
     elif name == "zsh":
         lines += ["SAVEHIST=100", "HISTSIZE=100"]
         if bracketed_paste == "off":
-            lines.append("unset zle_bracketed_paste")
+            # zle_bracketed_paste belongs to the zle module; unset before zle is loaded it
+            # is set again when zle loads at the first prompt. Ubuntu's /etc/zsh/zshrc used
+            # to load zle earlier; without it the unset alone was a no-op (review of #37).
+            lines += ["zmodload zsh/zle", "unset zle_bracketed_paste"]
         rc = os.path.join(home, ".zshrc")
         env["ZDOTDIR"] = home
-        # .zshenv is read before /etc/zsh/zshrc: without GLOBAL_RCS no host start-up file
-        # runs. Ubuntu's runs compinit, which on the GitHub runner stopped at "Ignore
-        # insecure directories and continue [y] or abort compinit [n]?" (a writable fpath
-        # directory), so the test's prompt never came.
+        # $ZDOTDIR/.zshenv is read after /etc/zsh/zshenv and before the other global files:
+        # with GLOBAL_RCS unset zsh skips /etc/zsh/zprofile, zshrc and zlogin. Ubuntu's
+        # zshrc runs compinit, which on the GitHub runner stopped at "Ignore insecure
+        # directories and continue [y] or abort compinit [n]?" (a writable fpath directory),
+        # so the test's prompt never came.
         with open(os.path.join(home, ".zshenv"), "w", encoding="utf-8") as zshenv:
             zshenv.write("unsetopt GLOBAL_RCS\n")
         argv = [shell, "-i"]
