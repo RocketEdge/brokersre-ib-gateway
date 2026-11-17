@@ -261,3 +261,23 @@ Describe 'build-image.ps1 as a process' {
         }
     }
 }
+
+Describe 'The help of build-image.ps1' {
+    # A stable bump can become the pin without a person (ADR 0009, 0018): 'yes' means "equals
+    # the pin, which passed the offline CI", never "logged in with".
+    It 'says what qualified_by_project: yes means, and that a paper login is separate (<source>)' -TestCases @(
+        @{ source = 'Get-Help' }
+        @{ source = 'usage text' }
+    ) {
+        param($source)
+        if ($source -eq 'Get-Help') {
+            $text = Get-Help -Name $script:scriptPath -Full | Out-String
+        }
+        else {
+            $text = $script:UsageText
+        }
+        $text = $text -replace '\s+', ' '
+        $text | Should -BeLike "*qualified_by_project: yes means the version and the installer's SHA-256 equal the pin in versions.json, which passed the project's offline CI*"
+        $text | Should -BeLike '*a paper login is a separate qualification (scripts/qualify-paper.sh)*'
+    }
+}

@@ -16,9 +16,11 @@ on:
       - Dockerfile
       - rootfs/**
       - versions.json
-      - docker-bake.hcl
-      - scripts/bake-env.sh
-      - scripts/prefetch-installers.sh
+      - scripts/build-image.sh
+      - scripts/resolve-installer.sh
+      - scripts/build-helper/**
+      - scripts/fetch-installer.sh
+      - tests/container/run.sh
       - compose/docker-compose.example.yml
       - compose/docker-compose.azure.yml
       - docs/recipes/docker-compose.vector.yml
@@ -35,9 +37,11 @@ on:
       - Dockerfile
       - rootfs/**
       - versions.json
-      - docker-bake.hcl
-      - scripts/bake-env.sh
-      - scripts/prefetch-installers.sh
+      - scripts/build-image.sh
+      - scripts/resolve-installer.sh
+      - scripts/build-helper/**
+      - scripts/fetch-installer.sh
+      - tests/container/run.sh
       - compose/docker-compose.example.yml
       - compose/docker-compose.azure.yml
       - docs/recipes/docker-compose.vector.yml
@@ -158,29 +162,28 @@ jobs:
   e2e:
     name: end to end with the gateway image
     needs: test
-    # The gateway build reads archived installers with a repository secret, which a pull
-    # request from a fork does not get: there the job is skipped and runs after the merge.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # No `if:` for forks: the gateway image is built here from IBKR's public download with the
+    # build helper and needs no secret, and RocketEdge's published image (private, ADR 0018)
+    # is never pulled, so a pull request from a fork runs this job too.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
-      TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
+      # A name without a registry (the build helper's default tag), as in ci.yml: the checks
+      # below run the image built from this commit, and nothing can be pulled in its place.
+      TEST_IMAGE: brokersre-ib-gateway:stable
       SIDECAR_IMAGE: brokersre-ib-gateway-sidecar:ci
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: docker/setup-buildx-action@v4.4.1
-      # The next two steps are the gateway build of ci.yml, unchanged.
-      - name: Pre-fetch archived stable installers (IBKR serves only its newest build)
-        env:
-          GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+      - name: Build the gateway image (stable, amd64) with the build helper, and its IBC smoke test
+        # The gateway build of ci.yml's build-test, the way users build (ADR 0018): the pin when
+        # IBKR serves it, otherwise IBKR's newer build checked against IBKR's own stamp and
+        # labelled not qualified. About two minutes on a runner (the 360 MB installer comes from
+        # IBKR); no cache is read, so the job never trusts bytes another run left behind. The
+        # summary lines are printed last.
         run: |
-          eval "$(scripts/bake-env.sh)"
-          scripts/prefetch-installers.sh stable "$STABLE_VERSION" "$STABLE_SHA256_X64" "$STABLE_SHA256_ARM" downloads
-      - name: Build the gateway image (stable, amd64) and load
-        run: |
-          eval "$(scripts/bake-env.sh)"
-          docker buildx bake stable --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --load
+          set -euo pipefail
+          scripts/build-image.sh --channel stable --platform linux/amd64 --tag "$TEST_IMAGE"
       - name: Build the sidecar image (amd64) and load
         uses: docker/build-push-action@v7.4.0
         with:

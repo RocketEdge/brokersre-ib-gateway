@@ -1,5 +1,10 @@
-# Daily, per channel: read IBKR's version.json, download both installers and hash them, then let
-# scripts/release-decision.sh decide (docs/upgrade-policy.md, ADR 0009):
+# Hourly, per channel: read IBKR's version.json; scripts/detect-scope.sh decides whether this run
+# does the full check. The daily run at 06:00 UTC and a manual dispatch always do it; any other
+# run only at the first sight of a version (a label other than the pin with no pull request
+# from its branch yet). IBKR replaced stable 10.50.1g with 10.50.1h on 2026-11-16 between two
+# daily runs; the hourly look finds such a change within the hour without downloading the
+# installers every hour. The full check downloads both installers and hashes them, then lets
+# scripts/release-decision.sh decide (docs/upgrade-policy.md, ADR 0009, amended by ADR 0018):
 #   new-version  archive the installers privately (ARCHIVE_WRITE_TOKEN), bump versions.json and open
 #                a pull request. A newer stable version whose installers both changed gets
 #                auto-merge, enabled once, when the pull request is created (a human who turns it
@@ -11,16 +16,36 @@
 #                under ibgateway-<channel>@<version>-<x64 hash prefix>, open one issue per set of
 #                bytes and change nothing; a human decides whether to re-pin.
 #   none         nothing to do.
+# A merged update makes publish.yml publish RocketEdge's image, which is private (ADR 0018);
+# nobody outside RocketEdge pulls it, and RocketEdge's own consumers pin digests.
 # RocketEdge never redistributes IBKR binaries from this public repository (ADR 0007).
+#
+# The daily cron string is repeated in the scope step's condition and in the concurrency group;
+# tests/bats/ci/detect-scope.bats fails when they differ (every run would be hourly). "Within
+# the hour" is a target: GitHub starts scheduled runs late or drops them under load (the daily
+# run started 6.5 to 8 hours late from 2026-11-13 to 2026-11-16).
 name: Detect IB Gateway releases
 
 on:
   schedule:
     - cron: "0 6 * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# One group per kind of check, with the scope step's expression: full (the daily run, a
+# dispatch) and hourly. GitHub keeps one pending run per group and cancels the older one; with
+# a single group, a daily run that GitHub started hours late (seen: 6.5 to 8 hours) and that
+# waited behind a running hourly one could be replaced by an hourly run that skips. Within a
+# group runs never overlap, and a newer pending run replaces an older one of the same kind.
+# A full and an hourly run can overlap. Both do the full check only for a version without a
+# pull request; at worst the later archive upload or pull request creation then fails that
+# leg (visible in the run), and the next run finds the first one's release and pull request.
+concurrency:
+  group: detect-releases-${{ (github.event_name == 'schedule' && github.event.schedule != '0 6 * * *') && 'hourly' || 'full' }}
+  cancel-in-progress: false
 
 jobs:
   detect:
@@ -42,7 +67,9 @@ jobs:
           CHANNEL: ${{ matrix.channel }}
         run: |
           set -euo pipefail
-          res=$(curl -sSfL "https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
+          # Up to 3 retries 5 s apart, at most 20 s per attempt and 90 s in all: a dropped
+          # connection or a 5xx blip does not fail one of the 48 runs a day, an outage still does.
+          res=$(curl -sSfL --retry 3 --retry-all-errors --retry-delay 5 --max-time 20 --retry-max-time 90 "https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
           remote=$(jq -r .buildVersion <<< "$res")
           remote_dt=$(jq -r .buildDateTime <<< "$res")
           # External input: refuse anything that is not a plain IBKR build label before it reaches
@@ -52,8 +79,24 @@ jobs:
           local_v=$(jq -r --arg ch "$CHANNEL" '.channels[$ch].version' versions.json)
           echo "remote=$remote local=$local_v"
           { echo "remote=$remote"; echo "remote_dt=$remote_dt"; echo "local=$local_v"; } >> "$GITHUB_OUTPUT"
+      - name: How much this run checks (scripts/detect-scope.sh)
+        id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # full: the daily run and a manual dispatch; hourly: every other scheduled run.
+          CHECK: ${{ (github.event_name == 'schedule' && github.event.schedule != '0 6 * * *') && 'hourly' || 'full' }}
+          CHANNEL: ${{ matrix.channel }}
+          REMOTE: ${{ steps.cmp.outputs.remote }}
+          LOCAL: ${{ steps.cmp.outputs.local }}
+        run: |
+          set -euo pipefail
+          scripts/detect-scope.sh "$CHECK" "$CHANNEL" "$REMOTE" "$LOCAL" | tee -a "$GITHUB_OUTPUT"
+      # Every step after this one runs only on the full check: the two below by their own
+      # condition, the rest because they act on steps.decide's outputs, which a skipped run
+      # never sets.
       - name: Download both installers and compute checksums
         id: dl
+        if: steps.scope.outputs.scope == 'full'
         env:
           CHANNEL: ${{ matrix.channel }}
           REMOTE: ${{ steps.cmp.outputs.remote }}
@@ -70,6 +113,7 @@ jobs:
           ls -la archive
       - name: Decide (scripts/release-decision.sh)
         id: decide
+        if: steps.scope.outputs.scope == 'full'
         env:
           CHANNEL: ${{ matrix.channel }}
           REMOTE: ${{ steps.cmp.outputs.remote }}
@@ -100,8 +144,9 @@ jobs:
           tag="ibgateway-${CHANNEL}@${REMOTE}"
           if [ "$ACTION" = reupload ]; then tag="${tag}-${SHA_X64:0:8}${SHA_ARM:0:8}"; fi
           if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
-            # Runs daily until the pull request merges or the issue is resolved: skip the ~565 MB
-            # upload when the archived checksums already equal today's download.
+            # The daily full check runs this until the pull request merges or the issue is
+            # resolved: skip the ~565 MB upload when the archived checksums already equal
+            # today's download.
             held="$(mktemp -d)"
             gh release download "$tag" -R "$repo" --pattern '*.sha256' --dir "$held" || true
             if [ "$(cat "$held/ibgateway-${REMOTE}-standalone-linux-x64.sh.sha256" 2>/dev/null)" = "$SHA_X64" ] \
@@ -154,7 +199,7 @@ jobs:
             - x64 SHA-256: `${{ steps.dl.outputs.sha_x64 }}`
             - arm SHA-256: `${{ steps.dl.outputs.sha_arm }}`
 
-            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes the image. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
+            ${{ (steps.decide.outputs.automerge == 'true' && vars.STABLE_AUTOMERGE != 'false') && 'Auto-merge is requested when this pull request is created (it needs `BOT_TOKEN`; the run log says if it was not enabled): it then merges itself once `lint` and `build-test` pass, and publish.yml publishes RocketEdge''s private image. To hold it, disable auto-merge on this pull request and leave it open (a closed one is opened again the next day); to stop all automatic merges, set the repository variable `STABLE_AUTOMERGE` to `false`.' || (steps.decide.outputs.automerge == 'true' && 'Automatic merges are switched off (repository variable `STABLE_AUTOMERGE` is `false`): a human merges this pull request.') || 'A human merges this pull request: it is a latest-channel update, a lower version than the pin, or a build whose installers did not both change.' }}
             Downstream, BrokerSRE's `image-pin.yml` picks the new digest up only after `cosign verify`
             and the operator-run paper regression (runbook R10).
       - name: Enable auto-merge (stable; needs BOT_TOKEN)

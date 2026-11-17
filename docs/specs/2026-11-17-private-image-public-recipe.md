@@ -77,6 +77,11 @@ scripts/build-image.ps1 -Channel stable|latest -Strict -Installer FILE -Platform
   `4` `--strict` and IBKR serves a version other than the pin.
 - Last lines printed (machine-readable `key: value`): `version`, `channel`,
   `qualified_by_project: yes|no`, `installer_sha256`, `ibkr_build_stamp`, `image`, `image_id`.
+  `qualified_by_project: yes` means the version and the installer's SHA-256 equal the pin in
+  `versions.json`, which passed the project's offline CI; a paper login is a separate
+  qualification (`scripts/qualify-paper.sh`). A stable pin can move without a person
+  (ADR 0009 and 0018; the repository variable `STABLE_AUTOMERGE=false` makes every pin wait
+  for a human). Amended 2026-11-17 in the review of the private-publishing pull request.
 - Image labels added: `com.rocketedge.brokersre.ibkr.version`,
   `com.rocketedge.brokersre.ibkr.build_stamp`, `com.rocketedge.brokersre.installer.sha256`,
   `com.rocketedge.brokersre.qualified` (`yes` when version and SHA-256 equal the pin),

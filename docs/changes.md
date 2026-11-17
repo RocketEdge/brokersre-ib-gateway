@@ -5,6 +5,61 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Workflows ready for a private gateway package (ADR 0018, phase 3)
+
+- **What changed:** CI's `build-test` and the sidecar's end-to-end job test the image they
+  build with `scripts/build-image.sh` under the local name `brokersre-ib-gateway:stable` (was
+  `ghcr.io/rocketedge/brokersre-ib-gateway:stable`); CI's three Trivy steps read the local
+  daemon only (`TRIVY_IMAGE_SRC=docker`); the end-to-end job lost its archive pre-fetch, its
+  bake build and its fork condition, and its trigger paths name the build helper's inputs.
+  `rebuild.yml`'s daily scan and `qualify-paper.yml` log in to `ghcr.io` before their first
+  read (the qualification once, before the pull, instead of only for the attestation).
+  `publish.yml`'s release notes no longer say "Pin this exact build": they tell readers to
+  build from the tag and name the digest as RocketEdge's private image. `detect-releases.yml`
+  runs hourly (`23 * * * *`) besides 06:00 UTC; `scripts/detect-scope.sh` decides whether a
+  run downloads and hashes (daily, dispatch, first sight of a version) or stops after
+  `version.json`. ADR 0018 records these and that stable bumps keep merging themselves; L39.
+  Review of the pull request (same day): `publish.yml` gets a first job, `private-package`,
+  that pushes a placeholder without IBKR content and requires ghcr.io to refuse an anonymous
+  token request for it (`scripts/check-package-private.sh`) before `publish` may start, and
+  `publish` repeats the check right before its push. Re-review: the first version also read a
+  manifest 401/403/404 after a granted token as private, but ghcr.io answers token 200 and
+  manifest 404 for a public package's missing tag (observed 2026-11-17); a granted token now
+  counts as inconclusive unless the manifest is 200 (public). Tests now catch the gate step
+  passing on exit 3 and `continue-on-error` on the gate; the qualification
+  logs in and pulls before the credential files exist (login pinned by commit);
+  `qualified_by_project: yes` is defined as "equals the pin, which passed the offline CI, not
+  a paper login" in both build scripts' help, the spec, ADR 0018 and L35; detection runs in
+  one concurrency group per kind of check (full, hourly), retries `version.json` briefly, and
+  counts only this repository's update pull requests; three surviving mutations got tests.
+- **Result:** `tests/bats/ci/private-package.bats` (9 tests) and `detect-scope.bats` (11)
+  were red on `main` for the reasons above (two are guards of properties `main` already had)
+  and are green; `workflows.bats` stays green; actionlint 1.7.12 clean. CI and Sidecar runs
+  of the pull request: see its description. After the review: 13, 15 and 7 tests
+  (`check-package-private.bats` new), each new one red first (the guards against the review's
+  mutations M3, M7 and M9 red with the mutation applied to the real workflow); the `--help`
+  tests in bats and Pester (Windows PowerShell 5.1 and PowerShell 7) red first.
+- **What did NOT work / root cause:** `rebuild.yml`'s daily scan read the channel tag
+  (`docker buildx imagetools inspect`) and scanned with `TRIVY_IMAGE_SRC=remote` without a
+  login: against a private package it would have failed every day. `qualify-paper.yml` logged
+  in only to attach the attestation, after `docker pull`. CI tagged its own build with the
+  public package's name, so a Trivy fallback to its remote source (Trivy's default order ends
+  with `remote`) could have scanned the published image instead of the build. A first draft
+  of the visibility test grepped whole workflow files and failed on the comment that says no
+  workflow sets one; it now reads step scripts and inputs only. Hourly detection with the full
+  check every hour would have downloaded about 27 GB a day from IBKR (565 MB per channel per
+  run) and reopened a closed pull request within the hour instead of the next day (ADR 0009).
+  The first version assumed that a package created again would be private; GitHub documents
+  that a package created with a workflow's token inherits the visibility model of the
+  repository (public here), and only one earlier run saw the opposite, so the visibility is
+  now proven before any IBKR byte is pushed. A single concurrency group would have let an
+  hourly run replace a daily run that GitHub started hours late.
+- **Next step:** the owner's steps in `tasks/todo.md` (delete the public package, re-enable
+  the three workflows, publish both channels, check the package is private and grant read
+  access); the first publish after the deletion is what proves the private path (L39). After
+  the build-recipe pull request merges, the README and `docs/upgrade-policy.md` still say the
+  detection is daily.
+
 ### 2026-11-17 — Review of #39: cache provenance and key, the user's files, the trust tests
 
 - **What changed:** the helper's cache is keyed by version and SHA-256

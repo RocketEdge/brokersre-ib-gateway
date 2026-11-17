@@ -97,7 +97,20 @@ All of these must be green before claiming a change done; run them fresh.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback. The image holds
    the installed Gateway, so it is not distributed publicly either (ADR 0018): users build it
-   with `scripts/build-image.sh`; RocketEdge's own image becomes private (spec phases 3 and 4).
+   with `scripts/build-image.sh`; RocketEdge's own image is published privately (spec phases 3
+   and 4). No job started by a push or a pull request reads the package (CI and the sidecar's
+   end-to-end job test `brokersre-ib-gateway:stable` built in the job, Trivy with
+   `TRIVY_IMAGE_SRC=docker`); `publish.yml`, the daily scan of `rebuild.yml` and
+   `qualify-paper.yml` read it after a `ghcr.io` login with the workflow's token; no workflow
+   sets a visibility, and release notes never tell the public to pull
+   (`tests/bats/ci/private-package.bats`). Nothing with IBKR software is pushed before
+   `publish.yml`'s job `private-package`, and again the step right before the push, have
+   proven that ghcr.io refuses an anonymous TOKEN request for the package
+   (`scripts/check-package-private.sh`; a granted token means anonymous pulls are allowed,
+   whatever the manifest answers; a new package may inherit the public repository's
+   visibility). Each gate step passes on exit 0 only, without `continue-on-error`. `qualified_by_project: yes` means "equals the pin, which passed the offline
+   CI", never "logged in with": a stable pin moves without a person unless
+   `STABLE_AUTOMERGE=false`.
    The installer cache of the build helper lives on the user's machine, never here.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
    only through `publish.yml` after Trivy passes on both platforms of the pushed digest;
@@ -140,8 +153,11 @@ scripts/readme-versions.sh                    README version table <- versions.j
 scripts/qualify-paper.sh                      one real paper login and its checks -> qualify-out/result.json (ADR 0014)
 scripts/publish-channels.sh, check-bake-tags.sh, platform-digests.sh, check-report-arch.sh, promote-tags.sh, release-upsert.sh   decisions of publish.yml as tested scripts (channel list, no tag in both channels, platform manifests, platform of a scan report, tags -> the scanned digest, the release written with retries and read back)
 scripts/rebuild-decision.sh, rebuild-channels.sh, rebuild-issue.sh   decisions of rebuild.yml (fixable CRITICAL/HIGH -> rebuild request; one issue per channel, one comment per day, stop after REBUILD_MAX_ATTEMPTS days)
+scripts/release-decision.sh, detect-scope.sh   decisions of detect-releases.yml (new version / re-upload / none; whether an hourly run does the full check: only at the first sight of a version)
 scripts/check-vex.sh, security/vex/               OpenVEX statements for IBKR's bundled jars and their drift check; docs/evidence.md maps due-diligence questions to artefacts
 tests/bats/ci/workflows.bats, workflow-steps.awk    workflow policy as tests (gate flags, pins, no expression in a script, cron strings); tests/bats/ci/fixtures/ real Trivy reports
+tests/bats/ci/private-package.bats, detect-scope.bats   the private package (who names it, logins before reads, the visibility gate before any push, local test images, no pulls, release notes); hourly detection (scope script, cron strings, concurrency, the auto-merge switch)
+scripts/check-package-private.sh, tests/bats/ci/check-package-private.bats   publish.yml's visibility gate: 0 private only when ghcr.io refuses the anonymous token request (401/403), 1 public (token and manifest 200), 3 inconclusive (anything else, including a granted token with a manifest 404)
 tests/bats/ci/doc-commands.bats, doc-block.awk, doc-exec-paths.awk, pty-answers.py   documented commands as tests: marked secret blocks typed into through a pty under bash, zsh and sh; container paths of exec commands in the Git Bash-safe `//` form
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
@@ -348,6 +364,18 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   on a class without a page, a page without a class, and a relative link or `#anchor` that
   leads nowhere. Change a rule's firing or clearing condition and its page together, and
   never write into a page what the code does not do (no measured claims without a run).
+- The gateway package is private (ADR 0018). Trivy, syft (`anchore/sbom-action`, also when it
+  pulls through the Docker daemon), cosign, `imagetools` and `attest-build-provenance` all read
+  the credential `docker/login-action` writes to the Docker CLI's `config.json`; a job that
+  reads the package needs that login step before its first read, unconditionally, and
+  `packages: read` (or `write`). Trivy's default image source order ends with `remote`: a step
+  that must scan the local build sets `TRIVY_IMAGE_SRC=docker`, and test images carry a name
+  without a registry (`brokersre-ib-gateway:stable`), so a missing build fails instead of
+  scanning or pulling something else.
+- `detect-releases.yml` runs hourly, but only the daily run (`0 6 * * *`, repeated in the scope
+  step's condition) and the first sight of a version download the installers
+  (`scripts/detect-scope.sh`); a closed update pull request is opened again by the daily run,
+  as ADR 0009 says. `github.event.schedule` is the cron string that started the run.
 - trivy-action ignores `severity` when `format: sarif` unless `limit-severities-for-sarif: "true"`
   is set; with `exit-code: 1` a gate then fails on any severity. Bump the Trivy version in the
   three workflows, `tests/bats/ci/workflows.bats` and `docs/evidence.md` together.
