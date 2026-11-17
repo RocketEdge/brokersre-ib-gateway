@@ -1168,9 +1168,10 @@ a username that another session is using.
 In this repository the same script runs in the workflow `Qualify (paper login)`, which is
 dispatched by hand, only from `main`, only for an image given by digest, behind a required
 reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The digests
-`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d), published by RocketEdge
-before its image became private, passed the script with a real paper account on 2026-11-16,
-run by hand: those two Gateway builds are the ones `versions.json` pins. A digest that a channel tag moves to later,
+`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d), which RocketEdge published
+publicly on or before 2026-11-16 in its former public package, passed the script with a real
+paper account on 2026-11-16, run by hand: those two Gateway builds are the ones
+`versions.json` pins. A digest that a channel tag moves to later,
 after a rebuild for example, is not covered by those runs, and the workflow has not run yet
 ([limitations](docs/limitations.md), L16). The account you use must have its paper trading account enabled at IBKR;
 credentials that work on IBKR's website are not proof of that.
