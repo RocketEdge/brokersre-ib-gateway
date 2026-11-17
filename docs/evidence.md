@@ -4,9 +4,18 @@ Which artefact of this image answers which question of a due-diligence questionn
 command that produces the evidence. The page covers this container image only: your strategy
 code, your host, your network and your IBKR account settings are yours to evidence.
 
+**There is no public image any more** (2026-11-17, [ADR 0018](adr/0018-private-image-public-build-recipe.md)):
+you build the image from this repository
+([README, "Build the image"](../README.md#build-the-image)). The commands marked **[P]** below
+were run against the image RocketEdge published until then; RocketEdge's image is private
+from now on and keeps its signature, SBOMs, provenance and releases for its BrokerSRE service.
+For an image you built, start with [An image you built](#an-image-you-built); the questions
+from "Who can reach the API?" on concern what the image does at run time and apply to any
+image built from this repository.
+
 Every command below was run on 2026-11-12 and its result seen, unless it is marked **[N]**:
 
-- **[P]** run against the published image
+- **[P]** run against the image RocketEdge published then
   `ghcr.io/rocketedge/brokersre-ib-gateway@sha256:693bd6306d94708a87e5b0c43180874f671010a5edf142796eb8f46f51e869ea`
   (`stable`, IB Gateway 10.50.1g, published 2026-11-11);
 - **[L]** run against a local build of this repository's image, started from the reference
@@ -26,7 +35,7 @@ as a path inside the container, into a Windows path (`C:/Program Files/Git/...`)
 command fails (checked 2026-11-17 with `docker exec`, and with `docker run -v` and `-e`):
 
 ```bash
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest from digests-<channel>.json>
+IMAGE=<the image: RocketEdge's by digest from digests-<channel>.json, or yours>
 C=<name of the running gateway container>
 IDENTITY='^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
 ISSUER=https://token.actions.githubusercontent.com
@@ -35,6 +44,39 @@ ISSUER=https://token.actions.githubusercontent.com
 The identity ends in `@refs/heads/main$` on purpose: without the branch, a signature made by
 the same workflow file on any other branch of the repository would verify too. With
 `@refs/heads/other$` the same command fails (checked).
+
+## An image you built
+
+Run on 2026-11-17 against `brokersre-ib-gateway:stable` built with `scripts/build-image.sh`
+(IB Gateway 10.50.1h); **[B]** marks these commands.
+
+| What the build provides | Where it comes from | Command |
+|---|---|---|
+| The build's own record: version, channel, whether the project qualified it, the installer's SHA-256, IBKR's build stamp, the image id | the last seven lines of `scripts/build-image.sh` / `.ps1` | keep them with your change record |
+| The same facts as image labels (`com.rocketedge.brokersre.*`) | `Dockerfile`, `scripts/resolve-installer.sh` | B1 |
+| The installer's bytes and when they were accepted, by version | the installer cache (`installers/<version>/<arch>/meta`) | B2 |
+| The installed Gateway carries IBKR's build stamp (the build fails otherwise) | `scripts/fetch-installer.sh --check-stamp` in the `Dockerfile` | B3 |
+| Every other input pinned by SHA-256 or digest | `versions.json` and `scripts/build-helper/Dockerfile` of the commit you built | read them |
+| An SBOM of your image | not produced by the build | B4 |
+
+```bash
+# B1 [B] ... "com.rocketedge.brokersre.ibkr.version":"10.50.1h", ..."com.rocketedge.brokersre.qualified":"no" ...
+docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels}}'
+# B2 [B] version: 10.50.1h ... sha256: eb578b23...fe7aa ... accepted_at: <when it was accepted>
+cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/meta
+# B3 [B] applicationVersion="(.1h) 20261116 16:02:08", equal to the label ibkr.build_stamp
+docker run --rm --entrypoint cat brokersre-ib-gateway:stable //home/ibgateway/Jts/ibgateway/10.50.1h/.install4j/i4jparams.conf | grep -o 'applicationVersion="[^"]*"'
+# B4 [B] a CycloneDX SBOM of the local image with syft, read through the Docker socket: 9776 components
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:v1.54.0 brokersre-ib-gateway:stable -o cyclonedx-json > sbom.cdx.json
+jq '.components | length' sbom.cdx.json
+```
+
+Limits: an image you built has no signature, no attested SBOM and no provenance unless you add
+them in your own pipeline. A build that says `qualified_by_project: no` holds a Gateway build
+the project has not logged in with ([limitations](limitations.md), L35). The labels
+`org.opencontainers.image.created` and `.revision` are set by the maintainers' bake path only:
+an image built with the build helper carries the Ubuntu base image's `created` date and no
+revision (`docker image inspect --format '{{.Created}}'` gives the build time).
 
 ## Which exact software is running?
 

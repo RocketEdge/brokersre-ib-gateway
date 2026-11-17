@@ -20,11 +20,18 @@ business days (Singapore time), remediation plan within ten.
   from inside the container's network namespace.
 - 2FA is never automated or bypassed. The image re-prompts (IBC relogin) and reports the pending
   state; a human acknowledges on the IB Key device.
-- Every build input is verified by SHA-256 (base image digest, Gateway installer, IBC zip).
-  Published images are signed with Sigstore cosign (keyless, GitHub Actions identity) and
-  carry GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
+- Every build input is verified (base image digest and IBC zip by SHA-256; the Gateway
+  installer by SHA-256 against the pin, or, when IBKR has moved past the pin, against IBKR's
+  own build stamp before and after installation, and then labelled not qualified by the
+  project; [limitations](docs/limitations.md) L35).
+- **There is no public image** ([ADR 0018](docs/adr/0018-private-image-public-build-recipe.md)):
+  you build it with `scripts/build-image.sh` or `.ps1`, and what an image you built carries is
+  in the README ("Verifying what you built"). RocketEdge's own image, private and used by its
+  BrokerSRE service, is signed with Sigstore cosign (keyless, GitHub Actions identity) and
+  carries GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
   The scanner (Trivy v0.76.2) and the actions of the publish and rebuild workflows are pinned
-  inputs too: one version, and a commit per action.
+  inputs too: one version, and a commit per action. The points below about SBOMs, signatures,
+  the gate and rebuilds describe that image.
 - **What the SBOM covers.** The linux/amd64 and linux/arm64 images hold different software
   (arm64 runs Ubuntu's `openjdk-25-jre`, amd64 the JRE IBKR bundles). `publish.yml` makes one
   CycloneDX SBOM per platform and attests each to the manifest of the platform it describes;
@@ -89,5 +96,7 @@ What an auditor can check for each point is listed in [docs/evidence.md](docs/ev
 
 ## Supported images
 
-The `stable` and `latest` channel tags and their version tags from the current `versions.json`.
-Older digests remain available but receive no rebuilds.
+Images built from the current `main` of this repository, of the `stable` and `latest` channels,
+and RocketEdge's own image of the versions in the current `versions.json`. A report about an
+image you built: say which commit you built from and paste the build's last seven lines (they
+hold no secret). Rebuild to pick up fixes; nothing updates an image you built.

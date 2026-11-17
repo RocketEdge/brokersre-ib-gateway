@@ -17,7 +17,7 @@
 | no `HEALTHCHECK` | `HEALTHCHECK` + `state/phase` | Unhealthy until logged in. |
 | plain-text stdout | JSON log contract on stdout; raw logs on the `/var/log/ibgateway` volume | |
 | `sudo` for `ibgateway` | none | |
-| image `ghcr.io/gnzsnz/ib-gateway` | `ghcr.io/rocketedge/brokersre-ib-gateway` | Same tag scheme: `stable`, `latest`, `10.50`, `10.50.1f`. Pin digests. |
+| image `ghcr.io/gnzsnz/ib-gateway` (pulled) | `brokersre-ib-gateway:<channel>` and `:<version>`, built on your machine by `scripts/build-image.sh` | No public image ([README, "Build the image"](../README.md#build-the-image)); the compose files never pull the gateway image. In production run a version tag or a digest in your own private registry. |
 | `tws-rdesktop` image | not provided | |
 | relay listens from container start | relay listens only while logged in | `RELAY_MODE=always` restores the old behaviour. A client that gets "connection refused" retries. |
 

@@ -1,5 +1,14 @@
 # Upgrade policy
 
+This page describes how the project moves its pins and how RocketEdge publishes its own image,
+which is private from Phase 4 of
+[the spec](specs/2026-11-17-private-image-public-recipe.md) on: there is no public image
+([ADR 0018](adr/0018-private-image-public-build-recipe.md)). An image you build changes only
+when you build again; when to do that, and how to keep the previous image to roll back to, is
+in the README ([Upgrading and rolling back](../README.md#upgrading-and-rolling-back)). Steps 1
+and 2 below decide what `qualified_by_project: yes` means for your build: the pins in
+`versions.json`.
+
 1. **Detection.** `detect-releases.yml` reads IBKR's `version.json` for each channel daily. A new
    build produces a pull request that bumps `versions.json` with RocketEdge-computed SHA-256 for
    both architectures. `detect-ibc-release.yml` does the same for RocketEdge/ibc releases.
