@@ -38,11 +38,11 @@ Next step.
   upgrade policy's rollback says the digests published until then are gone; the README's
   advice for a user's own GHCR package says a new package is not always private.
 - **Result:** what happened: the public package was deleted at 08:09 (anonymous token request
-  403 from then on, API "Package not found"); `publish.yml` run 44044468594 (08:10) re-created
-  it PUBLIC with its placeholder push and its job `private-package` failed at the anonymous-read
-  check, `publish` skipped; about 08:45 the public placeholder package was deleted and the
-  package created by hand with a personal token (internal, `check-package-private.sh` exit 0,
-  no repository linked); run 44049788033 (08:47) failed at the placeholder push with
+  403 and API "Package not found" until the push at 08:10); `publish.yml` run 44044468594
+  (08:10) re-created it PUBLIC with its placeholder push (08:10:35) and its job
+  `private-package` failed at the anonymous-read check, `publish` skipped; at 08:46:22 the
+  public placeholder package was deleted, and at 08:46:43 the package was created by hand with
+  a personal token (internal, `check-package-private.sh` exit 0, no repository linked); run 44049788033 (08:47) failed at the placeholder push with
   `permission_denied: write_package`, `publish` skipped. The visibility gate worked as designed
   both times and no IBKR software was pushed. The state was read again before this entry was
   written: anonymous token request 401; the package API answers `visibility: internal`, no
