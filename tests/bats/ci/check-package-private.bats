@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # Unit tests for scripts/check-package-private.sh: publish.yml's proof that the gateway package
-# is private before any image with IBKR software in it is pushed (ADR 0018). `curl` is
+# cannot be read anonymously before any image with IBKR software in it is pushed (ADR 0018;
+# "private" in the script's verdict means that, and an internal package passes too, L40). `curl` is
 # replaced by a stub on PATH; nothing reaches ghcr.io.
 #   tests/.bats-core/bin/bats tests/bats/ci
 #

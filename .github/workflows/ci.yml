@@ -1,7 +1,7 @@
 # Lint, build the stable channel for amd64 with the build helper (scripts/build-image.sh, which
 # follows IBKR's channel when IBKR is ahead of the pin, ADR 0018), run the unit suite inside the
 # image, run the container tests offline, scan with Trivy, test the PowerShell build wrapper.
-# Every test reads the image built in the job, never RocketEdge's published image (private,
+# Every test reads the image built in the job, never RocketEdge's published image (not public,
 # ADR 0018), so a pull request from a fork runs the same jobs. No IBKR credentials exist here and the IBC smoke test runs with --network none, so nothing
 # ever contacts IBKR's login servers (the installer is downloaded from IBKR's public URL).
 name: CI
@@ -79,7 +79,7 @@ jobs:
     env:
       # Named TEST_IMAGE on purpose: bake reads a variable called IMAGE from the environment.
       # A name without a registry (the build helper's default tag): every step tests the image
-      # this job built from the commit. RocketEdge's own image is private (ADR 0018) and a pull
+      # this job built from the commit. RocketEdge's own image is not public (ADR 0018) and a pull
       # request from a fork can never read it; under this name nothing can be pulled in place
       # of the build, not even by accident (Docker Hub has no library image of that name).
       TEST_IMAGE: brokersre-ib-gateway:stable

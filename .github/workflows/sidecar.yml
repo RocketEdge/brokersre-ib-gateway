@@ -163,7 +163,7 @@ jobs:
     name: end to end with the gateway image
     needs: test
     # No `if:` for forks: the gateway image is built here from IBKR's public download with the
-    # build helper and needs no secret, and RocketEdge's published image (private, ADR 0018)
+    # build helper and needs no secret, and RocketEdge's published image (not public, ADR 0018)
     # is never pulled, so a pull request from a fork runs this job too.
     runs-on: ubuntu-latest
     timeout-minutes: 45

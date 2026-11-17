@@ -26,11 +26,16 @@ business days (Singapore time), remediation plan within ten.
   project; [limitations](docs/limitations.md) L35).
 - **RocketEdge no longer distributes a public image**
   ([ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the former public package
-  `ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn, decided 2026-11-17): you build
-  the image with `scripts/build-image.sh` or `.ps1`, and what an image you built carries is in
-  the README ("Verifying what you built"). RocketEdge's own image, used by its BrokerSRE service
-  and published only privately once the public package is withdrawn, is signed with Sigstore
-  cosign (keyless, GitHub Actions identity) and carries GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
+  `ghcr.io/rocketedge/brokersre-ib-gateway` was withdrawn on 2026-11-17, the day it was
+  decided): you build the image with `scripts/build-image.sh` or `.ps1`, and what an image you
+  built carries is in the README ("Verifying what you built"). RocketEdge's own image, used by
+  its BrokerSRE service, is not published at the moment: the package exists again, holding
+  only a placeholder without IBKR software, and `publish.yml` and `rebuild.yml` stay disabled
+  until its access settings are done. The next image goes to that package, which ghcr.io does
+  not serve to anonymous users (private, or internal to RocketEdge's GitHub enterprise;
+  [limitations](docs/limitations.md) L40), only after two checks that an anonymous read is
+  refused. It is signed with Sigstore cosign (keyless, GitHub Actions identity) and carries
+  GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
   The scanner (Trivy v0.76.2) and the actions of the publish and rebuild workflows are pinned
   inputs too: one version, and a commit per action. The points below about SBOMs, signatures,
   the gate and rebuilds describe that image.
@@ -38,8 +43,9 @@ business days (Singapore time), remediation plan within ten.
   (arm64 runs Ubuntu's `openjdk-25-jre`, amd64 the JRE IBKR bundles). `publish.yml` makes one
   CycloneDX SBOM per platform and attests each to the manifest of the platform it describes;
   the two manifest digests are in `digests-<channel>.json` under `platforms`. Images published
-  up to 2026-11-11 carry a single SBOM, attested to the multi-platform index, and that SBOM
-  describes linux/amd64 only.
+  up to 2026-11-11 carried a single SBOM, attested to the multi-platform index, and that SBOM
+  described linux/amd64 only (those images were deleted with the former public package on
+  2026-11-17).
 - **Which signature to accept.** Verify with the identity
   `https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main`
   (as a regular expression, anchored: `...publish.yml@refs/heads/main$`). A pattern that stops

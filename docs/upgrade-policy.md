@@ -2,8 +2,13 @@
 
 This page describes how the project moves its pins and how RocketEdge publishes its own image.
 RocketEdge no longer distributes a public image
-([ADR 0018](adr/0018-private-image-public-build-recipe.md)); the former public package is being
-withdrawn (Phase 4 of [the spec](specs/2026-11-17-private-image-public-recipe.md)). An image
+([ADR 0018](adr/0018-private-image-public-build-recipe.md)); the former public package was
+withdrawn on 2026-11-17 (Phase 4 of [the spec](specs/2026-11-17-private-image-public-recipe.md)),
+deleted with every image in it. No RocketEdge image is published at the moment; the next
+publish goes to a package that ghcr.io does not serve to anonymous users (private, or internal
+to RocketEdge's GitHub enterprise, [limitations](limitations.md) L40), and `publish.yml` pushes
+the image only after two checks that an anonymous read is refused. Steps 3 to 5 describe
+RocketEdge's image from that publish on. An image
 you build changes only when you build again; when to do that, and how to keep the previous
 image to roll back to, is in the README
 ([Upgrading and rolling back](../README.md#upgrading-and-rolling-back)). Steps 1 and 2 below
@@ -12,7 +17,11 @@ SHA-256 equal a pin of `versions.json`, which passed the project's offline CI. A
 a separate qualification (`scripts/qualify-paper.sh`), and a `stable` pin can move after CI
 alone (step 2).
 
-1. **Detection.** `detect-releases.yml` reads IBKR's `version.json` for each channel daily. A new
+1. **Detection.** `detect-releases.yml` reads IBKR's `version.json` for each channel hourly (at
+   minute 23). It downloads and hashes both installers (the full check) in the daily run at
+   06:00 UTC, on a manual dispatch and in an hourly run that sees a version for the first time
+   (`scripts/detect-scope.sh`, [ADR 0018](adr/0018-private-image-public-build-recipe.md)); a
+   re-upload under the pinned label is therefore found by the daily run. A new
    build produces a pull request that bumps `versions.json` with RocketEdge-computed SHA-256 for
    both architectures. `detect-ibc-release.yml` does the same for RocketEdge/ibc releases.
 2. **Merge** ([ADR 0009](adr/0009-stable-updates-merge-themselves.md)). `scripts/release-decision.sh`
@@ -79,7 +88,9 @@ alone (step 2).
    operator-run paper regression before merge).
 5. **Rollback.** Every published digest stays in the registry; pin the previous
    `digests-<channel>.json` value. Channel tags are moved back only by re-running `publish.yml`
-   on the previous `versions.json` commit.
+   on the previous `versions.json` commit. The exception: the digests published up to
+   2026-11-17 were deleted with the former public package; the releases still name them, but
+   no registry serves them.
 
 Not covered by this repository: whether a given Gateway build logs in correctly with IBC. That is
 proven on the consumer's paper environment before the digest is promoted.

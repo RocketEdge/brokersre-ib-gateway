@@ -97,8 +97,10 @@ All of these must be green before claiming a change done; run them fresh.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
    IBKR at build time; the private archive is RocketEdge's internal fallback. The image holds
    the installed Gateway, so it is not distributed publicly either (ADR 0018): users build it
-   with `scripts/build-image.sh`; RocketEdge's own image is published privately (spec phases 3
-   and 4). No job started by a push or a pull request reads the package (CI and the sidecar's
+   with `scripts/build-image.sh`; RocketEdge's own image goes to a package ghcr.io does not
+   serve anonymously (spec phases 3 and 4; the former public package was withdrawn on
+   2026-11-17; the package was created again by hand, internal and not linked to this
+   repository, ADR 0018 amendment). No job started by a push or a pull request reads the package (CI and the sidecar's
    end-to-end job test `brokersre-ib-gateway:stable` built in the job, Trivy with
    `TRIVY_IMAGE_SRC=docker`); `publish.yml`, the daily scan of `rebuild.yml` and
    `qualify-paper.yml` read it after a `ghcr.io` login with the workflow's token; no workflow
@@ -107,8 +109,8 @@ All of these must be green before claiming a change done; run them fresh.
    `publish.yml`'s job `private-package`, and again the step right before the push, have
    proven that ghcr.io refuses an anonymous TOKEN request for the package
    (`scripts/check-package-private.sh`; a granted token means anonymous pulls are allowed,
-   whatever the manifest answers; a new package may inherit the public repository's
-   visibility). Each gate step passes on exit 0 only, without `continue-on-error`. `qualified_by_project: yes` means "equals the pin, which passed the offline
+   whatever the manifest answers; a package that a workflow of this public repository creates
+   comes out public, seen 2026-11-17; an internal package passes the check too, L40). Each gate step passes on exit 0 only, without `continue-on-error`. `qualified_by_project: yes` means "equals the pin, which passed the offline
    CI", never "logged in with": a stable pin moves without a person unless
    `STABLE_AUTOMERGE=false`.
    The installer cache of the build helper lives on the user's machine, never here.
@@ -157,7 +159,7 @@ scripts/release-decision.sh, detect-scope.sh   decisions of detect-releases.yml 
 scripts/check-vex.sh, security/vex/               OpenVEX statements for IBKR's bundled jars and their drift check; docs/evidence.md maps due-diligence questions to artefacts
 tests/bats/ci/workflows.bats, workflow-steps.awk    workflow policy as tests (gate flags, pins, no expression in a script, cron strings); tests/bats/ci/fixtures/ real Trivy reports
 tests/bats/ci/private-package.bats, detect-scope.bats   the private package (who names it, logins before reads, the visibility gate before any push, local test images, no pulls, release notes); hourly detection (scope script, cron strings, concurrency, the auto-merge switch)
-scripts/check-package-private.sh, tests/bats/ci/check-package-private.bats   publish.yml's visibility gate: 0 private only when ghcr.io refuses the anonymous token request (401/403), 1 public (token and manifest 200), 3 inconclusive (anything else, including a granted token with a manifest 404)
+scripts/check-package-private.sh, tests/bats/ci/check-package-private.bats   publish.yml's visibility gate: 0 private only when ghcr.io refuses the anonymous token request (401/403; an internal package too, L40), 1 public (token and manifest 200), 3 inconclusive (anything else, including a granted token with a manifest 404); takes the repository WITHOUT `ghcr.io/` (`rocketedge/brokersre-ib-gateway visibility-probe`)
 tests/bats/ci/doc-commands.bats, doc-block.awk, doc-exec-paths.awk, pty-answers.py   documented commands as tests: marked secret blocks typed into through a pty under bash, zsh and sh; container paths of exec commands in the Git Bash-safe `//` form
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
@@ -288,8 +290,8 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - `docker-compose.multi.yml`: `docker compose down` without the profiles stops nothing; `exec
   <service>` and `ps` work without them. Docker mounts a compose tmpfs `noexec`: run a script
   placed there with `bash <file>`.
-- RocketEdge no longer distributes a public image (ADR 0018; the former package is being
-  withdrawn): every shipped gateway service defaults to
+- RocketEdge no longer distributes a public image (ADR 0018; the former public package was
+  withdrawn on 2026-11-17): every shipped gateway service defaults to
   `brokersre-ib-gateway:stable` with a literal `pull_policy: never` (a missing image fails with
   "No such image" instead of a Docker Hub lookup; `pull --policy missing` and `up --pull
   missing` override it, Compose 2.22.0 and later; `docker pull <ref>` works with any version).
@@ -307,7 +309,9 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   `/mnt/c`; a new file that `build-image.sh` reads joins that list. `.dockerignore` admits only
   the Dockerfile's inputs and excludes `**/secrets`, `**/.env`, `**/*.env` after the re-includes
   (`tests/bats/ci/build-context.bats`). `start.ps1` never builds. Docs say "no longer
-  distributes a public image" / "is being withdrawn" until the deletion is done and proven (open item in `tasks/todo.md`).
+  distributes a public image" and "was withdrawn on 2026-11-17"; until a publish has run
+  (owner steps in `tasks/todo.md`) they say no RocketEdge image is published, and never
+  promise a date.
   `qualified_by_project: yes` means the pin passed the offline CI, never that a login did.
 - COPY takes owner and mode from the build host (Windows context: 0755 on every file; a 0777
   context left `/etc` and `/usr` world-writable): the Dockerfile sets owner and mode of every
@@ -396,7 +400,16 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   on a class without a page, a page without a class, and a relative link or `#anchor` that
   leads nowhere. Change a rule's firing or clearing condition and its page together, and
   never write into a page what the code does not do (no measured claims without a run).
-- The gateway package is private (ADR 0018). Trivy, syft (`anchore/sbom-action`, also when it
+- GitHub's package behaviour, seen 2026-11-17 (ADR 0018 amendment): a package a workflow of
+  this public repository creates comes out PUBLIC (publish.yml's gate stopped that run); one
+  pushed with a personal token into this enterprise organisation comes out INTERNAL (every
+  enterprise member may read it, and per GitHub's docs every workflow of the enterprise; the
+  gate cannot tell it from private, L40); the `org.opencontainers.image.source` label did NOT
+  link it to the repository (the API names none), and a package without a link refuses the
+  workflow's token (`permission_denied: write_package`) until "Manage Actions access" grants
+  the repository. Never delete the package again to "fix" its visibility: change it in its
+  settings, and recreate it only by the hand procedure in ADR 0018.
+- The gateway package is not public (ADR 0018). Trivy, syft (`anchore/sbom-action`, also when it
   pulls through the Docker daemon), cosign, `imagetools` and `attest-build-provenance` all read
   the credential `docker/login-action` writes to the Docker CLI's `config.json`; a job that
   reads the package needs that login step before its first read, unconditionally, and

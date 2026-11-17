@@ -3,8 +3,9 @@
 # finds a fixable finding). Each channel gets a git tag v<version>-<channel>[-rDATE] and a GitHub
 # release carrying digests.json, one SBOM per platform and the VEX document for IBKR's bundled jars.
 #
-# The package is PRIVATE (ADR 0018): it holds IBKR's installed IB Gateway, which is not
-# redistributed. The job private-package proves it before anything else is pushed (an
+# The package is NOT PUBLIC (ADR 0018; private or internal, docs/limitations.md L40): it holds
+# IBKR's installed IB Gateway, which is not redistributed. The job private-package proves that
+# no anonymous read is possible before anything else is pushed (an
 # anonymous read of a placeholder must be refused), and this file never sets a visibility.
 # Every registry read and write below (the push, Trivy's remote source, the
 # SBOM tool, cosign, the provenance push, imagetools) uses the credential that
@@ -96,7 +97,7 @@ jobs:
   # If it is not, the job fails and `publish`, which needs it, never starts: nothing else is
   # pushed. Tested by tests/bats/ci/private-package.bats.
   private-package:
-    name: the package is private (before anything with IBKR software is pushed)
+    name: the package is not public (before anything with IBKR software is pushed)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -113,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           probe="$(mktemp -d)"
-          printf '%s\n' "Placeholder that proves ${IMAGE} is private before an image with IB Gateway is pushed (publish.yml). It holds no IBKR software." > "${probe}/README.txt"
+          printf '%s\n' "Placeholder that proves ${IMAGE} cannot be read anonymously before an image with IB Gateway is pushed (publish.yml). It holds no IBKR software." > "${probe}/README.txt"
           printf '%s\n' 'FROM scratch' 'COPY README.txt /README.txt' > "${probe}/Dockerfile"
           docker build --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.description=Visibility probe, no IBKR software" \
@@ -131,7 +132,7 @@ jobs:
           case "$rc" in
             0) ;;
             1)
-              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded. Nothing with IBKR software was pushed. Make the package private (Package settings, Danger zone) and check that the organisation's Package creation setting allows private packages, then run this workflow again."
+              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded. Nothing with IBKR software was pushed. Change the package's visibility to private in its settings (Danger zone, Change visibility); never delete it to fix this, because a workflow of this public repository creates it public again (ADR 0018). Then run this workflow again."
               exit 1
               ;;
             *)
@@ -209,7 +210,7 @@ jobs:
       # requests, in case GitHub applied a visibility change after private-package ran (a
       # person can change it in between, and GitHub does not say how fast a change takes
       # effect). Any exit but 0 stops the job here, before anything is pushed.
-      - name: The package is still private (scripts/check-package-private.sh)
+      - name: The package is still not public (scripts/check-package-private.sh)
         id: still-private
         run: |
           set -euo pipefail
@@ -218,7 +219,7 @@ jobs:
           case "$rc" in
             0) ;;
             1)
-              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded just before the push. Nothing with IBKR software was pushed. Make the package private (Package settings, Danger zone) and check that the organisation's Package creation setting allows private packages, then run this workflow again."
+              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded just before the push. Nothing with IBKR software was pushed. Change the package's visibility to private in its settings (Danger zone, Change visibility); never delete it to fix this, because a workflow of this public repository creates it public again (ADR 0018). Then run this workflow again."
               exit 1
               ;;
             *)
@@ -469,7 +470,7 @@ jobs:
           printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "IB Gateway $VERSION (IBKR $CHANNEL channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
             "To run it, build the image yourself from this tag: \`git checkout $TAG\`, then \`scripts/build-image.sh --channel $CHANNEL\` (or \`scripts/build-image.ps1 -Channel $CHANNEL\`; add \`--strict\` / \`-Strict\` to refuse any IB Gateway build other than $VERSION); the README describes the build. The image holds IBKR's installed IB Gateway, which is not redistributed." \
-            "RocketEdge's own image of this build is private and cannot be pulled without access to the package: \`$IMAGE@$DIGEST\`." \
+            "RocketEdge's own image of this build is not public and cannot be pulled without access to the package: \`$IMAGE@$DIGEST\`." \
             "With read access to the package, verify it: \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '$IDENTITY_REGEXP'\`" \
             "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. Each platform has its own SBOM (\`sbom-$CHANNEL-linux-amd64.cdx.json\`, \`sbom-$CHANNEL-linux-arm64.cdx.json\`), attested to that platform's manifest; the two manifest digests are in \`digests-$CHANNEL.json\` under \`platforms\`. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
             "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers." \

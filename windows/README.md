@@ -141,8 +141,8 @@ for any other name you build the image yourself first
 ([README of the repository, "Build the image"](../README.md#build-the-image)).
 
 RocketEdge no longer distributes a public image of the gateway (the image contains IB Gateway,
-IBKR's software; the former public package `ghcr.io/rocketedge/brokersre-ib-gateway` is being
-withdrawn, decided 2026-11-17). The build downloads IB Gateway from IBKR on your computer,
+IBKR's software; the former public package `ghcr.io/rocketedge/brokersre-ib-gateway` was
+withdrawn on 2026-11-17). The build downloads IB Gateway from IBKR on your computer,
 under your own agreement with IBKR. Coming from the kit's former default, the public image:
 [Coming from the public image](#coming-from-the-public-image).
 
@@ -323,9 +323,10 @@ You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-li
 ## Coming from the public image
 
 Earlier versions of the kit ran `ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default,
-the public package that is being withdrawn. A gateway set up that way keeps running and starts
-again after a restart, because Docker keeps the image on the computer; what fails once the
-package is gone is any pull of it. To move to an image built on this computer, when someone
+the public package that RocketEdge withdrew on 2026-11-17 (deleted with every image in it). A
+gateway set up that way keeps running and starts again after a restart, because Docker keeps
+the image on the computer; what fails is any pull of it. To move to an image built on this
+computer, when someone
 can approve the second factor:
 
 1. Update the repository (`git pull`, or download the ZIP again into the same place: the
