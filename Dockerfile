@@ -106,7 +106,17 @@ RUN apt-get update \
 COPY --from=setup --chown=1000:1000 /home/ibgateway /home/ibgateway
 COPY --from=setup --chown=1000:1000 /opt/ibc /opt/ibc
 COPY rootfs/ /
-RUN chmod 0755 /usr/local/bin/*.sh /usr/local/lib/brokersre/*.sh \
+# COPY takes owner and mode from the build host: a Windows context arrives with 0755 on every
+# file, a WSL checkout under /mnt/c (drvfs) with 0777, a tar context with its owner, and the
+# directories COPY passes through (/etc, /usr, /usr/local, ...) take the same values (a 0777
+# context left /etc and /usr world-writable, 2026-11-17). Owner and mode are therefore set
+# here, for every path rootfs/ holds: directories and scripts 0755, other files 0644, root.
+RUN chown root:root /etc /usr /usr/local /usr/local/bin /usr/local/lib \
+ && chmod 0755 /etc /usr /usr/local /usr/local/bin /usr/local/lib \
+ && chown -R root:root /etc/brokersre /usr/local/lib/brokersre /usr/local/bin/*.sh \
+ && find /etc/brokersre /usr/local/lib/brokersre -type d -exec chmod 0755 {} + \
+ && find /etc/brokersre -type f -exec chmod 0644 {} + \
+ && chmod 0755 /usr/local/bin/*.sh /usr/local/lib/brokersre/*.sh \
  && ln -s /usr/local/lib/brokersre/ibc-cmd.sh /usr/local/bin/ibc-cmd \
  && ln -s /usr/local/lib/brokersre/doctor.sh /usr/local/bin/doctor \
  && install -m 0644 /opt/ibc/LICENSE.txt /usr/share/doc/ibc/LICENSE.txt \
