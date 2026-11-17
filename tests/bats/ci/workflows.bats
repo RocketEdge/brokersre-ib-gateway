@@ -253,3 +253,30 @@ cron_conditions() {
   run ! grep -q "publish.yml@'" "${ROOT}/docs/evidence.md"
   grep -q 'publish.yml@refs/heads/main\$' "${ROOT}/docs/evidence.md"
 }
+
+@test "CI builds the test image with the build helper, so main builds while IBKR is ahead of the pin" {
+  # A bake build of the pin failed every pull request from the day IBKR replaced stable 10.50.1g
+  # (2026-11-17) unless the private archive held the pinned installer (ADR 0018).
+  run awk '/^  build-test:/ { job = 1; next } /^  [a-z-]+:$/ { job = 0 } job' "${WF}/ci.yml"
+  [[ "$output" == *"scripts/build-image.sh --channel stable --platform linux/amd64 --tag \"\$TEST_IMAGE\""* ]]
+  [[ "$output" != *"docker buildx bake stable"* ]]
+  [[ "$output" != *"prefetch-installers.sh"* ]]
+  [[ "$output" != *"ARCHIVE_READ_TOKEN"* ]]
+  # The build helper's smoke test runs (no --no-smoke), and the rest of the job still does.
+  [[ "$output" != *"--no-smoke"* ]]
+  [[ "$output" == *"tests/bats/run-in-image.sh \"\$TEST_IMAGE\""* ]]
+  [[ "$output" == *"tests/container/run.sh"* ]]
+}
+
+@test "CI lints the helper's Dockerfile and checks build_datetime in versions.json" {
+  grep -q 'dockerfile: scripts/build-helper/Dockerfile' "${WF}/ci.yml"
+  grep -q 'build_datetime' "${WF}/ci.yml"
+}
+
+@test "CI runs the PowerShell build wrapper's Pester tests under both editions and its analyzer" {
+  run awk '/^  build-image-ps1:/ { job = 1; next } /^  [a-z-]+:$/ { job = 0 } job' "${WF}/ci.yml"
+  [[ "$output" == *"runs-on: windows-latest"* ]]
+  [[ "$output" == *"shell: [powershell, pwsh]"* ]]
+  [[ "$output" == *"\$config.Run.Path = 'scripts/tests'"* ]]
+  [[ "$output" == *"Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"* ]]
+}
