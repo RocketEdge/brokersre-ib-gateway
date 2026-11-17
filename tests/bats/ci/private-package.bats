@@ -127,8 +127,9 @@ gate_problems() {
 }
 
 # GATE_STEPS: "<job> <step id>" of every step that runs scripts/check-package-private.sh in
-# publish.yml; each must stop its job unless the script exits 0.
-GATE_STEPS=("private-package anonymous")
+# publish.yml; each must stop its job unless the script exits 0. The second runs inside
+# publish, right before the push, in case GitHub applies a visibility change late.
+GATE_STEPS=("private-package anonymous" "publish still-private")
 
 # gate_switch_problems FILE: print every way the visibility gate of FILE (a publish workflow)
 # is switched off, and fail when there is one:
@@ -349,6 +350,17 @@ pulling_steps() {
 @test "the visibility gate cannot be switched off: exit 0 only, no continue-on-error, no job condition" {
   run gate_switch_problems "${WF}/publish.yml"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "publish checks the package again immediately before it pushes the gateway image" {
+  check="$(step_where "${WF}/publish.yml" publish id still-private)"
+  push="$(step_where "${WF}/publish.yml" publish id push)"
+  [ -n "${check}" ] && [ -n "${push}" ]
+  [ "${check}" -eq $((push - 1)) ]
+  # The check is unconditional: no `if:` lets it be skipped.
+  [ -z "$(job_steps "${WF}/publish.yml" publish | awk -F '\t' -v step="${check}" '$1 == step && $2 == "if"')" ]
+  # Nothing before it in publish pushes to the registry.
+  run ! grep -q -E 'docker push|push=true|--push|imagetools create' <<<"$(job_steps "${WF}/publish.yml" publish | awk -F '\t' -v step="${check}" '$1 < step && $2 == "run" { print $3 }')"
 }
 
 @test "the review's ways to switch the gate off are caught (G2: exit 3 passes; G3: continue-on-error)" {

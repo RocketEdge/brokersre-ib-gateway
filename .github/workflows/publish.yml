@@ -205,6 +205,27 @@ jobs:
         run: |
           if [ "$CHANNEL" = stable ]; then x64="$STABLE_SHA256_X64"; arm="$STABLE_SHA256_ARM"; else x64="$LATEST_SHA256_X64"; arm="$LATEST_SHA256_ARM"; fi
           scripts/prefetch-installers.sh "$CHANNEL" "$VERSION" "$x64" "$arm" downloads
+      # The gate again, immediately before the first push of IB Gateway: two anonymous HTTPS
+      # requests, in case GitHub applied a visibility change after private-package ran (a
+      # person can change it in between, and GitHub does not say how fast a change takes
+      # effect). Any exit but 0 stops the job here, before anything is pushed.
+      - name: The package is still private (scripts/check-package-private.sh)
+        id: still-private
+        run: |
+          set -euo pipefail
+          rc=0
+          scripts/check-package-private.sh "${IMAGE#ghcr.io/}" visibility-probe || rc=$?
+          case "$rc" in
+            0) ;;
+            1)
+              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded just before the push. Nothing with IBKR software was pushed. Make the package private (Package settings, Danger zone) and check that the organisation's Package creation setting allows private packages, then run this workflow again."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Package visibility not established::scripts/check-package-private.sh exited $rc just before the push (see this step's log). Nothing with IBKR software was pushed; run the workflow again."
+              exit 1
+              ;;
+          esac
       - name: Build both platforms and push by digest only (no tag moves)
         id: push
         # `*.tags=<name without a tag>` plus push-by-digest pushes the image index under its
