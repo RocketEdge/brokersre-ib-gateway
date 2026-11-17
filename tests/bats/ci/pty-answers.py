@@ -7,7 +7,10 @@ one of two modes:
 - ``script``: ``SHELL BLOCKFILE``, the block read from a file.
 - ``paste``: an interactive ``SHELL -i`` with a clean environment and its own start-up file
   (prompt, history file and, for bash and zsh, bracketed paste ``on`` or ``off``). Once the
-  shell shows its prompt, the whole block is written in ONE write with carriage returns as
+  shell shows its prompt, the driver checks that the bracketed-paste mode the shell switched
+  on (``ESC[?2004h`` / ``ESC[?2004l`` on the screen) is the one ``--bracketed-paste`` asks
+  for, for every shell (dash and busybox sh have none: ask for ``off``), and otherwise pastes
+  nothing and fails. Then the whole block is written in ONE write with carriage returns as
   line ends, as a terminal emulator pastes it, wrapped in the bracketed-paste markers only
   while the shell has switched that mode on (``ESC[?2004h``). If no prompt of the block
   appears within ``ENTER_AFTER_S``, Enter is pressed, as a person does after a paste that
@@ -175,7 +178,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         "--bracketed-paste",
         choices=("on", "off"),
         default="off",
-        help="paste mode, bash and zsh: the shell's bracketed-paste setting",
+        help="paste mode: the bracketed-paste mode the shell must show (off for dash/busybox)",
     )
     parser.add_argument("--home", help="paste mode: folder for start-up file and history")
     parser.add_argument(
@@ -203,7 +206,8 @@ def interactive_shell(
     The start-up file sets the prompt (``SHELL_PROMPT``), a history file ``HOME/history`` and,
     for bash and zsh, the bracketed-paste setting. Other shells (dash, busybox sh) read it
     through ``ENV`` and have no bracketed paste. The environment is clean apart from PATH, so
-    no start-up file of the test host changes what the block does.
+    no start-up file of the test host changes what the block does. ``paste_block`` refuses
+    to paste when the bracketed-paste mode the shell switched on is not the one asked for.
     """
     os.makedirs(home, exist_ok=True)
     env = {
@@ -254,15 +258,27 @@ def start_child(argv: list[str], env: dict[str, str], cwd: str) -> tuple[int, in
     return pid, fd
 
 
-def paste_block(terminal: Terminal, block: bytes, first_prompt: bytes) -> tuple[int, list[str]]:
+def paste_block(
+    terminal: Terminal, block: bytes, first_prompt: bytes, bracketed_paste: str
+) -> tuple[int, list[str]]:
     """Paste BLOCK into the interactive shell; return (screen index of the paste, failures).
 
-    Waits for the shell's prompt first. Presses Enter when FIRST_PROMPT has not been printed
-    within ``ENTER_AFTER_S`` (with bracketed paste the shell waits for it).
+    Waits for the shell's prompt first. Pastes nothing and returns a failure when the
+    bracketed-paste mode the shell switched on is not BRACKETED_PASTE (``on``/``off``): a
+    test named "without bracketed paste" that ran with it on passed a block that fails
+    without it (review of #37: zsh set the mode again when zle loaded). Presses Enter when
+    FIRST_PROMPT has not been printed within ``ENTER_AFTER_S`` (with bracketed paste the
+    shell waits for it).
     """
     if not terminal.wait_until(lambda: SHELL_PROMPT in terminal.screen, PROMPT_TIMEOUT_S):
         return len(terminal.screen), ["the interactive shell did not show its prompt"]
     terminal.settle(SETTLE_S)
+    observed = "on" if terminal.bracketed_paste_on() else "off"
+    if observed != bracketed_paste:
+        return len(terminal.screen), [
+            f"the shell's bracketed paste is {observed}, but {bracketed_paste} was asked for;"
+            " nothing was pasted"
+        ]
     data = block.rstrip(b"\n").replace(b"\n", b"\r") + b"\r"
     if terminal.bracketed_paste_on():
         data = PASTE_START + data + PASTE_END
@@ -390,9 +406,16 @@ def run(arguments: argparse.Namespace) -> list[str]:
     failures: list[str] = []
     start = 0
     if arguments.mode == "paste" and arguments.answer:
-        start, failures = paste_block(terminal, block, arguments.answer[0][0].encode())
-    if not failures:
-        failures += type_answers(terminal, arguments.answer, start)
+        start, failures = paste_block(
+            terminal, block, arguments.answer[0][0].encode(), arguments.bracketed_paste
+        )
+    if failures:
+        # Nothing was pasted: end the shell and report only why.
+        os.write(fd, b"exit\r")
+        wait_for_exit(pid, terminal)
+        os.close(fd)
+        return [*failures, f"terminal: {terminal.screen.decode('utf-8', 'replace')!r}"]
+    failures += type_answers(terminal, arguments.answer, start)
     if arguments.mode == "paste":
         failures += leave_shell(terminal, len(terminal.screen))
     code = wait_for_exit(pid, terminal)

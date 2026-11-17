@@ -18,7 +18,9 @@
 #    took the next pasted line, and the typed password ran as a command (on the screen and in
 #    the history), unless the shell has read the whole block before it runs (a subshell
 #    `( ... )` around it). And Ctrl-C at a password prompt must leave echo on and write no
-#    password file (the subshell's `trap 'stty echo; exit 130' INT`).
+#    password file (the subshell's `trap 'stty echo; exit 130' INT`). The driver checks that
+#    the shell really runs in the bracketed-paste mode a test names: after f57f6e2 zsh's
+#    "off" tests ran with it on (zsh set it again when zle loaded; re-review of #37).
 # 2. Container paths. Git Bash, which the README names for Windows, rewrites an argument that
 #    starts with one `/` into a Windows path, so `docker compose ... exec ib-gateway cat
 #    /var/log/...` failed there; the documented form is `//var/log/...` (doc-exec-paths.awk).
@@ -119,10 +121,29 @@ exec_path_docs() {
   markdown_files | grep -v -E '/(docs/changes\.md|docs/evidence\.md|tasks/[^/]*\.md)$'
 }
 
+# bracketed_for SHELL: the bracketed-paste mode a Ctrl-C test asks for: on where the shell
+# has it (bash, zsh), off where it has none (sh). The driver fails when the shell shows
+# another mode than the one asked for.
+bracketed_for() {
+  case "$1" in
+    bash | zsh) echo on ;;
+    *) echo off ;;
+  esac
+}
+
+# fake_shell PATH PREFIX: write a stand-in for an interactive shell that prints PREFIX (a
+# printf format) and the driver's prompt, then a prompt per line read, and exits on `exit`.
+fake_shell() {
+  printf '%s\n' '#!/bin/sh' "printf '${2}pty-answers\$ '" 'while IFS= read -r line; do' \
+    '  [ "${line}" = exit ] && exit 0' "  printf 'pty-answers\$ '" 'done' >"$1"
+  chmod +x "$1"
+}
+
 # The four blocks. Each function takes SHELL [MODE [BRACKETED_PASTE]] (default: script) and
 # checks the written files byte for byte; each *_interrupt function pastes the block into an
-# interactive SHELL with bracketed paste on, presses Ctrl-C at the first password prompt, and
-# checks that no password file was written (the driver checks that echo is on again).
+# interactive SHELL (bracketed paste on in bash and zsh), presses Ctrl-C at the first
+# password prompt, and checks that no password file was written (the driver checks that
+# echo is on again).
 
 quick_start() {
   fresh_cwd
@@ -135,7 +156,7 @@ quick_start() {
 
 quick_start_interrupt() {
   fresh_cwd
-  run_block README.md "$1" paste on \
+  run_block README.md "$1" paste "$(bracketed_for "$1")" \
     --answer 'IBKR username: ' shown "${USERNAME}" \
     --answer 'IBKR password: ' interrupt -
   [ ! -e "${WORK}/cwd/compose/secrets/ib-password" ]
@@ -156,7 +177,7 @@ several_gateways() {
 
 several_gateways_interrupt() {
   fresh_cwd
-  run_block compose/README.md "$1" paste on \
+  run_block compose/README.md "$1" paste "$(bracketed_for "$1")" \
     --answer 'IBKR username for live: ' shown "${LIVE_USERNAME}" \
     --answer 'IBKR password for live: ' interrupt -
   [ ! -e "${WORK}/cwd/compose/secrets/live/ib-password" ]
@@ -175,7 +196,7 @@ console_password() {
 console_password_interrupt() {
   fresh_cwd
   mkdir -p "${WORK}/cwd/compose/secrets"
-  run_block docs/console.md "$1" paste on --answer 'VNC password: ' interrupt -
+  run_block docs/console.md "$1" paste "$(bracketed_for "$1")" --answer 'VNC password: ' interrupt -
   [ ! -e "${WORK}/cwd/compose/secrets/vnc-password" ]
 }
 
@@ -188,7 +209,7 @@ loki_password() {
 
 loki_password_interrupt() {
   fresh_cwd
-  run_block docs/recipes/README.md "$1" paste on --answer 'Loki password: ' interrupt -
+  run_block docs/recipes/README.md "$1" paste "$(bracketed_for "$1")" --answer 'Loki password: ' interrupt -
   [ ! -e "${WORK}/cwd/compose/secrets/vector/loki_password" ]
 }
 
@@ -208,6 +229,23 @@ loki_password_interrupt() {
   run awk -v marker="${MARKER}" -f "${EXTRACT}" "${WORK}/doc.md"
   [ "${status}" -eq 2 ]
   [[ "${output}" == *"not a code fence"* ]]
+}
+
+@test "pty-answers.py pastes nothing when the shell's bracketed paste is not the mode asked for" {
+  require_command python3
+  fake_shell "${WORK}/fake-on" '\033[?2004h'
+  fake_shell "${WORK}/fake-off" ''
+  printf 'true\n' >"${WORK}/block.sh"
+  run python3 "${DRIVER}" --mode paste --shell "${WORK}/fake-on" --bracketed-paste off \
+    --home "${WORK}/home" --script "${WORK}/block.sh" --cwd "${WORK}/cwd" --answer 'Q: ' shown x
+  echo "${output}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"bracketed paste is on, but off was asked for; nothing was pasted"* ]]
+  run python3 "${DRIVER}" --mode paste --shell "${WORK}/fake-off" --bracketed-paste on \
+    --home "${WORK}/home" --script "${WORK}/block.sh" --cwd "${WORK}/cwd" --answer 'Q: ' shown x
+  echo "${output}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"bracketed paste is off, but on was asked for; nothing was pasted"* ]]
 }
 
 @test "doc-block.awk prints an indented block without its indentation" {
