@@ -5,6 +5,38 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #43: build records, the helper's own build, 5.1 quoting
+
+- **What changed:** when a proxy variable's value holds `@`, both wrappers give the helper
+  build and the image build a `--metadata-file`, read each build record's ref from it, delete
+  it at once, and end the run (built or failed) with `docker buildx history rm <ref> <ref>`.
+  The helper image's own build gets the proxy names as build arguments. `build-image.ps1`
+  trims trailing separators from the cache directory. The helper's curl errors are shown with
+  `://user:password@` replaced by `://***@`. README: where a proxy's password ends up (build
+  records, also for `config.json` proxies; prefer a URL without credentials), Windows'
+  case-insensitive variable names, a proxy reachable from the host and the containers, and why
+  a rebuild has a new image id.
+- **Result:** red first for each (bats and Pester; the 5.1 failure also reproduced for real:
+  "Unable to find image 'cache:latest'" with `-CacheDir '...\ps cache dir\'`). Checked:
+  `docker buildx history inspect <ref>` lists `HTTPS_PROXY` with its value, `history export`
+  carries it, `docker buildx history rm <ref>` deletes the record (inspect then fails) and the
+  image never held it. End to end through Squid, credentials in the URL, a fresh builder and
+  the helper image removed first: Squid logged `CONNECT dl-cdn.alpinelinux.org:443` for the
+  helper's `apk add` and every other request (262 in all), the build passed its smoke test in
+  3 min 43 s, and the run ended naming two records, each holding the password four times,
+  which the printed `docker buildx history rm` deleted. Windows PowerShell 5.1 with
+  `-CacheDir '...\ps cache dir\'`: exit 0 in 73 s, smoke test passed.
+- **What did NOT work / root cause:** "the values are not printed" was true of the scripts'
+  output and the image, and the previous run checked only those; the build record, where
+  BuildKit keeps every build argument, was not looked at. The helper image was built before
+  the proxy names were collected, so a proxy-only network failed its first run. A new argument
+  built from a user's path (`BROKERSRE_HOST_CACHE=...`) inherited 5.1's quoting of a final
+  backslash, which the older `-v <path>:/cache` form had hidden behind its suffix.
+- **Next step:** a proxy that requires authentication and a real corporate proxy remain
+  untested; with `org.opencontainers.image.created` set per build, a rebuild now always has a
+  new image id, so `docker compose up -d` after it starts a new login (README says so; a
+  deterministic time, such as the commit's, would keep the id of an unchanged rebuild).
+
 ### 2026-11-17 — Build polish: stopped Docker, shell proxies, OCI labels, host paths
 
 - **What changed:** both build wrappers ask the daemon for its version before anything else
@@ -23,7 +55,8 @@ Next step.
   password in the shell's proxy URL and a fresh BuildKit builder, `build-image.sh` built
   10.50.1h in 6 min 15 s; Squid logged 263 requests (IBKR, Ubuntu's archives, GitHub), and the
   password was in neither the output nor `docker history --no-trunc` nor `docker image
-  inspect`; the full container suite passed on that image (89 checks, incl. the new OCI label
+  inspect` (it was, though, in BuildKit's build records, which this run did not look at: see
+  the entry above); the full container suite passed on that image (89 checks, incl. the new OCI label
   check, which failed on the image built before). From a fresh clone, cache hits: the `.sh`
   build in 1 min 13 s and the `.ps1` build (PowerShell 7) in 1 min 6 s, both labelled with
   the commit, both smoke tests passed. With `DOCKER_HOST=tcp://127.0.0.1:1` both wrappers say

@@ -584,7 +584,13 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   URL) travels to Docker by name only, `-e NAME` and `--build-arg NAME`, so it is in no
   argument list and no output; proxy names are predefined build arguments, which Docker keeps
   out of `docker history` and the image configuration unless the Dockerfile declares them
-  (it must not: `build-image.bats` checks). Probe the daemon with `docker version --format
+  (it must not: `build-image.bats` checks). BuildKit's build records do keep every build
+  argument's value (`docker buildx history inspect`, `history export`, Docker Desktop's Builds
+  view) until `docker buildx history rm <ref>`: the wrappers name those records when a proxy
+  value holds `@` (`--metadata-file`, deleted at once). The helper image's build gets the
+  proxy names too (its `apk add`), and the helper's curl errors are shown with `//user:pw@`
+  redacted. PowerShell 5.1 turns a trailing backslash before its closing quote into an
+  escaped quote: no argument may end in a separator (`ConvertTo-BiTrimmedPath`). Probe the daemon with `docker version --format
   '{{.Server.Version}}'` before anything else (`buildx version` answers without a daemon) and
   do not echo Docker's error (it can carry `DOCKER_HOST`). The helper names host paths, not
   its mounts: a new message about the cache or the `--installer` file goes through `shown`

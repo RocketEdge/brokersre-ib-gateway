@@ -306,16 +306,32 @@ Windows), next to the keys already there:
 
 and the same proxy into the daemon's settings. **Or set it in your shell**: when
 `HTTPS_PROXY`, `HTTP_PROXY` or `NO_PROXY` (or their lower-case forms) are set, both scripts pass
-them to the helper container and to the build, where they take precedence over `config.json`.
-Only their names are on Docker's command line: the values, which may hold a user name and
-password, are not printed, and Docker keeps these build arguments out of `docker history` and
-the image's configuration. The daemon still takes its own proxy for pulls.
+them to the helper image's build, the helper container and the image build, where they take
+precedence over `config.json`. The daemon still takes its own proxy for pulls.
+
+- **Where a proxy's password ends up.** Only the variables' names are on Docker's command
+  line, and the scripts print no value. The image keeps none either (`docker history`, the
+  image's configuration). But **Docker's build records keep every build argument**, so a
+  proxy URL with a user name and password stays readable in `docker buildx history inspect
+  <ref>`, in `docker buildx history export` and in Docker Desktop's Builds view until you
+  remove the record; proxies from `config.json` end up there the same way. Prefer a proxy URL
+  without credentials (a local relay that adds them, for example). When a value holds a user
+  name or password, the script ends by naming the records to remove:
+  `docker buildx history rm <ref> <ref>` (it deletes those records; the image is not touched).
+- **Windows**: environment names are case-insensitive, so `HTTPS_PROXY` and `https_proxy`
+  are one variable with one value (Linux keeps two).
+- **Reachable from both sides**: the Docker client on your computer uses the proxy (for
+  registry tokens), and so do the containers. `127.0.0.1` inside a container is the container
+  itself: name the proxy by a host name both can reach (`host.docker.internal` reaches your
+  computer from Docker Desktop's containers).
 
 Checked on 2026-11-17 with the shell variables and a local Squid proxy, with a user name and
-password in the proxy URL and a fresh BuildKit builder (so every step ran): the proxy logged
-all 263 requests of `scripts/build-image.sh` (IBKR's `version.json` and installer, Ubuntu's
-archives, IBC from GitHub), the build passed its smoke test, and the password was in neither
-the script's output, nor `docker history --no-trunc`, nor `docker image inspect`.
+password in the proxy URL and a fresh BuildKit builder (so every step ran, the helper image's
+too): the proxy logged every request of `scripts/build-image.sh` (Alpine's index for the
+helper, IBKR, Ubuntu's archives, IBC from GitHub), the build passed its smoke test, and the
+password was in neither the script's output, nor `docker history --no-trunc`, nor `docker
+image inspect`. It was in the two build records the script named at the end (four times
+each), until `docker buildx history rm` with those two refs deleted them.
 
 Checked on 2026-11-17 with a local Squid proxy standing in for a corporate one: with
 `proxies` in `config.json`, `scripts/build-image.sh --print-plan` reached IBKR through it (the
@@ -464,8 +480,12 @@ To build the same Gateway again, check out the same commit and build with the sa
 installed and upgraded at build time (so a later build has later security fixes), and the
 helper's Alpine packages come from Alpine's index at its first build
 ([limitations](docs/limitations.md) L36). A rebuild therefore has the same IB Gateway and IBC,
-not the same image id. To run exactly one image, name it by its id, by a tag you do not
-rebuild, or by its digest in your registry.
+not the same image id: each build records its own time (`org.opencontainers.image.created`),
+so even a rebuild that reuses every cached layer gets a new id (before the build scripts set
+that label, a rebuild on the same builder kept its id; one on another builder, with other
+cached Ubuntu layers, did not). Compose starts a container again when its tag points at a new
+id, so `docker compose up -d` after a rebuild means a new login. To run exactly one image,
+name it by its id, by a tag you do not rebuild, or by its digest in your registry.
 
 ### Pushing to your own private registry
 
