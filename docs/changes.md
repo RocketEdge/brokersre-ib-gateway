@@ -5,6 +5,49 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Phase 4: the public package withdrawn, the package created again by hand
+
+- **What changed:** documentation only, no workflow or script. ADR 0018 gets a dated
+  amendment: what happened on 2026-11-17 (UTC) with the run ids, what GitHub did, the decision
+  (the package is created by hand, once, never by a workflow of this repository; it is not
+  public, private or internal; workflows reach it through "Manage Actions access"), the owner
+  steps and the recovery path as commands; the spec gets a correction, L39 the outcome, L40 is
+  new, `tasks/todo.md` records steps (0) to (c) as done and lists the remaining ones. The
+  documents say that the former public package was withdrawn on 2026-11-17, that no RocketEdge
+  image is published at the moment and that the next publish goes to a package ghcr.io does
+  not serve anonymously, after two checks (README, SECURITY, NOTICE, evidence, upgrade policy,
+  architecture, the Azure pack's and the Windows kit's READMEs, the contract files); the
+  upgrade policy's rollback says the digests published until then are gone; the README's
+  advice for a user's own GHCR package says a new package is not always private.
+- **Result:** what happened: the public package was deleted at 08:09 (anonymous token request
+  403 from then on, API "Package not found"); `publish.yml` run 44044468594 (08:10) re-created
+  it PUBLIC with its placeholder push and its job `private-package` failed at the anonymous-read
+  check, `publish` skipped; about 08:45 the public placeholder package was deleted and the
+  package created by hand with a personal token (internal, `check-package-private.sh` exit 0,
+  no repository linked); run 44049788033 (08:47) failed at the placeholder push with
+  `permission_denied: write_package`, `publish` skipped. The visibility gate worked as designed
+  both times and no IBKR software was pushed. The state was read again before this entry was
+  written: anonymous token request 401; the package API answers `visibility: internal`, no
+  `repository`, three versions (the placeholder's index tagged `visibility-probe`, its
+  linux/amd64 image and Docker's attestation manifest); the workflows "Publish", "Rebuild" and
+  "Detect IB Gateway releases" `disabled_manually`. The recovery procedure's build and its push
+  from a throwaway `DOCKER_CONFIG` ran against a local `registry:2`.
+- **What did NOT work / root cause:** the plan assumed that a package created again after the
+  deletion would be private and linked to this repository (spec, ADR 0018 Context item 4 and
+  Phase 3, owner step (c)). GitHub gives a package that a workflow creates "the visibility and
+  permissions model of the repository where the workflow is run", public here; the review of
+  #40 had found that sentence and added the gate, which is why nothing leaked, but the owner
+  steps still expected the workflow to create the package. The hand-made package has two
+  properties nobody planned: a personal-token push into an organisation of a GitHub enterprise
+  made it internal, which the gate cannot tell from private because it checks anonymous reads
+  only (L40); and the `org.opencontainers.image.source` label, which GitHub documents as the
+  way to link an image before publishing, did not link it (cause not established), so the
+  workflow's token was refused until the package's Actions access grants the repository.
+- **Next step:** the owner's steps (1) to (5) in `tasks/todo.md`; a decision on L40 (a gate
+  that reads the visibility setting); the comments in the workflows, a bats file and the
+  Windows kit that still call the package private or "being withdrawn", with the next change
+  to those files.
+
 ### 2026-11-17 — Re-review of #41: no credentials in the WSL copy or the build context
 
 - **What changed:** the Windows kit's WSL build packs a named list of what

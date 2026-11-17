@@ -136,3 +136,12 @@ the owner's table row "newer" describes the case seen on 2026-11-17), and exit `
 IBKR is unreachable and no usable installer is cached, not only that the pin is missing. The
 review also added the cache's source (and the label `installer.source`), the cache key by
 version and SHA-256, HTTPS for redirects in every mode, and exit `1` for a docker failure.
+
+## Correction (phase 4, 2026-11-17)
+
+"A re-created package is private by default" (RocketEdge's own image, above) was wrong for
+this repository: the first push of `publish.yml` after the deletion created the package
+public, and `publish.yml`'s visibility gate stopped the run before anything with IBKR software
+was pushed. The package was then created by hand with a personal token; it came out internal
+and not linked to the repository. What happened, what GitHub does and the remaining owner
+steps: [ADR 0018, amendment of 2026-11-17](../adr/0018-private-image-public-build-recipe.md#amendment-2026-11-17-how-the-package-was-created-again).
