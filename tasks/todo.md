@@ -197,4 +197,4 @@
     ```
 
 - [ ] Decide L40: a gate that also reads the package's `visibility` from GitHub's API and refuses anything but the chosen value (first establish whether the workflow's token may read the package's metadata)
-- [ ] After the build-recipe pull request merges: README "Automatic updates" and `docs/upgrade-policy.md` still say the detection runs daily (now hourly, full check daily)
+- [x] After the build-recipe pull request merges: README "Automatic updates" and `docs/upgrade-policy.md` still say the detection runs daily (now hourly, full check daily). Done on 2026-11-17 (branch `docs/package-state`): hourly at minute 23; the full check (download, hash, decide) daily at 06:00 UTC, on dispatch and in an hourly run at the first sight of a version

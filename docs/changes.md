@@ -5,6 +5,24 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — The README and the upgrade policy say detection runs hourly
+
+- **What changed:** README ("Upgrade policy", "Automatic updates and repository secrets") and
+  `docs/upgrade-policy.md` step 1 describe what `detect-releases.yml` does since #40: it reads
+  IBKR's `version.json` every hour at minute 23; the full check (both installers downloaded and
+  hashed, `scripts/release-decision.sh`) runs in the daily run at 06:00 UTC, on a dispatch and
+  in an hourly run at the first sight of a version (`scripts/detect-scope.sh`). The README says
+  the run that creates an update pull request (hourly or daily) is the one that enables
+  auto-merge, and that the workflow is disabled since 2026-11-17 until the package's access
+  settings are done.
+- **Result:** read against the workflow on `main` (`7841934`): `cron: "0 6 * * *"` and
+  `cron: "23 * * * *"`, the scope step's condition and `detect-scope.sh`'s contract; markdownlint
+  clean.
+- **What did NOT work / root cause:** #40 changed the schedule and ADR 0018 but not the two
+  user-facing pages, which kept "daily" (recorded as a follow-up in #40's entry).
+- **Next step:** none for this text; `tasks/todo.md` keeps the follow-up on downloading less
+  (`Last-Modified`, `Content-Length`).
+
 ### 2026-11-17 — Phase 4: the public package withdrawn, the package created again by hand
 
 - **What changed:** documentation only, no workflow or script. ADR 0018 gets a dated

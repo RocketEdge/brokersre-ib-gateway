@@ -1278,8 +1278,9 @@ Ubuntu's security fixes, keep the previous image until the new one has logged in
 image name that cannot move ([Upgrading and rolling back](#upgrading-and-rolling-back)).
 
 For the project and RocketEdge's own image, see [docs/upgrade-policy.md](docs/upgrade-policy.md).
-Summary: `detect-releases.yml` checks IBKR daily and opens a pull request when IBKR publishes a
-build, which moves the pins in `versions.json` (what `qualified_by_project: yes` refers to: a
+Summary: `detect-releases.yml` reads IBKR's `version.json` hourly (it downloads and hashes the
+installers in the daily full check at 06:00 UTC and at the first sight of a new version) and
+opens a pull request when IBKR publishes a build, which moves the pins in `versions.json` (what `qualified_by_project: yes` refers to: a
 pin passed the project's offline CI, not a login); a `stable` update merges itself once CI
 passes, a `latest` update waits for a human (ADR 0009; the repository variable
 `STABLE_AUTOMERGE=false` stops the automatic merges); `publish.yml` builds RocketEdge's image,
@@ -1293,8 +1294,19 @@ published at the moment, and the next publish goes to a package that is not publ
 
 ## Automatic updates and repository secrets
 
-For maintainers. Every day at 06:00 UTC `detect-releases.yml` reads IBKR's manifest for both
-channels, downloads both installers and lets `scripts/release-decision.sh` decide:
+For maintainers. `detect-releases.yml` reads IBKR's manifest (`version.json`) for both channels
+every hour, at minute 23. The full check, which downloads both installers of a channel (about
+565 MB), hashes them and lets `scripts/release-decision.sh` decide, runs in three cases
+(`scripts/detect-scope.sh`): the daily run at 06:00 UTC, a manual dispatch, and an hourly run
+that sees a version for the first time (a label other than the pin, with no pull request from
+its branch yet). Every other hourly run stops after reading the manifest. So a new IBKR build
+is normally found within the hour, while a re-upload under the pinned label, the refresh of an
+open pull request and the reopening of a closed one wait for the daily run (ADR 0009, ADR 0018).
+Scheduled runs are a target, not a guarantee: GitHub starts them late or drops them under load.
+Since 2026-11-17 the workflow is disabled, with `publish.yml` and `rebuild.yml`, until the
+package's access settings are done
+([ADR 0018, amendment](docs/adr/0018-private-image-public-build-recipe.md#amendment-2026-11-17-how-the-package-was-created-again)).
+What the full check decides:
 
 | IBKR serves | What happens |
 |---|---|
@@ -1304,8 +1316,9 @@ channels, downloads both installers and lets `scripts/release-decision.sh` decid
 | The pinned version, same bytes | Nothing |
 
 To hold one `stable` update, disable auto-merge on its pull request and leave the pull request
-open: the daily run enables auto-merge only on the run that creates the pull request, so it stays
-off. Do not close it: the next daily run would open a new one with auto-merge. To skip a version
+open: detection enables auto-merge only in the run that creates the pull request (an hourly run
+or the daily one), so it stays off. Do not close it: the next daily run would open a new one
+with auto-merge. To skip a version
 or stop all automatic merges:
 `gh variable set STABLE_AUTOMERGE --body false -R RocketEdge/brokersre-ib-gateway` (delete the
 variable to resume).

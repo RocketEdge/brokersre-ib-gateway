@@ -17,7 +17,11 @@ SHA-256 equal a pin of `versions.json`, which passed the project's offline CI. A
 a separate qualification (`scripts/qualify-paper.sh`), and a `stable` pin can move after CI
 alone (step 2).
 
-1. **Detection.** `detect-releases.yml` reads IBKR's `version.json` for each channel daily. A new
+1. **Detection.** `detect-releases.yml` reads IBKR's `version.json` for each channel hourly (at
+   minute 23). It downloads and hashes both installers (the full check) in the daily run at
+   06:00 UTC, on a manual dispatch and in an hourly run that sees a version for the first time
+   (`scripts/detect-scope.sh`, [ADR 0018](adr/0018-private-image-public-build-recipe.md)); a
+   re-upload under the pinned label is therefore found by the daily run. A new
    build produces a pull request that bumps `versions.json` with RocketEdge-computed SHA-256 for
    both architectures. `detect-ibc-release.yml` does the same for RocketEdge/ibc releases.
 2. **Merge** ([ADR 0009](adr/0009-stable-updates-merge-themselves.md)). `scripts/release-decision.sh`
