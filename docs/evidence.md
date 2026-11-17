@@ -69,7 +69,7 @@ cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/*/meta
 # B3 [B] applicationVersion="(.1h) 20261116 16:02:08", equal to the label ibkr.build_stamp
 docker run --rm --entrypoint cat brokersre-ib-gateway:stable //home/ibgateway/Jts/ibgateway/10.50.1h/.install4j/i4jparams.conf | grep -o 'applicationVersion="[^"]*"'
 # B4 [B] a CycloneDX SBOM of the local image with syft, read through the Docker socket: 9776 components
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:v1.54.0 brokersre-ib-gateway:stable -o cyclonedx-json > sbom.cdx.json
+MSYS_NO_PATHCONV=1 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:v1.54.0 brokersre-ib-gateway:stable -o cyclonedx-json > sbom.cdx.json
 jq '.components | length' sbom.cdx.json
 ```
 

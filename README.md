@@ -113,7 +113,7 @@ from Singapore):
 |---|---|
 | The image (`docker image inspect brokersre-ib-gateway:stable --format '{{.Size}}'`) | 1,622,526,158 bytes (1.6 GB) |
 | Docker's build cache of that build (`docker buildx du`, on a builder used for nothing else) | 3.55 GB; `docker builder prune` frees it |
-| The installer cache, per IB Gateway version and architecture | 344 MiB |
+| The installer cache, per IB Gateway version, architecture and SHA-256 | 344 MiB (x64), 211 MiB (arm64) |
 | The helper image `brokersre-ib-gateway-build-helper:local` | 232 MB |
 
 ### Build it
@@ -150,7 +150,7 @@ PASS  IBC command server listening on 7462 within 180s
 PASS  shutdown_complete event emitted
 
 ALL CONTAINER TESTS PASSED
-resolve-installer: cached 10.50.1h (x64) in /cache/installers/10.50.1h/x64
+resolve-installer: cached 10.50.1h (x64) in /cache/installers/10.50.1h/x64/eb578b23b636e19c8417fc969264853a22792bcffa8fc79990cf15ff032fe7aa
 ```
 
 and at the end, on standard output, seven `key: value` lines (here the build of 2026-11-17,
@@ -526,17 +526,26 @@ IBGW_IMAGE=localhost:5000/brokersre-ib-gateway@sha256:<digest> docker compose -f
 
 You should see `Image localhost:5000/brokersre-ib-gateway@sha256:<digest> Pulled`. `up -d
 --pull missing` with the same `IBGW_IMAGE` pulls and starts in one step (both run here against
-the local registry, the start in test mode without a login).
+the local registry, the start in test mode without a login). `pull --policy` needs Docker
+Compose 2.22.0 or later ([docker/compose#10981](https://github.com/docker/compose/pull/10981));
+with any version, pull the image by name first, then start as usual:
+
+```bash
+docker pull localhost:5000/brokersre-ib-gateway@sha256:<digest>
+```
 
 ### Building in your own CI
 
 A minimal GitHub Actions workflow for a **private** copy of this repository: it builds with the
-build helper and pushes to that account's GitHub Container Registry. Run it in a private
-repository, and after the first run check that the package is private (its page, *Package
-settings*): a package that a workflow publishes is linked to the repository the workflow runs
-in. The build runs on GitHub's Ubuntu runner, which has Docker and buildx; nothing is
-cached between runs, so every run downloads the installer from IBKR. Linted with actionlint
-1.7.12 (which runs shellcheck on the `run:` scripts), no finding; it has **not run** on GitHub.
+build helper and pushes to that account's GitHub Container Registry. The registry you push to
+must be private, and so must the repository: a fork of a public repository is public, and so
+are its workflow logs, so make a private copy (a new private repository with this one's
+contents) instead of a fork. After the first run check that the package is private (its page,
+*Package settings*): a package that a workflow publishes is linked to the repository the
+workflow runs in. The build runs on GitHub's Ubuntu runner, which has Docker and buildx;
+nothing is cached between runs, so every run downloads the installer from IBKR. Linted with
+actionlint 1.7.12 (which runs shellcheck on the `run:` scripts), no finding; it has
+**not run** on GitHub.
 
 ```yaml
 # .github/workflows/build-gateway-image.yml
@@ -545,14 +554,17 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "30 7 * * 1"   # Mondays 07:30 UTC
-permissions:
-  contents: read
-  packages: write          # push to this account's GitHub Container Registry
+permissions: {}
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # this job, and only this job, may push to the account's registry
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build with the build helper (the result lines go to build.txt)
         run: scripts/build-image.sh --channel stable --platform linux/amd64 > build.txt
       - name: Push to the private package

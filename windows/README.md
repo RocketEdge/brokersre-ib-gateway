@@ -434,9 +434,11 @@ SYSTEM and Administrators, inheritance off):
 | `kit.log`, `kit.log.1` | What the scheduled tasks did; at most 256 KB each |
 
 Elsewhere: the gateway image `brokersre-ib-gateway:stable` (and `:<version>`) in Docker, and
-the installer cache of the build in `%LOCALAPPDATA%\brokersre-ib-gateway` (one IB Gateway
-installer of about 360 MB per version, architecture and SHA-256, never pruned; `uninstall.ps1`
-removes neither; [how to see and clean it](../README.md#see-and-clean-the-installer-cache)); scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
+the installer cache of the build in `%LOCALAPPDATA%\brokersre-ib-gateway`, or, with Docker
+Engine in WSL (option B), in the distribution user's `~/.cache/brokersre-ib-gateway` (one IB
+Gateway installer of about 360 MB per version, architecture and SHA-256, never pruned;
+`uninstall.ps1` removes neither;
+[how to see and clean it](../README.md#see-and-clean-the-installer-cache)); scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
 three values under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`; with `-WslConfig`
 keys in `%UserProfile%\.wslconfig` (a `.brokersre-backup-<time>` copy is kept until undo); with
 `-FirewallLoopbackOnly` the rule `BrokerSRE-Gateway-Block-Api-Ports`; with `-DisableSleep` two
@@ -463,7 +465,7 @@ intentions, not facts. `doctor.ps1` tells you the outcome on your computer.
 | Ending a hung `docker compose up` together with its child processes | Proven with `cmd.exe` and a child process under both PowerShell editions, not with a real hung `docker compose` | If `kit.log` reports a failed start and the gateway starts anyway, report it |
 | `-ResetSecrets` replacing the container | Only the reason was measured (Docker Compose 2 leaves a running container untouched when only a secret file's content changed; `--force-recreate` replaces it), with a small test container | After `-ResetSecrets`, `docker ps` shows the gateway container "Up" for seconds, not days |
 | The C# snippet | Not compiled by this repository | Build it against IBKR's TWS API client |
-| The image build through `setup.ps1` with Docker Engine inside WSL (option B) | Tested with a mocked `wsl.exe` only: `bash scripts/build-image.sh` in the distribution, with the repository on the Windows drive as the working directory | Run `.\setup.ps1 -Runtime WslEngine` on a computer where the image is not built yet |
+| The image build through `setup.ps1` with Docker Engine inside WSL (option B) | Tested with a mocked `wsl.exe` only (the development computer has no WSL distribution of its own): setup copies the repository into a temporary directory of the distribution (`mktemp -d`, `tar`), runs `bash scripts/build-image.sh` there, never from `/mnt/c` (which shows every file as 0777), and removes the copy; the installer cache is the distribution user's `~/.cache/brokersre-ib-gateway` | Run `.\setup.ps1 -Runtime WslEngine` on a computer where the image is not built yet |
 
 ## How the kit is tested
 

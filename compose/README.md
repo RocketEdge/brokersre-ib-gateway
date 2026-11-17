@@ -40,7 +40,10 @@ registry is pulled on purpose, once, after `docker login <registry>`:
 IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:<digest> docker compose -f compose/docker-compose.example.yml pull --policy missing
 ```
 
-`up -d --pull missing` does the same as part of the start.
+`up -d --pull missing` does the same as part of the start. `pull --policy` needs Docker Compose
+2.22.0 or later ([docker/compose#10981](https://github.com/docker/compose/pull/10981)); with any
+version, `docker pull <registry>/brokersre-ib-gateway@sha256:<digest>` before `up` does the
+same.
 
 ## The one rule: one username per gateway
 

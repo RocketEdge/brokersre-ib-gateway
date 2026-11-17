@@ -29,7 +29,8 @@ name: ibgw-multi
 x-gateway: &gateway
   image: ${IBGW_IMAGE:-brokersre-ib-gateway:stable}
   # Never fetch an image: a name this host does not have fails at once ("No such image").
-  # An image from your own registry is pulled on purpose: `pull --policy missing`.
+  # An image from your own registry is pulled on purpose: `docker pull <image>`, or
+  # `pull --policy missing` (Compose 2.22.0 and later).
   pull_policy: never
   restart: unless-stopped
   read_only: true
