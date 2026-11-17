@@ -200,6 +200,16 @@ new_run() {
   find "${cache}/runs" -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
   run_dir="$(mktemp -d "${cache}/runs/run-XXXXXXXX")"
   run_id="$(basename "${run_dir}")"
+  # A resolve that fails (mismatch, --strict, unreachable) removes its run, and with it a
+  # download of several hundred megabytes; only a resolved run waits for accept or discard.
+  trap remove_failed_run EXIT
+}
+
+# remove_failed_run: the EXIT trap of a resolve; on a non-zero exit, remove the run directory.
+# shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
+remove_failed_run() {
+  local code=$?
+  if [ "${code}" -ne 0 ] && [ -n "${run_dir:-}" ]; then rm -rf "${run_dir}"; fi
 }
 
 # resolve_installer_file: the --installer path: everything from the file itself.

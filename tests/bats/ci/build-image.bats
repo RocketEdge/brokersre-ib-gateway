@@ -183,6 +183,11 @@ installer_requests() {
   grep -c "^GET /$1-standalone/ibgateway-$1-standalone-linux-$2.sh$" "${WORK}/requests.log" || true
 }
 
+# no_runs_left: a failed resolve or build leaves no run directory (with its download) behind.
+no_runs_left() {
+  [ -z "$(ls -A "${CACHE}/runs" 2>/dev/null)" ]
+}
+
 # last_lines: the seven machine-readable lines the interface promises at the end of stdout.
 last_lines() {
   printf '%s\n' "$output" | tail -n 7
@@ -256,6 +261,7 @@ last_lines() {
   [[ "$stderr" == *"$(sha256_of "${WORK}/reupload.sh")"* ]]
   [ ! -e "${WORK}/stub/buildx-args" ]
   [ ! -e "${CACHE}/installers/10.50.1g" ]
+  no_runs_left
 }
 
 @test "IBKR moved past the pin: falls forward, checked against IBKR's stamp, built not qualified with a warning" {
@@ -293,6 +299,7 @@ last_lines() {
   [[ "$stderr" == *"(.1h) 20261116 16:02:07"* ]]
   [ ! -e "${WORK}/stub/buildx-args" ]
   [ ! -e "${CACHE}/installers/10.50.1h" ]
+  no_runs_left
 }
 
 @test "version.json changes during the download: one retry, and the build uses the second answer" {
@@ -321,6 +328,7 @@ last_lines() {
   [[ "$stderr" == *"changed during the download"* ]]
   [ "$(installer_requests stable x64)" -eq 2 ]
   [ ! -e "${WORK}/stub/buildx-args" ]
+  no_runs_left
 }
 
 @test "--strict and IBKR serves another version: exit 4 before any download" {
@@ -331,6 +339,7 @@ last_lines() {
   [[ "$stderr" == *"10.50.1h"*"10.50.1g"* ]]
   [ "$(installer_requests stable x64)" -eq 0 ]
   [ ! -e "${WORK}/stub/buildx-args" ]
+  no_runs_left
 }
 
 @test "--strict and IBKR serves the pin: built, qualified" {
@@ -478,6 +487,7 @@ last_lines() {
   [ "$status" -eq 1 ]
   [ ! -e "${CACHE}/installers/10.50.1h" ]
   [ ! -e "${REPO}/downloads/ibgateway-10.50.1h-standalone-linux-x64.sh" ]
+  no_runs_left
 }
 
 @test "a failed smoke test exits 1 and caches nothing" {
