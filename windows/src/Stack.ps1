@@ -416,8 +416,8 @@ function Get-GwImageBuildChannel {
     the image it builds 'brokersre-ib-gateway:<channel>' and 'brokersre-ib-gateway:<version>'
     (ADR 0018). Only the two channel names can be built on request: a version tag names one
     Gateway build, which IBKR may no longer serve, and a name with a registry path is an image
-    the operator keeps elsewhere. There is no public image to pull instead (the image holds
-    IBKR's installed software; ADR 0018).
+    the operator keeps elsewhere. RocketEdge no longer distributes a public image to pull
+    instead (the image holds IBKR's installed software; ADR 0018).
     .PARAMETER ImageRef
     Image reference from setup's -ImageRef.
     .OUTPUTS

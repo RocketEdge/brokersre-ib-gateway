@@ -142,9 +142,10 @@ no public IP, every inbound connection denied, a NAT gateway for outbound traffi
 a daily patch window that never reboots on its own. It takes **no IBKR credential as a
 parameter**.
 
-**The gateway image.** There is no public image of the gateway (it contains IBKR's software;
-[README, "Why there is no public image"](../README.md#why-there-is-no-public-image)). Build it
-on your workstation ([README, "Build the image"](../README.md#build-the-image)), push it to a
+**The gateway image.** RocketEdge no longer distributes a public image of the gateway (it
+contains IBKR's software, and the former public package is being withdrawn;
+[README, "Why you build the image yourself"](../README.md#why-you-build-the-image-yourself)).
+Build it on your workstation ([README, "Build the image"](../README.md#build-the-image)), push it to a
 private registry of your own, here Azure Container Registry, and pass its digest as
 `gatewayImage`:
 
@@ -362,8 +363,8 @@ pricing pages). Retention beyond the included days is extra.
   metrics wait; raw lines are dropped instead, so they can never hold back the rows the alerts
   depend on.
 - The dead-man rule knows a gateway for two days after its last row.
-- The optional VM pulls the gateway image without a registry login, and there is no public
-  image: with the image in a private registry the stack does not start until someone logs the
+- The optional VM pulls the gateway image without a registry login, and RocketEdge no longer
+  distributes a public image: with the image in a private registry the stack does not start until someone logs the
   VM in to that registry ([One-click VM](#one-click-vm-optional), limitations L37).
 - The alert rules run with the access of whoever deployed them last.
 - An account id is recognised by its shape only, and the shape is IBKR's documented prefixes

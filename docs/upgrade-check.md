@@ -1,6 +1,6 @@
 # Is a newer IB Gateway available?
 
-There is no public image: you build it ([README, "Build the image"](../README.md#build-the-image)),
+RocketEdge no longer distributes a public image: you build it ([README, "Build the image"](../README.md#build-the-image)),
 and nothing you run changes until you build again. Two questions, two tools; both only ask and
 report, and neither downloads, builds, pulls, starts, stops or restarts anything. Whether and
 when to rebuild and move stays a person's decision

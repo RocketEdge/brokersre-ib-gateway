@@ -6,9 +6,9 @@ checked against IBKR's own build stamp), no `sudo`, a read-only root filesystem,
 `HEALTHCHECK`, the IBC command server on loopback, structured JSON on stdout and raw logs on
 a shared volume, `tini` as PID 1, amd64 and arm64.
 
-**You build the image yourself**, with one command and nothing but Docker: there is no public
-image ([why](#why-there-is-no-public-image)). [Build the image](#build-the-image) is the
-recipe.
+**You build the image yourself**, with one command and nothing but Docker: RocketEdge no longer
+distributes a public image ([why](#why-you-build-the-image-yourself)).
+[Build the image](#build-the-image) is the recipe.
 
 Derived from [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker) (MIT) and
 maintained by [RocketEdge](https://rocketedge.com) as the gateway image of its
@@ -55,7 +55,7 @@ IBC in it and prints what it built. Everything below was run on a Windows 11 com
 Docker Desktop 29.9.3 (Git Bash, PowerShell 7 and Windows PowerShell 5.1) on 2026-11-17;
 what was not run is marked **not tested**.
 
-- [Why there is no public image](#why-there-is-no-public-image)
+- [Why you build the image yourself](#why-you-build-the-image-yourself)
 - [What you need](#what-you-need)
 - [Build it](#build-it)
 - [What the last lines mean](#what-the-last-lines-mean)
@@ -71,12 +71,14 @@ what was not run is marked **not tested**.
 - [Coming from the public image](#coming-from-the-public-image)
 - [Troubleshooting the build](#troubleshooting-the-build)
 
-### Why there is no public image
+### Why you build the image yourself
 
 The image contains IB Gateway as installed from IBKR's installer, and IB Gateway is IBKR's
-software. RocketEdge does not redistribute it, so it publishes no image that contains it: the
-image RocketEdge builds for its own BrokerSRE service is private. This repository is the
-recipe instead. When you build, your machine downloads IB Gateway from IBKR itself, under your
+software. RocketEdge no longer distributes a public image that contains IB Gateway; the former
+public package `ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn (decided
+2026-11-17). RocketEdge's own signed image, built from this recipe for its BrokerSRE service,
+is published only privately from then on. This repository is the recipe instead. When you
+build, your machine downloads IB Gateway from IBKR itself, under your
 own agreement with IBKR, and the image stays with you (keep it in a private registry if you
 move it, [below](#pushing-to-your-own-private-registry)). The decision is
 [ADR 0018](docs/adr/0018-private-image-public-build-recipe.md).
@@ -1050,9 +1052,9 @@ credentials enter through `_FILE` variables, are rendered into
 `/run/brokersre/config.ini` (tmpfs, mode 0600) and are removed from the environment before any
 child process starts; every build input is verified at build time (the base image and IBC by
 SHA-256, the Gateway installer by SHA-256 or, when IBKR has moved past the pin, by IBKR's own
-build stamp before and after installation). RocketEdge's own image (private, for BrokerSRE) is
-signed (keyless cosign), carries one CycloneDX SBOM per platform and GitHub build provenance,
-and both platforms are scanned by Trivy v0.76.2 before any tag moves; an image you build has
+build stamp before and after installation). RocketEdge's own image (for BrokerSRE; its former
+public package is being withdrawn) is signed (keyless cosign), carries one CycloneDX SBOM per
+platform and GitHub build provenance, and both platforms are scanned by Trivy v0.76.2 before any tag moves; an image you build has
 none of that unless you add it. See [SECURITY.md](SECURITY.md).
 
 ## Verifying what you built
@@ -1106,9 +1108,10 @@ build, `ibgatewaystable_callback({"buildVersion":"10.50.1h","buildDateTime":"202
 docker compose -f compose/docker-compose.example.yml logs ib-gateway | grep container_start
 ```
 
-RocketEdge's own image, built from the same recipe for its BrokerSRE service, is private; its
-signature, SBOMs and provenance are verified by BrokerSRE before a client pins a digest, and
-are not available to the public.
+RocketEdge's own image is built from the same recipe for its BrokerSRE service; its signature,
+SBOMs and provenance are verified by BrokerSRE before a client pins a digest. Its former public
+package is being withdrawn (decided 2026-11-17), after which they are not available to the
+public; an image you build has none of them unless you add them.
 
 ## Evidence for due diligence
 
@@ -1160,7 +1163,7 @@ Every new IB Gateway version this repository pins, and every OS-patch rebuild of
 own image, creates a [release](https://github.com/RocketEdge/brokersre-ib-gateway/releases).
 For you a release means: pull this repository and build again. Its digests and assets
 (`digests-<channel>.json`, the SBOMs, `ibgateway-vendor-jars.openvex.json`) describe
-RocketEdge's private image; the VEX document applies to any image of the same Gateway version.
+RocketEdge's own image; the VEX document applies to any image of the same Gateway version.
 When an already released version is rebuilt (an image fix, no new IB Gateway), its release is
 updated in place, which GitHub does not announce. Follow the releases in either of two ways:
 
@@ -1328,8 +1331,8 @@ file, JSON event contract on stdout and on the log volume, a preflight (`doctor`
 variables carried over from gnzsnz which this image ignores, a relay that follows the login,
 resource samples, command server on loopback, checksum pinning of every input, a build helper
 that checks IBKR's installer against IBKR's own build stamp, read-only filesystem support.
-gnzsnz publishes an image; this project does not ([why](#why-there-is-no-public-image)): build
-yours with [Build the image](#build-the-image).
+gnzsnz publishes an image; this project no longer distributes one
+([why](#why-you-build-the-image-yourself)): build yours with [Build the image](#build-the-image).
 `scripts/migrate-from-gnzsnz.sh old.env > new.env` converts a gnzsnz `.env` file and reports
 every variable it dropped or renamed on stderr, without printing a value.
 
@@ -1353,5 +1356,5 @@ MIT, see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). IBC is GPL-3.0 and is ag
 linked; its licence text ships at `/usr/share/doc/ibc/LICENSE.txt` and its complete source is the
 tagged release in [RocketEdge/ibc](https://github.com/RocketEdge/ibc). IB Gateway is Interactive
 Brokers' software, fetched from IBKR at build time under IBKR's terms; it is not redistributed
-from this repository, and RocketEdge publishes no image that contains it
-([why](#why-there-is-no-public-image)).
+from this repository, and RocketEdge no longer distributes a public image that contains it
+([why](#why-you-build-the-image-yourself)).

@@ -26,8 +26,8 @@ is a tested one.
 
 Every file runs the image you built with `scripts/build-image.sh` or `scripts/build-image.ps1`
 ([README, "Build the image"](../README.md#build-the-image)), tagged
-`brokersre-ib-gateway:stable`; there is no public image to pull. Before you rely on a file,
-name an image that cannot move: the version tag the build printed
+`brokersre-ib-gateway:stable`; RocketEdge no longer distributes a public image. Before you
+rely on a file, name an image that cannot move: the version tag the build printed
 (`IBGW_IMAGE=brokersre-ib-gateway:10.50.1h`, for example) or the digest of your copy in your
 own private registry (`IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...`).
 

@@ -334,8 +334,9 @@ function Initialize-GwGatewayImage {
     .SYNOPSIS
     Makes sure the gateway image is on this computer before setup starts the stack.
     .DESCRIPTION
-    There is no public image of the gateway: it holds IBKR's installed software, which
-    RocketEdge does not redistribute (ADR 0018), so each operator builds it from the repository.
+    RocketEdge no longer distributes a public image of the gateway: it holds IBKR's installed
+    software (ADR 0018; the former public package is being withdrawn), so each operator builds
+    it from the repository.
     Decision, in this order:
     - the image is on this computer (Test-GwImagePresent, read-only): nothing to do;
     - it is brokersre-ib-gateway:stable or :latest (Get-GwImageBuildChannel): build it with the
@@ -413,8 +414,8 @@ function Invoke-GwSetup {
     5. Renders compose.yaml from the template. An existing, different compose.yaml is never
        replaced unless -Force is given (a backup is kept), so a re-run cannot silently switch
        paper to live or recreate a running gateway.
-    6. The image, then 'docker compose up -d' (both skipped with -NoStart). There is no public
-       image (ADR 0018): when the image is not on this computer and it is one the repository's
+    6. The image, then 'docker compose up -d' (both skipped with -NoStart). RocketEdge no longer
+       distributes a public image (ADR 0018): when the image is not on this computer and it is one the repository's
        build script makes (brokersre-ib-gateway:stable or :latest), setup builds it with
        scripts\build-image.ps1 (Invoke-GwImageBuild) and starts nothing when the build fails;
        another local name that is missing stops setup with the command to build it; a name

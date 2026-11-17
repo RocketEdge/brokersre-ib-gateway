@@ -132,8 +132,9 @@ hardening='def hardening: {image, pull_policy, restart, read_only, tmpfs, securi
 echo "== defaults: the image scripts/build-image.sh makes, and no image is ever pulled by surprise =="
 # The files as a reader starts them after the build: no IBGW_IMAGE and no STRATEGY_IMAGE, so
 # the default tag brokersre-ib-gateway:stable that scripts/build-image.sh gives the image.
-# pull_policy never: there is no public image (ADR 0018), so a name this host does not have
-# must fail at once instead of being looked up in a registry (Docker Hub, for a bare name).
+# pull_policy never: RocketEdge no longer distributes a public image (ADR 0018), so a name this
+# host does not have must fail at once instead of being looked up in a registry (Docker Hub,
+# for a bare name).
 # shipped_config FILE ARGS...: `docker compose config` of FILE with the shipped defaults; with
 # DEFAULTS_IMAGE set, IBGW_IMAGE is that and nothing else is set.
 shipped_config() {

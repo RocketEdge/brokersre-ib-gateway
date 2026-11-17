@@ -1,5 +1,6 @@
-# Reference compose for brokersre-ib-gateway. There is no public image: build it first with
-# scripts/build-image.sh (README, "Build the image"), which tags it brokersre-ib-gateway:stable.
+# Reference compose for brokersre-ib-gateway. RocketEdge no longer distributes a public image:
+# build it with scripts/build-image.sh (README, "Build the image"), which tags it
+# brokersre-ib-gateway:stable.
 # In production name an image that cannot move: the version tag the build printed
 # (IBGW_IMAGE=brokersre-ib-gateway:<version>) or a digest in your own private registry
 # (IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...).

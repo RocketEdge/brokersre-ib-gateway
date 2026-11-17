@@ -4,11 +4,13 @@ Which artefact of this image answers which question of a due-diligence questionn
 command that produces the evidence. The page covers this container image only: your strategy
 code, your host, your network and your IBKR account settings are yours to evidence.
 
-**There is no public image any more** (2026-11-17, [ADR 0018](adr/0018-private-image-public-build-recipe.md)):
-you build the image from this repository
-([README, "Build the image"](../README.md#build-the-image)). The commands marked **[P]** below
-were run against the image RocketEdge published until then; RocketEdge's image is private
-from now on and keeps its signature, SBOMs, provenance and releases for its BrokerSRE service.
+**RocketEdge no longer distributes a public image** (decided 2026-11-17,
+[ADR 0018](adr/0018-private-image-public-build-recipe.md); the former public package
+`ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn): you build the image from this
+repository ([README, "Build the image"](../README.md#build-the-image)). The commands marked
+**[P]** below were run against the image RocketEdge published; RocketEdge's image keeps its
+signature, SBOMs, provenance and releases for its BrokerSRE service, and once the public
+package is withdrawn only those who may pull it privately can repeat them.
 For an image you built, start with [An image you built](#an-image-you-built); the questions
 from "Who can reach the API?" on concern what the image does at run time and apply to any
 image built from this repository.

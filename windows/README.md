@@ -53,7 +53,7 @@ Every script that changes something accepts `-WhatIf` (show what would happen, c
 | WSL 2, version 2.1.5 or later (Docker Desktop's documented minimum) | `wsl --version`; install with `wsl --install`, update with `wsl --update` |
 | A container runtime, see the next section | `docker version` |
 | 8 GB RAM or more, 10 GB free disk (the first build of the image needs about 6 GB of it) | |
-| This repository on the computer (clone or ZIP): there is no public image, `setup.ps1` builds it from the repository the kit came with | `..\scripts\build-image.ps1` exists next to the kit folder |
+| This repository on the computer (clone or ZIP): RocketEdge no longer distributes a public image, so `setup.ps1` builds it from the repository the kit came with | `..\scripts\build-image.ps1` exists next to the kit folder |
 | An IBKR username with IBKR Mobile (IB Key) enrolled for two-factor authentication | Log in once to Client Portal |
 | For paper trading: the paper trading username, not the live one | |
 
@@ -140,9 +140,11 @@ first: compose pulls it). Setup builds only `brokersre-ib-gateway:stable` and `:
 for any other name you build the image yourself first
 ([README of the repository, "Build the image"](../README.md#build-the-image)).
 
-There is no public image of the gateway: it contains IB Gateway, IBKR's software, which
-RocketEdge does not redistribute. The build downloads it from IBKR on your computer, under
-your own agreement with IBKR.
+RocketEdge no longer distributes a public image of the gateway (the image contains IB Gateway,
+IBKR's software; the former public package `ghcr.io/rocketedge/brokersre-ib-gateway` is being
+withdrawn, decided 2026-11-17). The build downloads IB Gateway from IBKR on your computer,
+under your own agreement with IBKR. Coming from the kit's former default, the public image:
+[Coming from the public image](#coming-from-the-public-image).
 
 If you were too slow with the phone, run `.\setup.ps1` again: it keeps your secrets, changes
 nothing that is already right and follows the login again. The gateway keeps prompting by itself.

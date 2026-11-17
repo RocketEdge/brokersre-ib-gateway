@@ -13,8 +13,8 @@ using 'vm.bicep'
 param adminSshPublicKey = '<ssh-ed25519 AAAA... you@your-machine>'
 
 // The gateway image, pinned by digest, in your own private registry: build it with
-// scripts/build-image.sh and push it there (azure/README.md, "The gateway image"). There is no
-// public image. The VM has no registry login yet (docs/limitations.md L37).
+// scripts/build-image.sh and push it there (azure/README.md, "The gateway image"). RocketEdge
+// no longer distributes a public image. The VM has no registry login yet (docs/limitations.md L37).
 param gatewayImage = '<registry>.azurecr.io/brokersre-ib-gateway@sha256:<64-hex-digest>'
 
 // The commit of this repository the VM runs: git rev-parse HEAD (40 characters; the zeros

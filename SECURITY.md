@@ -24,11 +24,13 @@ business days (Singapore time), remediation plan within ten.
   installer by SHA-256 against the pin, or, when IBKR has moved past the pin, against IBKR's
   own build stamp before and after installation, and then labelled not qualified by the
   project; [limitations](docs/limitations.md) L35).
-- **There is no public image** ([ADR 0018](docs/adr/0018-private-image-public-build-recipe.md)):
-  you build it with `scripts/build-image.sh` or `.ps1`, and what an image you built carries is
-  in the README ("Verifying what you built"). RocketEdge's own image, private and used by its
-  BrokerSRE service, is signed with Sigstore cosign (keyless, GitHub Actions identity) and
-  carries GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
+- **RocketEdge no longer distributes a public image**
+  ([ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the former public package
+  `ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn, decided 2026-11-17): you build
+  the image with `scripts/build-image.sh` or `.ps1`, and what an image you built carries is in
+  the README ("Verifying what you built"). RocketEdge's own image, used by its BrokerSRE service
+  and published only privately once the public package is withdrawn, is signed with Sigstore
+  cosign (keyless, GitHub Actions identity) and carries GitHub build provenance; both platforms are scanned by Trivy before any tag moves.
   The scanner (Trivy v0.76.2) and the actions of the publish and rebuild workflows are pinned
   inputs too: one version, and a commit per action. The points below about SBOMs, signatures,
   the gate and rebuilds describe that image.

@@ -19,7 +19,8 @@ scripts for this window only:  Set-ExecutionPolicy -Scope Process -ExecutionPoli
 Gateway folder. Default C:\BrokerSRE\gateway.
 .PARAMETER ImageRef
 Image to run. Default brokersre-ib-gateway:stable, which setup builds from this repository
-(..\scripts\build-image.ps1) when it is not on this computer; there is no public image. In
+(..\scripts\build-image.ps1) when it is not on this computer; RocketEdge no longer distributes
+a public image. In
 production name a digest in your own private registry (<registry>/...@sha256:...).
 .PARAMETER Live
 Live trading (API on 127.0.0.1:4001). Without it: paper trading (127.0.0.1:4002).
