@@ -59,7 +59,7 @@ setup() {
   write_stub_docker
   export PATH="${WORK}/bin:${PATH}"
   export STUB_DIR="${WORK}/stub"
-  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC
+  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC
   start_server
   export BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:${PORT}"
 }
@@ -107,6 +107,7 @@ case "$1" in
   image) echo "sha256:$(printf '%s' "${*: -1}" | sha256sum | cut -c1-64)" ;;
   exec) exit "${STUB_EXEC_RC:-0}" ;;
   run)
+    if [ -n "${STUB_RUN_RC:-}" ]; then exit "${STUB_RUN_RC}"; fi
     shift
     case " $* " in *" brokersre-ib-gateway-build-helper:local "*) ;; *) exit 0 ;; esac
     mounts=()
@@ -836,4 +837,13 @@ cached_meta() {
   cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
   [ ! -e "${WORK}/stub/buildx-args" ]
   no_runs_left
+}
+
+@test "a docker failure outside the contract's codes (125: daemon or mount error) exits 1" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  STUB_RUN_RC=125 build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"exit 125"* ]]
+  STUB_RUN_RC=126 build --print-plan
+  [ "$status" -eq 1 ]
 }

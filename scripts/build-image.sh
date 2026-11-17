@@ -177,9 +177,16 @@ if [ -n "${installer}" ]; then set -- "$@" --installer "/installer/${installer_n
 if [ "${print_plan}" = yes ]; then set -- "$@" --print-plan; fi
 rc=0
 plan="$(helper "$@")" || rc=$?
-if [ "${rc}" -ne 0 ]; then
-  exit "${rc}" # the helper said why on stderr
-fi
+case "${rc}" in
+  0) ;;
+  1 | 2 | 3 | 4) exit "${rc}" ;; # the helper said why on stderr
+  *)
+    # Not the helper's answer: docker itself failed (125 daemon or mount error, 126/127 the
+    # command could not run). The contract has no such code; it is a failed build.
+    say "the helper container did not run (docker exit ${rc})"
+    exit 1
+    ;;
+esac
 
 # value KEY: the value of the plan line `KEY: value`.
 value() { printf '%s\n' "${plan}" | sed -n "s/^$1: //p" | sed -n 1p; }

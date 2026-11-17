@@ -167,9 +167,12 @@ Describe 'Invoke-BuildImage' {
         $script:results[-2] | Should -Be 'image: example.test/gw:a'
     }
 
-    It 'returns the helper''s exit code <code> and builds nothing' -TestCases @(@{ code = 1 }, @{ code = 3 }, @{ code = 4 }) {
+    It 'maps the helper''s exit code <code> to <expected> and builds nothing' -TestCases @(
+        @{ code = 1; expected = 1 }, @{ code = 2; expected = 2 }, @{ code = 3; expected = 3 }, @{ code = 4; expected = 4 },
+        @{ code = 125; expected = 1 }, @{ code = 126; expected = 1 }
+    ) {
         $script:resolveExit = $code
-        Invoke-BuildImage -ArgumentList @('-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be $code
+        Invoke-BuildImage -ArgumentList @('-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be $expected
         (Get-TestCall -Calls $script:calls -Marker '--platform').Count | Should -Be 0
         $script:results.Count | Should -Be 0
     }
