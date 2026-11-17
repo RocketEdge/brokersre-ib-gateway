@@ -310,16 +310,47 @@ Describe 'Invoke-BuildImage' {
         }
     }
 
-    It 'labels the build with its time (UTC) and the revision Get-BiRevision gives (<revision>)' -TestCases @(
+    It 'labels the build with the revision Get-BiRevision gives (<revision>) and a created time that two builds share' -TestCases @(
         @{ revision = ('c' * 40) }, @{ revision = 'unknown' }
     ) {
+        # Outside a git work tree (the test's repository folder) created is IBKR's installer build
+        # time from the plan's stamp, (.1h) 20261116 16:02:08: never the wall clock, so that an
+        # unchanged rebuild keeps its image id.
         Mock Get-BiRevision { return $revision }
         Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
-        $build = (Get-TestCall -Calls $script:calls -Marker '--platform')[0]
-        Test-Sequence -Actual $build -Expected @('--label', ('org.opencontainers.image.revision={0}' -f $revision)) | Should -BeTrue
-        $created = @($build | Where-Object { $_ -like 'org.opencontainers.image.created=*' })
-        $created.Count | Should -Be 1
-        $created[0] | Should -Match '^org\.opencontainers\.image\.created=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+        Start-Sleep -Seconds 1
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $builds = Get-TestCall -Calls $script:calls -Marker '--platform'
+        $builds.Count | Should -Be 2
+        foreach ($build in $builds) {
+            Test-Sequence -Actual $build -Expected @('--label', ('org.opencontainers.image.revision={0}' -f $revision)) | Should -BeTrue
+            Test-Sequence -Actual $build -Expected @('--label', 'org.opencontainers.image.created=2026-11-16T16:02:08Z') | Should -BeTrue
+        }
+    }
+
+    It 'Get-BiCreated gives the commit time in UTC in a git work tree (a new commit, a new time) and the stamp elsewhere' {
+        Get-BiCreated -RepoRoot $script:repo -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-09T16:10:13Z'
+        if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+            $work = Join-Path $TestDrive ('git-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $work | Out-Null
+            $saved = $env:GIT_COMMITTER_DATE
+            $savedPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & git -C $work init -q 2>$null
+                $env:GIT_COMMITTER_DATE = '2026-11-17T17:59:32+08:00'
+                & git -C $work -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m one 2>$null
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-17T09:59:32Z'
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-17T09:59:32Z'
+                $env:GIT_COMMITTER_DATE = '2026-11-18T08:00:00Z'
+                & git -C $work -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m two 2>$null
+                Get-BiCreated -RepoRoot $work -Stamp '(.1g) 20261109 16:10:13' | Should -Be '2026-11-18T08:00:00Z'
+            }
+            finally {
+                $env:GIT_COMMITTER_DATE = $saved
+                $ErrorActionPreference = $savedPreference
+            }
+        }
     }
 
     It 'Get-BiRevision names the commit of a git work tree and unknown elsewhere' {

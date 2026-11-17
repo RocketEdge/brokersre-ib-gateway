@@ -236,6 +236,42 @@ function Get-BiRevision {
     return 'unknown'
 }
 
+function Get-BiCreated {
+    <#
+    .SYNOPSIS
+    The image's org.opencontainers.image.created: the same for the same inputs, never the clock.
+    .DESCRIPTION
+    The commit time of the checkout at RepoRoot in UTC; outside a git work tree (or without git)
+    IBKR's build time of the installer, the buildDateTime of Stamp as ISO 8601 (IBKR names no
+    time zone; it is written as UTC). An unchanged rebuild on the same builder then keeps its
+    image id, so 'docker compose up -d' does not start the gateway again with a new login.
+    The error preference is lowered in this function only (Windows PowerShell 5.1 and git's
+    redirected standard error).
+    .PARAMETER RepoRoot
+    The repository root.
+    .PARAMETER Stamp
+    The plan's ibkr_build_stamp, '(.<suffix>) <yyyyMMdd HH:mm:ss>'.
+    .OUTPUTS
+    System.String: yyyy-MM-ddTHH:mm:ssZ, or empty when neither source gives a time.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [AllowEmptyString()][string]$Stamp = '')
+    $invariant = [Globalization.CultureInfo]::InvariantCulture
+    if ($null -ne (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        $ErrorActionPreference = 'Continue'
+        $iso = (@(& git -C $RepoRoot log -1 --format=%cI 2>$null) -join '').Trim()
+        $parsed = [DateTimeOffset]::MinValue
+        if ($LASTEXITCODE -eq 0 -and $iso -and [DateTimeOffset]::TryParse($iso, $invariant, [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+            return $parsed.UtcDateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", $invariant)
+        }
+    }
+    if ($Stamp -match ' (\d{4})(\d{2})(\d{2}) (\d{2}:\d{2}:\d{2})$') {
+        return ('{0}-{1}-{2}T{3}Z' -f $Matches[1], $Matches[2], $Matches[3], $Matches[4])
+    }
+    return ''
+}
+
 function ConvertTo-BiTrimmedPath {
     <#
     .SYNOPSIS
@@ -547,9 +583,9 @@ function Invoke-BiBuildCore {
         # Predefined build arguments: usable in RUN, kept out of docker history and the image.
         foreach ($name in $proxyNames) { $build += @('--build-arg', $name) }
         if ($script:BiMetadataDir) { $build += @('--metadata-file', (Join-Path $script:BiMetadataDir 'image.json')) }
-        # The build's own OCI labels, as build-image.sh and the bake path set them: the build
-        # time in UTC, to the second, and the commit of this checkout (Get-BiRevision).
-        $created = [DateTime]::UtcNow.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+        # The build's own OCI labels, as build-image.sh sets them: the commit of this checkout
+        # (Get-BiRevision) and a created time that the same inputs always give (Get-BiCreated).
+        $created = Get-BiCreated -RepoRoot $RepoRoot -Stamp (Get-BiPlanValue -Plan $plan -Key 'ibkr_build_stamp')
         $build += @('--label', ('org.opencontainers.image.created={0}' -f $created),
             '--label', ('org.opencontainers.image.revision={0}' -f (Get-BiRevision -RepoRoot $RepoRoot)))
         $build += @('-f', (Join-Path $RepoRoot 'Dockerfile'), $RepoRoot)

@@ -1030,25 +1030,45 @@ cached_meta() {
 
 # --- OCI labels of a helper build: created (build time, UTC) and revision (the commit).
 
-@test "a helper build is labelled with its build time (UTC) and revision unknown outside a git work tree" {
+# created_label: the org.opencontainers.image.created of the recorded build.
+created_label() {
+  buildx_option --label | sed -n 's/^org.opencontainers.image.created=//p'
+}
+
+@test "outside a git work tree: revision unknown, created is IBKR's installer build time, the same for every build" {
+  # Never the wall clock: a rebuild of the same inputs must keep its image id, or
+  # `docker compose up -d` would start the gateway again, with a new login.
   serve_version stable 10.50.1g "20261109 16:10:13"
   serve_installer stable x64 "${WORK}/pinned-x64.sh"
   build --no-smoke
   [ "$status" -eq 0 ]
-  [[ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.created=//p')" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+  [ "$(created_label)" = "2026-11-09T16:10:13Z" ]
   [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = unknown ]
+  sleep 1
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-09T16:10:13Z" ]
 }
 
-@test "a helper build from a git work tree is labelled with its commit" {
+@test "in a git work tree: revision is the commit, created its commit time in UTC; same commit same label, a new commit a new one" {
   require_command git
   git -C "${REPO}" init -q
   git -C "${REPO}" add -A
-  git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q -m test
+  GIT_COMMITTER_DATE="2026-11-17T17:59:32+08:00" git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q -m test
   serve_version stable 10.50.1g "20261109 16:10:13"
   serve_installer stable x64 "${WORK}/pinned-x64.sh"
   build --no-smoke
   [ "$status" -eq 0 ]
   [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = "$(git -C "${REPO}" rev-parse HEAD)" ]
+  [ "$(created_label)" = "2026-11-17T09:59:32Z" ]
+  sleep 1
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-17T09:59:32Z" ]
+  GIT_COMMITTER_DATE="2026-11-18T08:00:00Z" git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q --allow-empty -m next
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(created_label)" = "2026-11-18T08:00:00Z" ]
 }
 
 @test "the image's url label points at the README's build section, not the retired package page" {
@@ -1109,8 +1129,14 @@ cached_meta() {
   build --no-smoke
   [ "$status" -eq 0 ]
   [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = 0123456789abcdef0123456789abcdef01234567 ]
-  [ "$(cut -d'|' -f2 "${WORK}/stub/git-calls")" = "rev-parse HEAD" ]
-  [ "$(cut -d'|' -f1 "${WORK}/stub/git-calls")" = "${REPO}" ]
+  # Every call (the revision, then the commit time for `created`) runs in the checkout and
+  # names no path.
+  [ "$(sed -n 1p "${WORK}/stub/git-calls" | cut -d'|' -f2)" = "rev-parse HEAD" ]
+  while IFS='|' read -r cwd arguments; do
+    [ "${cwd}" = "${REPO}" ]
+    [[ "${arguments}" != *"-C "* ]]
+    [[ "${arguments}" != *"${REPO}"* ]]
+  done <"${WORK}/stub/git-calls"
 }
 
 @test "curl's error about a malformed proxy value is shown without the user name and password" {

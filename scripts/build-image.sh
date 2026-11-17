@@ -291,16 +291,24 @@ ${plan}
 EOF
 for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
 if [ -n "${metadata_dir}" ]; then set -- "$@" --metadata-file "$(host_path "${metadata_dir}/image.json")"; fi
-# The build's own OCI labels (the bake path sets the same through bake-env.sh): the build time
-# in UTC, to the second, and the commit of this checkout, or unknown when it is not a git work
-# tree (a downloaded archive). Without them the image showed the Ubuntu base image's `created`
-# and no revision. They change the image id from build to build, which a rebuild did anyway
-# (README, "Pinning and reproducing a build"): same Gateway and IBC, not the same image id.
-# Asked in the checkout, with no path argument: MSYS_NO_PATHCONV=1 (above) keeps Git Bash from
-# converting a POSIX path for git, which then cannot open it (the label said unknown).
+# The build's own OCI labels: the commit of this checkout (unknown outside a git work tree, a
+# downloaded archive) and a `created` time that is the same for the same inputs, never the wall
+# clock: the commit's time in UTC, or, outside a git work tree, IBKR's build time of the
+# installer (the stamp's buildDateTime as ISO 8601; IBKR names no time zone, it is written as
+# UTC). An unchanged rebuild on the same builder then keeps its image id, so `docker compose up
+# -d` does not start the gateway again (a new IBKR login). Without these labels the image showed
+# the Ubuntu base image's `created` and no revision. git is asked inside the checkout, with no
+# path argument: MSYS_NO_PATHCONV=1 (above) keeps Git Bash from converting a POSIX path for it.
 build_revision="$(cd "${repo_root}" && git rev-parse HEAD 2>/dev/null)" || build_revision=""
 case "${build_revision}" in "" | *[!0-9a-f]*) build_revision=unknown ;; esac
-set -- "$@" --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+build_created=""
+if [ "${build_revision}" != unknown ]; then
+  build_created="$(cd "${repo_root}" && TZ=UTC0 git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null)" || build_created=""
+fi
+if ! [[ "${build_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  build_created="$(value ibkr_build_stamp | sed -n -E 's/.* ([0-9]{4})([0-9]{2})([0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})$/\1-\2-\3T\4Z/p')"
+fi
+set -- "$@" --label "org.opencontainers.image.created=${build_created}" \
   --label "org.opencontainers.image.revision=${build_revision}"
 set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
 say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
