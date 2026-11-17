@@ -20,8 +20,13 @@ Next step.
   run downloads and hashes (daily, dispatch, first sight of a version) or stops after
   `version.json`. ADR 0018 records these and that stable bumps keep merging themselves; L39.
   Review of the pull request (same day): `publish.yml` gets a first job, `private-package`,
-  that pushes a placeholder without IBKR content and requires an anonymous read of it to be
-  refused (`scripts/check-package-private.sh`) before `publish` may start; the qualification
+  that pushes a placeholder without IBKR content and requires ghcr.io to refuse an anonymous
+  token request for it (`scripts/check-package-private.sh`) before `publish` may start, and
+  `publish` repeats the check right before its push. Re-review: the first version also read a
+  manifest 401/403/404 after a granted token as private, but ghcr.io answers token 200 and
+  manifest 404 for a public package's missing tag (observed 2026-11-17); a granted token now
+  counts as inconclusive unless the manifest is 200 (public). Tests now catch the gate step
+  passing on exit 3 and `continue-on-error` on the gate; the qualification
   logs in and pulls before the credential files exist (login pinned by commit);
   `qualified_by_project: yes` is defined as "equals the pin, which passed the offline CI, not
   a paper login" in both build scripts' help, the spec, ADR 0018 and L35; detection runs in

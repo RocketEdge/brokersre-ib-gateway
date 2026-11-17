@@ -9,7 +9,7 @@ flowchart LR
   bake --> df["Dockerfile stage 1: fetch-installer.sh verifies SHA-256, installs Gateway, checks its build stamp (--check-stamp); downloads IBC from RocketEdge/ibc, verifies SHA-256"]
   df --> rt["Dockerfile stage 2: ubuntu:26.04@digest + tini, Xvfb, socat, x11vnc, Java libs; uid 1000; rootfs/"]
   vj --> plan["plan: channel list (publish-channels.sh), no tag in both channels (check-bake-tags.sh)"]
-  gate["job private-package: placeholder FROM scratch pushed, anonymous read must be refused (check-package-private.sh)"] --> push
+  gate["job private-package: placeholder FROM scratch pushed; ghcr.io must refuse an anonymous token (check-package-private.sh); checked again right before the push"] --> push
   rt --> push["multi-arch build, no cache, pushed BY DIGEST (no tag) to the PRIVATE package (ADR 0018)"]
   push --> scan["Trivy v0.76.2 gate on linux/amd64 and linux/arm64 of that digest; each report checked for its platform"]
   scan --> sbom["one SBOM per platform, attested to that platform's manifest"]
