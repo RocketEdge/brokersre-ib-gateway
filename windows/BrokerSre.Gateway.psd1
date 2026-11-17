@@ -83,6 +83,7 @@
         'Invoke-GwStart'
         'Invoke-GwUninstall'
         'Invoke-GwW32tm'
+        'Invoke-GwWslImageBuild'
         'Invoke-GwWsl'
         'Move-GwFileOverwrite'
         'New-GwCheckResult'

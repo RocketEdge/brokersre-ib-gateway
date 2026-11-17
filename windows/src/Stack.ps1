@@ -499,12 +499,74 @@ function Invoke-GwImageBuild {
         return [pscustomobject]@{ Ran = $false; ExitCode = -1; Detail = 'not run (-WhatIf)' }
     }
     if ([string]$Runtime.Mode -eq 'WslEngine') {
-        $result = Invoke-GwWsl -ArgumentList @('-d', [string]$Runtime.Distro, '--cd', $RepositoryRoot, '--exec', 'bash', 'scripts/build-image.sh', '--channel', $Channel) -Interactive
+        return (Invoke-GwWslImageBuild -Distro ([string]$Runtime.Distro) -Channel $Channel -RepositoryRoot $RepositoryRoot)
     }
-    else {
-        $result = Invoke-GwPowerShellFile -Path $scriptPath -ArgumentList @('-Channel', $Channel) -Interactive
-    }
+    $result = Invoke-GwPowerShellFile -Path $scriptPath -ArgumentList @('-Channel', $Channel) -Interactive
     return [pscustomobject]@{ Ran = $true; ExitCode = [int]$result.ExitCode; Detail = '' }
+}
+
+function Invoke-GwWslImageBuild {
+    <#
+    .SYNOPSIS
+    Builds the gateway image inside a WSL distribution, from a copy of the repository in the
+    distribution's own file system.
+    .DESCRIPTION
+    WSL shows a Windows folder under /mnt/c (drvfs) with mode 0777 on every file and folder, and
+    a build from there would hand those modes to the image's build context; it is also slow.
+    So the tree is copied first, with no shell involved (every step is one 'wsl --exec'):
+    'mktemp -d' makes a temporary directory, 'wslpath -a' names the repository's Linux path,
+    'tar' packs the tree there into source.tar (without .git, downloads/ and tests/.bats-core),
+    and 'tar' unpacks it into <temp>/source as the distribution's user, whose umask removes
+    the write bits for group and others. Then 'bash scripts/build-image.sh --channel <channel>'
+    runs from that copy on the console (no deadline). The temporary directory is removed in
+    every case once it exists. The installer cache is the distribution user's
+    ~/.cache/brokersre-ib-gateway, not %LOCALAPPDATA%. The Dockerfile sets the modes of what
+    it copies itself as well, so the image does not depend on this copy either.
+    .PARAMETER Distro
+    WSL distribution that runs Docker Engine.
+    .PARAMETER Channel
+    'stable' or 'latest'.
+    .PARAMETER RepositoryRoot
+    Windows path of the repository checkout.
+    .OUTPUTS
+    PSCustomObject: Ran (false when the copy could not be made; then nothing was built),
+    ExitCode (the build script's; -1 when it did not run) and Detail (why it did not run).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Distro,
+        [Parameter(Mandatory = $true)][ValidateSet('stable', 'latest')][string]$Channel,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+    )
+    $notRun = { param([string]$Why) [pscustomobject]@{ Ran = $false; ExitCode = -1; Detail = $Why } }
+    $made = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'mktemp', '-d')
+    $temp = [string]($made.Output | Select-Object -First 1)
+    if ($made.ExitCode -ne 0 -or $temp -notmatch '\A/[A-Za-z0-9._/-]+\z') {
+        return (& $notRun ('the distribution {0} gave no temporary directory for a copy of the repository' -f $Distro))
+    }
+    try {
+        $mapped = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'wslpath', '-a', $RepositoryRoot)
+        $source = [string]($mapped.Output | Select-Object -First 1)
+        if ($mapped.ExitCode -ne 0 -or $source -eq '') {
+            return (& $notRun ('the copy of the repository into {0} failed: wslpath did not translate {1}' -f $Distro, $RepositoryRoot))
+        }
+        $steps = New-Object System.Collections.Generic.List[object]
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', $source, '--exclude=./.git', '--exclude=./downloads', '--exclude=./tests/.bats-core', '-cf', ('{0}/source.tar' -f $temp), '.'))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'mkdir', ('{0}/source' -f $temp)))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', ('{0}/source' -f $temp), '-xf', ('{0}/source.tar' -f $temp)))
+        foreach ($step in $steps) {
+            $done = Invoke-GwWsl -ArgumentList $step
+            if ($done.ExitCode -ne 0) {
+                return (& $notRun ('the copy of the repository into {0} failed ({1}: {2})' -f $Distro, $step[3], (($done.Output | Select-Object -First 1) -join '')))
+            }
+        }
+        $build = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--cd', ('{0}/source' -f $temp), '--exec', 'bash', 'scripts/build-image.sh', '--channel', $Channel) -Interactive
+        return [pscustomobject]@{ Ran = $true; ExitCode = [int]$build.ExitCode; Detail = '' }
+    }
+    finally {
+        Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'rm', '-rf', $temp) | Out-Null
+    }
 }
 
 function Wait-GwContainerEngine {

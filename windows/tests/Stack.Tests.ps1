@@ -219,12 +219,66 @@ Describe 'The gateway image on this computer' {
         }
     }
 
-    It 'builds with bash scripts/build-image.sh inside the distribution for Docker Engine in WSL' {
-        Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { Get-TestNativeResult }
-        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'PowerShell must not be called' }
-        Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false | Out-Null
-        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter {
-            ($ArgumentList -join '|') -eq ('-d|Ubuntu-24.04|--cd|{0}|--exec|bash|scripts/build-image.sh|--channel|latest' -f $script:repositoryRoot) -and $Interactive
+    Context 'Docker Engine in WSL: the build runs from a copy in the distribution''s own file system' {
+        BeforeEach {
+            # A mocked wsl.exe: mktemp and wslpath answer like Linux, the build's exit code and a
+            # failing step are set per test; every call is recorded as '<args joined by |> I=<interactive>'.
+            $script:wslCalls = New-Object System.Collections.Generic.List[string]
+            $script:wslBuildExit = 0
+            $script:wslFailStep = ''
+            Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl {
+                $joined = $ArgumentList -join '|'
+                $interactiveCall = [bool](Get-Variable -Name Interactive -ValueOnly -ErrorAction SilentlyContinue)
+                $script:wslCalls.Add(('{0} I={1}' -f $joined, $interactiveCall))
+                if ($script:wslFailStep -ne '' -and $joined -like $script:wslFailStep) { return (Get-TestNativeResult -ExitCode 2 -Output @('tar: failed')) }
+                if ($joined -eq '-d|Ubuntu-24.04|--exec|mktemp|-d') { return (Get-TestNativeResult -Output @('/tmp/tmp.k1T')) }
+                if ($joined -like '-d|Ubuntu-24.04|--exec|wslpath|-a|*') { return (Get-TestNativeResult -Output @('/mnt/c/src/brokersre-ib-gateway')) }
+                if ($joined -like '*|bash|scripts/build-image.sh|*') { return (Get-TestNativeResult -ExitCode $script:wslBuildExit) }
+                return (Get-TestNativeResult)
+            }
+            Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'PowerShell must not be called' }
+        }
+
+        It 'copies the tree into a temporary directory of the distribution, builds there and removes the copy' {
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false
+            $result.Ran | Should -BeTrue
+            $result.ExitCode | Should -Be 0
+            @($script:wslCalls) | Should -Be @(
+                '-d|Ubuntu-24.04|--exec|mktemp|-d I=False'
+                ('-d|Ubuntu-24.04|--exec|wslpath|-a|{0} I=False' -f $script:repositoryRoot)
+                '-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|--exclude=./.git|--exclude=./downloads|--exclude=./tests/.bats-core|-cf|/tmp/tmp.k1T/source.tar|. I=False'
+                '-d|Ubuntu-24.04|--exec|mkdir|/tmp/tmp.k1T/source I=False'
+                '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False'
+                '-d|Ubuntu-24.04|--cd|/tmp/tmp.k1T/source|--exec|bash|scripts/build-image.sh|--channel|latest I=True'
+                '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+            )
+        }
+
+        It 'never builds from the Windows folder, which WSL shows under /mnt/c with mode 0777' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            @($script:wslCalls | Where-Object { $_ -like '*scripts/build-image.sh*' -and $_ -notlike '*|--cd|/tmp/tmp.k1T/source|*' }).Count | Should -Be 0
+        }
+
+        It 'passes the build''s exit code through and still removes the copy' {
+            $script:wslBuildExit = 3
+            (Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false).ExitCode | Should -Be 3
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
+        It 'does not build and says why when the copy fails, and removes what it made' {
+            $script:wslFailStep = '*|tar|-C|/mnt/c/*'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            $result.Detail | Should -Match 'copy'
+            @($script:wslCalls | Where-Object { $_ -like '*build-image.sh*' }).Count | Should -Be 0
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
+        It 'does not build when the distribution gives no temporary directory' {
+            $script:wslFailStep = '*|mktemp|-d'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            @($script:wslCalls | Where-Object { $_ -like '*build-image.sh*' -or $_ -like '*|rm|*' }).Count | Should -Be 0
         }
     }
 
