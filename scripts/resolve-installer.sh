@@ -97,10 +97,17 @@ sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 # curl_ibkr ARGS...: curl with the protocol policy: HTTPS only, bounded connection time, no
 # progress meter. The test override may name an http:// server, but a redirect must lead to
 # HTTPS even then, so that a redirect away from HTTPS is refused in tests as it is in use.
+# curl's own errors can quote a proxy value in full, password included ("Unsupported proxy
+# syntax in 'http://user:password@[::1'"), so its standard error is shown with every
+# `//user:password@` replaced by `//***@`.
 curl_ibkr() {
-  local proto="=https"
+  local proto="=https" errors rc=0
   if [ -n "${BROKERSRE_TEST_IBKR_BASE_URL:-}" ]; then proto="=http,https"; fi
-  curl -fsS --proto "${proto}" --proto-redir "=https" --connect-timeout 20 "$@"
+  errors="$(mktemp)"
+  curl -fsS --proto "${proto}" --proto-redir "=https" --connect-timeout 20 "$@" 2>"${errors}" || rc=$?
+  if [ -s "${errors}" ]; then sed -E 's#://[^/@[:space:]]*@#://***@#g' "${errors}" >&2; fi
+  rm -f "${errors}"
+  return "${rc}"
 }
 
 # fetch_version_json: print the channel's version.json body; non-zero when IBKR cannot be

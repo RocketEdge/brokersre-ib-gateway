@@ -1094,3 +1094,20 @@ cached_meta() {
   [ "$(cut -d'|' -f2 "${WORK}/stub/git-calls")" = "rev-parse HEAD" ]
   [ "$(cut -d'|' -f1 "${WORK}/stub/git-calls")" = "${REPO}" ]
 }
+
+@test "curl's error about a malformed proxy value is shown without the user name and password" {
+  local secret
+  secret="pw-$(printf 'SYN%s' THETIC)"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  # The fake server is http://, so the helper's curl takes http_proxy.
+  http_proxy="http://user:${secret}@[::1" build --no-smoke
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"proxy"* ]]
+  [[ "$stderr" == *"://***@"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+  [[ "$stderr" != *"user:"* ]]
+  http_proxy="socks9://user:${secret}@host.invalid:1" build --no-smoke
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"socks9://***@host.invalid:1"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+}
