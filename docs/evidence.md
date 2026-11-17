@@ -54,16 +54,16 @@ Run on 2026-11-17 against `brokersre-ib-gateway:stable` built with `scripts/buil
 |---|---|---|
 | The build's own record: version, channel, whether the project qualified it, the installer's SHA-256, IBKR's build stamp, the image id | the last seven lines of `scripts/build-image.sh` / `.ps1` | keep them with your change record |
 | The same facts as image labels (`com.rocketedge.brokersre.*`) | `Dockerfile`, `scripts/resolve-installer.sh` | B1 |
-| The installer's bytes and when they were accepted, by version | the installer cache (`installers/<version>/<arch>/meta`) | B2 |
+| The installer's bytes, where they came from (`source`) and when they were accepted, by version and SHA-256 | the installer cache (`installers/<version>/<arch>/<sha256>/meta`) | B2 |
 | The installed Gateway carries IBKR's build stamp (the build fails otherwise) | `scripts/fetch-installer.sh --check-stamp` in the `Dockerfile` | B3 |
 | Every other input pinned by SHA-256 or digest | `versions.json` and `scripts/build-helper/Dockerfile` of the commit you built | read them |
 | An SBOM of your image | not produced by the build | B4 |
 
 ```bash
-# B1 [B] ... "com.rocketedge.brokersre.ibkr.version":"10.50.1h", ..."com.rocketedge.brokersre.qualified":"no" ...
+# B1 [B] ... "com.rocketedge.brokersre.ibkr.version":"10.50.1h", ..."com.rocketedge.brokersre.installer.source":"ibkr","com.rocketedge.brokersre.qualified":"no" ...
 docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels}}'
-# B2 [B] version: 10.50.1h ... sha256: eb578b23...fe7aa ... accepted_at: <when it was accepted>
-cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/meta
+# B2 [B] version: 10.50.1h ... sha256: eb578b23...fe7aa ... source: ibkr, accepted_at: <when it was accepted>
+cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/*/meta
 # B3 [B] applicationVersion="(.1h) 20261116 16:02:08", equal to the label ibkr.build_stamp
 docker run --rm --entrypoint cat brokersre-ib-gateway:stable //home/ibgateway/Jts/ibgateway/10.50.1h/.install4j/i4jparams.conf | grep -o 'applicationVersion="[^"]*"'
 # B4 [B] a CycloneDX SBOM of the local image with syft, read through the Docker socket: 9776 components

@@ -148,5 +148,7 @@
 - [x] Azure pack documents the operator's own registry; evidence, upgrade check, upgrade policy, SECURITY, NOTICE and the gnzsnz table no longer point at a public image
 - [ ] L37: give the Azure VM a registry login (`AcrPull` for its identity and a token exchange before the pull)
 - [ ] L38: an option to hand the build a CA bundle for a TLS-inspecting proxy
-- [ ] Report to #39 (not fixed here): the PowerShell wrapper says "architecture '' is not supported; pass -Platform" when Docker is not running; neither wrapper forwards `HTTPS_PROXY` from the shell; a helper build carries the base image's `org.opencontainers.image.created` and no revision; the helper's messages name the container path `/cache`
+- [ ] Reported from #39 (not fixed here; #39 is merged): the PowerShell wrapper says "architecture '' is not supported; pass -Platform" when Docker is not running; neither wrapper forwards `HTTPS_PROXY` from the shell; a helper build carries the base image's `org.opencontainers.image.created` and no revision; the helper's messages name the container path `/cache`
 - [ ] Not covered: a build on macOS (Intel, Apple silicon), on arm64 hardware, in WSL 2, behind a real corporate proxy, pushes to GHCR, ACR, ECR and Docker Hub, the CI example on GitHub, the kit's build through Docker Engine in WSL
+- [x] After #39 merged: the recipe shows where the installer cache lives and how to clean it (nothing prunes it); a refused `downloads/` file is named as a likely leftover with its safe removal (bats, red first)
+- [ ] An automatic prune of the installer cache (for example keep the pin and the newest N versions), if users ask for it

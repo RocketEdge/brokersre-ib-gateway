@@ -20,7 +20,12 @@ Next step.
   `scripts/build-image.ps1` (Docker Engine in WSL: `bash scripts/build-image.sh`) before it
   starts anything. `docs/evidence.md`, `docs/upgrade-check.md`, `docs/upgrade-policy.md`,
   `SECURITY.md`, `NOTICE.md`, the gnzsnz table, `azure/README.md` and the `gatewayImage`
-  descriptions no longer send a reader to a public image. L37, L38.
+  descriptions no longer send a reader to a public image. L37, L38. After #39 was merged
+  with the review's cache layout (`installers/<version>/<arch>/<sha256>/`, `source`), the
+  README shows where the installer cache lives per host and script, how to list it and how to
+  delete entries safely (nothing prunes it), and `resolve-installer.sh`'s refusal of other
+  bytes at the installer's place in `downloads/` names the likely leftover of an interrupted
+  or parallel build and its removal in bash and PowerShell (test first).
 - **Result:** every documented command ran on Windows 11 with Docker Desktop 29.9.3 (Git Bash,
   PowerShell 7.6, Windows PowerShell 5.1), from a clone of the pushed branch where it says so
   in the pull request. A first build with nothing cached (a new buildx builder, an empty
@@ -51,7 +56,10 @@ Next step.
   local name's digest on Docker Desktop (its containerd image store lists one repo digest per
   repository name); it is taken from the push output now. Removing a digest reference of the
   local repository in the test (`docker rmi brokersre-ib-gateway@sha256:...`) took the
-  `stable` tag with it on that store; the test removes only registry names now. Found
+  `stable` tag with it on that store; the test removes only registry names now. The cache
+  written before the review's layout change (files directly in `installers/<v>/<arch>/`) is
+  not read by the merged helper: the first build after the merge downloaded again, and the
+  README says to delete such files. Found
   while documenting, not fixed here (scope of #39): the PowerShell wrapper reports "the Docker
   host's architecture '' is not supported; pass -Platform" when Docker is not running; neither
   wrapper forwards `HTTPS_PROXY`; a helper build carries the Ubuntu base image's

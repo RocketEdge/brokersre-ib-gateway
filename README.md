@@ -63,6 +63,7 @@ what was not run is marked **not tested**.
 - [Apple silicon and other arm64 hosts](#apple-silicon-and-other-arm64-hosts)
 - [Behind a corporate proxy](#behind-a-corporate-proxy)
 - [Offline, or when IBKR has moved on](#offline-or-when-ibkr-has-moved-on)
+- [See and clean the installer cache](#see-and-clean-the-installer-cache)
 - [Pinning and reproducing a build](#pinning-and-reproducing-a-build)
 - [Pushing to your own private registry](#pushing-to-your-own-private-registry)
 - [Building in your own CI](#building-in-your-own-ci)
@@ -168,7 +169,8 @@ The exit status is 0. The image is tagged twice, `brokersre-ib-gateway:stable` a
 
 The installer cache is `~/.cache/brokersre-ib-gateway` (`$XDG_CACHE_HOME` when set) for the
 bash script and `%LOCALAPPDATA%\brokersre-ib-gateway` for the PowerShell script;
-`--cache-dir DIR` (`-CacheDir`) chooses another.
+`--cache-dir DIR` (`-CacheDir`) chooses another. It keeps each installer by version,
+architecture and SHA-256 (`installers/<version>/<arch>/<sha256>/`), with where it came from.
 
 ### What the last lines mean
 
@@ -176,7 +178,7 @@ bash script and `%LOCALAPPDATA%\brokersre-ib-gateway` for the PowerShell script;
 |---|---|
 | `version` | The IB Gateway build in the image, as IBKR names it (`10.50.1h`) |
 | `channel` | IBKR's channel it came from: `stable` or `latest` |
-| `qualified_by_project` | `yes`: the version and the installer's SHA-256 are the ones pinned in [versions.json](versions.json), which the project has built, tested and logged in with. `no`: IBKR serves a newer build than the pin (or you gave an installer of your own); the script built it after checking it against IBKR's own build stamp, and no login has been made with it by the project |
+| `qualified_by_project` | `yes`: the version and the installer's SHA-256 are the ones pinned in [versions.json](versions.json), which the project has built, tested and logged in with. `no`: IBKR serves another build than the pin, usually a newer one (or you gave an installer other than the pinned one); the script built it after checking it against IBKR's own build stamp, and no login has been made with it by the project |
 | `installer_sha256` | SHA-256 of the installer the image was built from; also the label `com.rocketedge.brokersre.installer.sha256` |
 | `ibkr_build_stamp` | IBKR's build stamp, `(.<suffix>) <build date and time>`; the installed Gateway carries exactly this stamp, or the build would have failed |
 | `image` | The first tag of the image |
@@ -309,14 +311,17 @@ download fail ([limitations](docs/limitations.md) L38).
 ### Offline, or when IBKR has moved on
 
 **The cache.** Every installer a successful build used is kept in the installer cache, by
-version and architecture, with its SHA-256 (`installers/<version>/<arch>/` holds the file and a
-`meta` file). When IBKR cannot be reached, the script builds the pinned version from the cache;
-without `--strict` it falls back to the newest cached version of the channel; with nothing
-cached it exits 3. A version you built once therefore builds again after IBKR has moved on, as
-long as you keep the cache. With IBKR unreachable the build says so before it starts:
+version, architecture and SHA-256 (`installers/<version>/<arch>/<sha256>/` holds the file and a
+`meta` file), with where it came from (`source: ibkr`, or `installer` for a file given with
+`--installer`). When IBKR cannot be reached, the script builds the pinned version from the
+cache; without `--strict` it falls back to the newest version of the channel it once
+downloaded from IBKR; with no usable cached installer it exits 3. A version you built once
+therefore builds again after IBKR has moved on, as long as you keep the cache
+([see and clean it](#see-and-clean-the-installer-cache)). With IBKR unreachable the build says
+so before it starts:
 
 ```text
-resolve-installer: IBKR is unreachable (https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json); building the cached 10.50.1h, accepted 2026-11-17T03:51:49Z
+resolve-installer: IBKR is unreachable (https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json); building the cached 10.50.1h, accepted 2026-11-17T05:07:10Z
 ```
 
 and the last lines then say `qualified_by_project` as for any build of that version. Only IBKR
@@ -325,7 +330,7 @@ package archive and GitHub (IBC), unless Docker's build cache already holds thos
 earlier build. Look at the cache:
 
 ```bash
-cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/meta
+cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/*/meta
 ```
 
 ```text
@@ -335,7 +340,7 @@ arch: x64
 sha256: eb578b23b636e19c8417fc969264853a22792bcffa8fc79990cf15ff032fe7aa
 ibkr_build_stamp: (.1h) 20261116 16:02:08
 source: ibkr
-accepted_at: 2026-11-17T03:51:49Z
+accepted_at: 2026-11-17T05:04:47Z
 ```
 
 **An installer you downloaded yourself.** IBKR offers the installers on its website: the
@@ -353,16 +358,81 @@ scripts/build-image.sh --installer ibgateway-stable-standalone-linux-x64.sh
 
 `--installer FILE` (`-Installer`) asks IBKR nothing: the version, the channel and the
 architecture come from the installer's own build stamp, its SHA-256 is recorded, and the image
-is `qualified_by_project: yes` only when both equal the pin. Use it on a machine without
-access to IBKR (copy the file over), or to rebuild exactly the bytes you kept. An installer for
-the other architecture, or one whose stamp cannot be read, is refused (exit 1).
+is `qualified_by_project: yes` only when both equal the pin (label
+`com.rocketedge.brokersre.installer.source=installer`). Use it on a machine without access to
+IBKR (copy the file over), or to rebuild exactly the bytes you kept. Your file is never
+changed or removed. It is cached apart from IBKR's downloads: a later build without
+`--installer` uses it only when it is the pinned installer. An installer for the other
+architecture, or one whose stamp cannot be read, is refused (exit 1).
+
+### See and clean the installer cache
+
+Nothing prunes the installer cache: every version, architecture and SHA-256 that a build ever
+used stays, and each entry is one installer (360,312,436 bytes for `10.50.1h` x64, 221,123,393
+bytes for arm64, measured 2026-11-17). Where it is:
+
+| Built with | Cache |
+|---|---|
+| `scripts/build-image.sh` on Linux, macOS, WSL | `${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway` |
+| `scripts/build-image.sh` in Git Bash on Windows | `%USERPROFILE%\.cache\brokersre-ib-gateway` (Git Bash's `~`) |
+| `scripts/build-image.ps1`, and the Windows kit's `setup.ps1` | `%LOCALAPPDATA%\brokersre-ib-gateway` |
+| either script with `--cache-dir DIR` (`-CacheDir DIR`) | `DIR` |
+
+So on Windows the bash and the PowerShell script keep two caches. Inside, an entry is a
+directory `installers/<version>/<arch>/<sha256>/` with the installer and its `meta` (version,
+channel, SHA-256, IBKR's build stamp, `source`: `ibkr` or `installer`, `accepted_at`).
+`runs/` holds the work of a build in progress; the next build removes runs older than a day.
+Files directly in `installers/<version>/<arch>/`, without a SHA-256 directory, were written
+by the helper before 2026-11-17 and are no longer read: delete them (the commands below list
+them too).
+
+See what is there (bash; size, then the facts of each entry):
+
+```bash
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway"
+du -sh "$cache"/installers/*/*/*
+for meta in "$cache"/installers/*/*/*/meta; do echo "== $meta"; cat "$meta"; done
+```
+
+PowerShell:
+
+```powershell
+$cache = Join-Path $env:LOCALAPPDATA 'brokersre-ib-gateway'
+Get-ChildItem (Join-Path $cache 'installers') -Recurse -Filter *.sh | Select-Object @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB) } }, FullName
+Get-ChildItem (Join-Path $cache 'installers') -Recurse -Filter meta | ForEach-Object { "== $($_.FullName)"; Get-Content $_.FullName }
+```
+
+Clean it safely:
+
+- Delete whole entries, never a single file of one: a version
+  (`installers/<version>/`), or one architecture or SHA-256 below it. A build verifies an entry
+  before it uses it and skips a broken one, so a half-deleted entry costs a download, not a
+  wrong image; but delete while no build runs, from this machine or a CI job that shares the
+  directory.
+- Keep the versions you may have to rebuild without IBKR: the one your gateways run, and the
+  version `versions.json` pins (a `--strict` build without IBKR needs it). Everything else
+  only saves a download.
+- Deleting the whole cache directory is safe: the next build downloads again.
+
+```bash
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway/installers/10.50.1g"
+```
+
+```powershell
+Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'brokersre-ib-gateway\installers\10.50.1g')
+```
+
+Docker keeps its own copies: old images (`docker image ls brokersre-ib-gateway`, then
+`docker image rm brokersre-ib-gateway:<old version>`) and the build cache
+(`docker builder prune`, which only makes the next build slower).
 
 ### Pinning and reproducing a build
 
 What a build used is written down in three places:
 
 - **The image's labels**: `com.rocketedge.brokersre.ibkr.version`, `.ibkr.channel`,
-  `.ibkr.build_stamp`, `.installer.sha256`, `.qualified`, `.ibc.version`, `.ibc.release`.
+  `.ibkr.build_stamp`, `.installer.sha256`, `.installer.source` (`ibkr` or `installer`),
+  `.qualified`, `.ibc.version`, `.ibc.release`.
 - **[versions.json](versions.json)** of the commit you built from: the Ubuntu base image by
   digest, IBC by release and SHA-256, and the pinned Gateway versions with their SHA-256 and
   build stamps. The helper image is pinned by digest in `scripts/build-helper/Dockerfile`.
@@ -543,6 +613,7 @@ rebuild brings a new Gateway.
 | `no space left on device` in the build output | 1 | The Docker disk is full (Docker Desktop: its virtual disk) | `docker builder prune`, `docker image prune`; Docker Desktop: Settings, Resources, Disk usage limit |
 | `$'\r': command not found` or `/usr/bin/env: 'bash\r'` | 1 | The scripts have Windows line endings: the files were copied or edited with a tool that wrote CRLF (a clone keeps LF, `.gitattributes` says so) | Clone again with git; do not convert the files |
 | A path such as `C:/Program Files/Git/cache` in an error, from a `docker run` you typed in Git Bash | | Git Bash rewrote a container path | Put `MSYS_NO_PATHCONV=1` in front of the command, or write the path with `//` (`//var/log/...`); the build script does this itself |
+| `downloads/ibgateway-<version>-standalone-linux-<arch>.sh holds other bytes than the installer this build uses` | 1 | A file is already where the build puts its installer: usually a leftover of a build that was killed, or of a second build running from the same folder | If no other build runs: `rm downloads/<that file>` (PowerShell: `Remove-Item`) and build again; if you put it there, move it or build from it with `--installer` |
 | `cannot read a build stamp from ...: not an install4j IB Gateway installer` | 1 | `--installer` names a file that is not IBKR's Linux installer (for example the Windows or macOS one, or an HTML error page) | Download `ibgateway-<channel>-standalone-linux-<x64 or arm>.sh` |
 
 ## Quick start
@@ -953,17 +1024,19 @@ docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels
 
 You should see, among others, `"com.rocketedge.brokersre.ibkr.version":"10.50.1h"`,
 `"com.rocketedge.brokersre.ibkr.build_stamp":"(.1h) 20261116 16:02:08"`,
-`"com.rocketedge.brokersre.installer.sha256":"eb578b23...fe7aa"` and
+`"com.rocketedge.brokersre.installer.sha256":"eb578b23...fe7aa"`,
+`"com.rocketedge.brokersre.installer.source":"ibkr"` and
 `"com.rocketedge.brokersre.qualified":"no"`, the same values as the build's last lines.
 
-**2. The installer**: the SHA-256 of the file in the installer cache equals the label.
+**2. The installer**: the SHA-256 of the file in the installer cache equals the label (and the
+name of the directory it sits in).
 
 ```bash
-sha256sum ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/ibgateway-10.50.1h-standalone-linux-x64.sh
+sha256sum ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/*/ibgateway-10.50.1h-standalone-linux-x64.sh
 ```
 
 ```powershell
-(Get-FileHash "$env:LOCALAPPDATA\brokersre-ib-gateway\installers\10.50.1h\x64\ibgateway-10.50.1h-standalone-linux-x64.sh").Hash.ToLowerInvariant()
+Get-FileHash "$env:LOCALAPPDATA\brokersre-ib-gateway\installers\10.50.1h\x64\*\ibgateway-10.50.1h-standalone-linux-x64.sh" | ForEach-Object { $_.Hash.ToLowerInvariant() }
 ```
 
 **3. The installed Gateway**: the stamp inside the image equals the label and IBKR's

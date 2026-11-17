@@ -402,7 +402,8 @@ SYSTEM and Administrators, inheritance off):
 
 Elsewhere: the gateway image `brokersre-ib-gateway:stable` (and `:<version>`) in Docker, and
 the installer cache of the build in `%LOCALAPPDATA%\brokersre-ib-gateway` (one IB Gateway
-installer of about 350 MB per version; `uninstall.ps1` removes neither); scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
+installer of about 360 MB per version, architecture and SHA-256, never pruned; `uninstall.ps1`
+removes neither; [how to see and clean it](../README.md#see-and-clean-the-installer-cache)); scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
 three values under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`; with `-WslConfig`
 keys in `%UserProfile%\.wslconfig` (a `.brokersre-backup-<time>` copy is kept until undo); with
 `-FirewallLoopbackOnly` the rule `BrokerSRE-Gateway-Block-Api-Ports`; with `-DisableSleep` two
