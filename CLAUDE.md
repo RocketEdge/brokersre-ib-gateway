@@ -249,8 +249,8 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   notice). Never draw a listener port from 32768-60999 (Linux's ephemeral range): an earlier
   client's port there stays in TIME_WAIT for 60 s and makes `TCP-LISTEN` fail with "Address
   already in use" even with `reuseaddr` (two CI failures of `vnc-client.bats`, 2026-11-17).
-  `wait-for-gateway.bats` (47001) and `doctor.bats` (47631) still listen on fixed ports there.
-  Poll in a helper with `if x="$(grep ...)"; then`: bats runs tests under errexit, so a bare
+  A suite's own fixed listener or closed port stays below 32768 (`socat-server.bats` scans
+  every unit suite for one inside the range). Poll in a helper with `if x="$(grep ...)"; then`: bats runs tests under errexit, so a bare
   `x="$(grep ...)"` that finds nothing yet ends the test at the first poll (only `run` lifts it).
 - A literal backslash-u sequence in a file written through an editor or agent tool can come out
   as the character it names; assemble such test strings from parts (see `render.bats`).

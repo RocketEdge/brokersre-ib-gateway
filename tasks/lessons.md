@@ -69,3 +69,17 @@ behind a logging wrapper). Only the loop showed it.
 `listening on` notice), and the helper prints the server's own log when it does not come up.
 Poll with `if x="$(...)"; then` in code that runs under errexit. Prove a flake fix with a loop
 under the failing condition (and under load) before and after, not with one green run.
+
+## 2026-11-18 — A test that needs a TCP state must force who closes first
+
+**Pattern:** the regression test for the fix above needed "a port an earlier client still
+holds". Its server ran `exit 0` and the test waited 2 s for `state time-wait` on the client.
+The independent review's loop failed it once: when the server closed first, the TIME_WAIT was
+the server's, and before the server closes the client sits in FIN-WAIT-2, which that filter
+does not show. My own load loop never hit it (0 of 200); a client that closes 0.3 s late made
+it fail every time.
+
+**Rule:** when a test needs a socket state, force the order that produces it (a server that
+only reads, so the client closes first), accept every state that has the property the test
+needs (FIN-WAIT-2 and TIME_WAIT both hold the port), and reproduce a suspected race by
+delaying one side deterministically instead of hoping a load loop hits it.
