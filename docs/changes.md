@@ -18,8 +18,12 @@ Next step.
     `qualified=yes`) and `latest` is `sha256:fd4ecd55…`;
   - the pull of the stable digest and `cosign verify` against `publish.yml`'s identity passed;
   - the release `v10.50.1g-stable` names the new digest and says the image is not public.
-- **What did NOT work / root cause:** nothing new in this step. The package is still linked to
-  no repository; the Actions access grant alone lets the workflows in (ADR 0018, amendment).
+- **What did NOT work / root cause:** the first publish linked the package to this public
+  repository (the API names it from 20:19:57 UTC), so it could inherit the repository's
+  access; the owner switched inherited access off and granted the repositories explicitly. A
+  signed-in non-member was then refused `stable` and `latest` (403) while reading the public
+  sidecar (200); that token lacked `read:packages`, so the test is strong, not conclusive
+  (ADR 0018, note of 2026-11-17).
 - **Next step:** read the first scan of `rebuild.yml` and the first hourly run of
   `detect-releases.yml` against the package; one `qualify-paper.yml` run against a digest of
   it; confirm the BrokerSRE repository's Read grant with its next `image-pin.yml` run.

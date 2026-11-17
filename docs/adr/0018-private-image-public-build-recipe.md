@@ -283,8 +283,18 @@ push from a workflow of this repository public).
 
 - **Visibility:** the owner kept the package **internal** (2026-11-17), accepting what L40
   describes: every member of the enterprise, and every workflow in it, may read the image.
-- **Access:** the owner granted this repository Write under *Manage Actions access*. The API
-  still names no linked repository; the grant alone lets the workflows in.
+- **Access:** the owner granted this repository Write under *Manage Actions access*, which let
+  the workflow's token push. That publish then **linked** the package to this repository (the
+  API names `RocketEdge/brokersre-ib-gateway` from 20:19:57 UTC; at 08:46 it named none), as
+  the source label predicts. A linked package can inherit the repository's access, and
+  everyone can read a public repository (the decision above), so the owner then switched off
+  "Inherit access from repository" in the package settings and granted the repositories
+  explicitly (the owner's report; the API does not expose that setting).
+- **An outsider is refused (20:41 UTC):** a signed-in GitHub account that is not a member of
+  the organisation got a ghcr.io token for the package but was refused the manifests of
+  `stable` and `latest` (403), while the same token read the public sidecar's (200). That token
+  lacked `read:packages`; whether ghcr.io refuses on the missing scope first for a non-public
+  package is not established, so this is strong but not conclusive evidence.
 - **Publish:** `publish.yml` was dispatched at 20:10 UTC (run 44166458142, both channels) and
   succeeded. The job "the package is not public" pushed the placeholder with the workflow's
   token and saw the anonymous read refused; each channel passed the same check right before
