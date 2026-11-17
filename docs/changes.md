@@ -5,6 +5,37 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #41: image modes, the kit's WSL build, wording that stays true
+
+- **What changed:** the Dockerfile sets owner (root) and mode of everything `rootfs/` brings in
+  and of the directories COPY passes through (directories and scripts 0755, other files 0644);
+  the container suite checks them. The Windows kit builds with Docker Engine in WSL from a copy
+  of the tree in the distribution's own file system, never from `/mnt/c`. The helper's refusal
+  of a leftover in `downloads/` names the caller's removal command, the host path and the
+  caller's option (`--installer` or `-Installer`), told by the wrappers. The docs say that
+  RocketEdge no longer distributes a public image and that the former package is being
+  withdrawn (true before and after the deletion; a follow-up switches to the past tense),
+  define `qualified_by_project: yes` as "the version and installer equal the pin, which passed
+  the project's offline CI" (a paper login is separate; the Going-live checklist now asks for
+  one), give the migration steps for users of the former public default (compose and the
+  kit), Compose 2.22.0 for `pull --policy` with `docker pull` as the alternative, the arm64
+  installer size, the current cache line, `MSYS_NO_PATHCONV=1` for the syft command, and a CI
+  example with job-level `packages: write` and `persist-credentials: false`.
+- **Result:** red first, then green: the rootfs check failed on the image built from Windows
+  (templates 0755) and passed after the change on a helper build and on a build from a 0777
+  context (both full container suites, 88 checks); five Pester tests of the WSL path failed on
+  the old code and pass (650 under PowerShell 7 and 5.1); three bats tests and one Pester test
+  of the advice failed on the old message and pass (bats 61, Pester 31 under both editions).
+- **What did NOT work / root cause:** a build context with mode 0777 (what drvfs shows for a
+  WSL checkout under `/mnt/c`) did not only make the templates writable: COPY into `/` gave
+  `/etc`, `/usr`, `/usr/local` and `/usr/local/lib` mode 0777 and the host's uid, because COPY
+  updates the metadata of existing directories on its path. The first wording of phase 2 said
+  the image "is private" and "RocketEdge publishes no image", which is not true while the
+  public package can still be pulled; and it called `qualified_by_project: yes` a build "the
+  project has logged in with", which a stable pin that merged itself after CI is not.
+- **Next step:** merge after CI; delete the public package (Phase 4); then the past-tense
+  follow-up with the proof; a real WSL distribution for the kit's build path.
+
 ### 2026-11-17 — The build recipe and local defaults (ADR 0018, phase 2)
 
 - **What changed:** the README starts with "Build the image", a recipe for every host (what

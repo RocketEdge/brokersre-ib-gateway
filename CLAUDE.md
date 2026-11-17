@@ -272,16 +272,27 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 - `docker-compose.multi.yml`: `docker compose down` without the profiles stops nothing; `exec
   <service>` and `ps` work without them. Docker mounts a compose tmpfs `noexec`: run a script
   placed there with `bash <file>`.
-- No public image (ADR 0018): every shipped gateway service defaults to
+- RocketEdge no longer distributes a public image (ADR 0018; the former package is being
+  withdrawn): every shipped gateway service defaults to
   `brokersre-ib-gateway:stable` with a literal `pull_policy: never` (a missing image fails with
   "No such image" instead of a Docker Hub lookup; `pull --policy missing` and `up --pull
-  missing` override it, compose 5.7.0). Never interpolate `pull_policy`: compose validates the
+  missing` override it, Compose 2.22.0 and later; `docker pull <ref>` works with any version).
+  Never interpolate `pull_policy`: compose validates the
   key against its pattern even under `config --no-interpolate`, which
   `sidecar/tests/test_docs.py` uses for every shipped file (the Windows kit's template keeps
   the literal line and `ConvertTo-GwComposeText` replaces it with `missing` for a name with a
   registry path). The Azure VM overlay (`apply-config.sh`) sets `pull_policy: missing` for the
   digest its userData names. `setup.ps1` builds a missing `brokersre-ib-gateway:stable` or
-  `:latest` with `scripts/build-image.ps1` (`Invoke-GwImageBuild`); `start.ps1` never builds.
+  `:latest` with `scripts/build-image.ps1` (`Invoke-GwImageBuild`); with Docker Engine in WSL
+  it copies the tree into the distribution first (`Invoke-GwWslImageBuild`), never builds from
+  `/mnt/c`; `start.ps1` never builds. Docs say "no longer distributes a public image" / "is
+  being withdrawn" until the deletion is done and proven (open item in `tasks/todo.md`).
+  `qualified_by_project: yes` means the pin passed the offline CI, never that a login did.
+- COPY takes owner and mode from the build host (Windows context: 0755 on every file; a 0777
+  context left `/etc` and `/usr` world-writable): the Dockerfile sets owner and mode of every
+  path from `rootfs/` and of `/etc`, `/usr`, `/usr/local`, `/usr/local/bin`, `/usr/local/lib`
+  right after the COPY; the container suite checks them ("files from rootfs/ have fixed
+  modes"). A new file under `rootfs/` outside those trees needs its mode set there too.
 - Proxies reach a build only through the Docker CLI's `config.json` (`proxies`): the CLI
   passes them into the helper container and as build arguments; `HTTPS_PROXY` in the calling
   shell is not forwarded by `build-image.sh`/`.ps1` (checked with a local Squid, 2026-11-17).
