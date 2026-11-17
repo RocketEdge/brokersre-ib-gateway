@@ -85,8 +85,16 @@ jobs:
         # build checked against IBKR's own stamp and labelled not qualified. A bake build of the
         # pin failed every pull request from the day IBKR moved on (2026-11-11, 2026-11-17)
         # unless the private archive held the pinned installer. The summary lines are printed
-        # last; the qualified label says which case this run built.
-        run: scripts/build-image.sh --channel stable --platform linux/amd64 --tag "$TEST_IMAGE"
+        # last; a build the project has not qualified is also announced as a notice.
+        run: |
+          set -euo pipefail
+          scripts/build-image.sh --channel stable --platform linux/amd64 --tag "$TEST_IMAGE" > build-summary.txt
+          cat build-summary.txt
+          if grep -qx 'qualified_by_project: no' build-summary.txt; then
+            built="$(sed -n 's/^version: //p' build-summary.txt)"
+            pinned="$(jq -r .channels.stable.version versions.json)"
+            echo "::notice title=Gateway build not qualified::CI built IB Gateway ${built} (IBKR's stable channel); versions.json pins ${pinned}. The image is labelled qualified=no (docs/limitations.md L35)."
+          fi
       - name: Unit suite inside the image (bats)
         run: |
           git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core

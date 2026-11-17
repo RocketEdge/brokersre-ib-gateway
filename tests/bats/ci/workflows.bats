@@ -280,3 +280,13 @@ cron_conditions() {
   [[ "$output" == *"\$config.Run.Path = 'scripts/tests'"* ]]
   [[ "$output" == *"Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"* ]]
 }
+
+@test "CI says in a notice when the image it built is not qualified, naming the built version and the pin" {
+  run awk '/^  build-test:/ { job = 1; next } /^  [a-z-]+:$/ { job = 0 } job' "${WF}/ci.yml"
+  [[ "$output" == *"qualified_by_project: no"* ]]
+  [[ "$output" == *"::notice title="* ]]
+  [[ "$output" == *"jq -r .channels.stable.version versions.json"* ]]
+  # The notice is the step's own text: no expression is pasted into the script.
+  run awk '/^  build-test:/ { job = 1; next } /^  [a-z-]+:$/ { job = 0 } job && /::notice/' "${WF}/ci.yml"
+  [[ "$output" != *'${{'* ]]
+}
