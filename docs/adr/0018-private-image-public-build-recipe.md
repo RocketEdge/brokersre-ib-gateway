@@ -103,8 +103,9 @@ publishing (Phase 3): they do, see below.
   runs daily at 06:00 UTC, on a manual dispatch, and at the first sight of a version: a label
   other than the pin with no pull request from its branch yet (`scripts/detect-scope.sh`).
   ADR 0009's other behaviour is unchanged: a re-upload is found within a day, an open pull
-  request is refreshed daily, a closed one is opened again by the next daily run. Runs never
-  overlap (one concurrency group).
+  request is refreshed daily, a closed one is opened again by the next daily run. Full and
+  hourly runs have their own concurrency groups, so a pending full check is never replaced by
+  an hourly run.
 - **Stable updates keep merging themselves** (ADR 0009; behaviour unchanged). With the image
   private, the consumers of a pin are the people who build from this repository, and
   RocketEdge's private image, which BrokerSRE verifies (`cosign verify`) and regresses on a
@@ -132,7 +133,9 @@ publishing (Phase 3): they do, see below.
 - A version once built can be rebuilt after IBKR has moved on, offline from IBKR.
 - Pull requests from forks run every check, the sidecar's end-to-end job included; no job
   started by a pull request depends on a package or a secret.
-- A new IBKR build is seen within the hour instead of the next day.
+- A new IBKR build is seen within the hour instead of the next day. That is a target, not a
+  guarantee: GitHub starts scheduled runs late or drops them under load (the daily run
+  started 6.5 to 8 hours late from 2026-11-13 to 2026-11-16).
 
 ### Negative
 

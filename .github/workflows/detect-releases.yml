@@ -20,8 +20,10 @@
 # nobody outside RocketEdge pulls it, and RocketEdge's own consumers pin digests.
 # RocketEdge never redistributes IBKR binaries from this public repository (ADR 0007).
 #
-# The daily cron string is repeated in the condition of the scope step;
-# tests/bats/ci/detect-scope.bats fails when the two differ (every run would be hourly).
+# The daily cron string is repeated in the scope step's condition and in the concurrency group;
+# tests/bats/ci/detect-scope.bats fails when they differ (every run would be hourly). "Within
+# the hour" is a target: GitHub starts scheduled runs late or drops them under load (the daily
+# run started 6.5 to 8 hours late from 2026-11-13 to 2026-11-16).
 name: Detect IB Gateway releases
 
 on:
@@ -33,11 +35,16 @@ on:
 permissions:
   contents: read
 
-# One run at a time: two overlapping runs could both find no pull request and no archive
-# release for a new version and race to create them. A newer pending run may replace an older
-# pending one (it reads the same or a newer state).
+# One group per kind of check, with the scope step's expression: full (the daily run, a
+# dispatch) and hourly. GitHub keeps one pending run per group and cancels the older one; with
+# a single group, a daily run that GitHub started hours late (seen: 6.5 to 8 hours) and that
+# waited behind a running hourly one could be replaced by an hourly run that skips. Within a
+# group runs never overlap, and a newer pending run replaces an older one of the same kind.
+# A full and an hourly run can overlap. Both do the full check only for a version without a
+# pull request; at worst the later archive upload or pull request creation then fails that
+# leg (visible in the run), and the next run finds the first one's release and pull request.
 concurrency:
-  group: detect-releases
+  group: detect-releases-${{ (github.event_name == 'schedule' && github.event.schedule != '0 6 * * *') && 'hourly' || 'full' }}
   cancel-in-progress: false
 
 jobs:

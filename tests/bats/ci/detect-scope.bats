@@ -195,8 +195,14 @@ automerge_problems() {
   [[ "$output" == *"pure conjunction"* ]]
 }
 
-@test "two runs of detect-releases.yml never overlap" {
+@test "a pending full check is never replaced by an hourly run" {
+  # GitHub keeps one pending run per concurrency group and cancels the older one. With one
+  # group for all runs, a daily run that GitHub started hours late (seen: 6.5 to 8 hours) and
+  # that waited behind a running one could be replaced by an hourly run that skips. Runs are
+  # grouped by their check, with the scope step's expression: full runs queue among themselves,
+  # hourly runs among themselves.
   grep -q -x 'concurrency:' "${WF}"
-  grep -A2 -x 'concurrency:' "${WF}" | grep -q -x '  group: detect-releases'
+  group="$(grep -A2 -x 'concurrency:' "${WF}" | sed -n 's/^  group: //p')"
+  [ "${group}" = "detect-releases-\${{ (github.event_name == 'schedule' && github.event.schedule != '0 6 * * *') && 'hourly' || 'full' }}" ]
   grep -A2 -x 'concurrency:' "${WF}" | grep -q -x '  cancel-in-progress: false'
 }
