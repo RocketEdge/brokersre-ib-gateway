@@ -52,3 +52,26 @@ EOF
 sha256_of() {
   sha256sum "$1" | cut -d' ' -f1
 }
+
+# make_fake_installer_cut OUT APPLICATION_NAME APPLICATION_VERSION MEDIA_NAME: like
+# make_fake_installer, but the archive holds 1 MiB of random bytes after i4jparams.conf and is
+# cut off in their middle: only a reader that stops once it has i4jparams.conf can read the
+# stamp (the build helper does, so it never decompresses IBKR's whole 105 MB archive).
+make_fake_installer_cut() {
+  local out="$1" full payload_dir size
+  make_fake_installer "${out}.full" "$2" "$3" "$4"
+  payload_dir="$(mktemp -d)"
+  size="$(sed -n -E 's/^tail -c ([0-9]+) .*/\1/p' "${out}.full")"
+  tail -c "${size}" "${out}.full" | tar -xzf - -C "${payload_dir}" i4jparams.conf
+  head -c 1048576 /dev/urandom >"${payload_dir}/filler.bin"
+  tar -czf "${payload_dir}/payload.tar.gz" -C "${payload_dir}" i4jparams.conf filler.bin
+  full="$(wc -c <"${payload_dir}/payload.tar.gz" | tr -d ' ')"
+  size=$((full / 2))
+  {
+    head -c "$(($(wc -c <"${out}.full") - $(sed -n -E 's/^tail -c ([0-9]+) .*/\1/p' "${out}.full")))" "${out}.full" \
+      | sed -E "s/^tail -c [0-9]+ /tail -c ${size} /"
+    head -c "${size}" "${payload_dir}/payload.tar.gz"
+  } >"${out}"
+  chmod +x "${out}"
+  rm -rf "${payload_dir}" "${out}.full"
+}

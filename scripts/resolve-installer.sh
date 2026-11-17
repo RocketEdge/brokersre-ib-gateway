@@ -128,7 +128,15 @@ read_installer_stamp() {
   [ -n "${size}" ] || return 1
   tmp="$(mktemp -d)"
   mkdir -p "${tmp}/.install4j"
-  if ! tail -c "${size}" "${file}" | tar -xzOf - i4jparams.conf >"${tmp}/.install4j/i4jparams.conf" 2>/dev/null; then
+  # Stop at i4jparams.conf (`--occurrence`; it is near the start of IBKR's 105 MB archive):
+  # decompressing all of it took minutes through a Windows bind mount. tail and gzip then die
+  # of SIGPIPE, so the status is tar's alone, and the file must not be empty.
+  if ! (
+    set +o pipefail
+    tail -c "${size}" "${file}" | gzip -dc 2>/dev/null \
+      | tar -xOf - --occurrence=1 i4jparams.conf >"${tmp}/.install4j/i4jparams.conf" 2>/dev/null
+    exit "${PIPESTATUS[2]}"
+  ) || [ ! -s "${tmp}/.install4j/i4jparams.conf" ]; then
     rm -rf "${tmp}"
     return 1
   fi

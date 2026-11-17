@@ -847,3 +847,14 @@ cached_meta() {
   STUB_RUN_RC=126 build --print-plan
   [ "$status" -eq 1 ]
 }
+
+@test "the installer's stamp is read without decompressing the rest of its archive" {
+  make_fake_installer_cut "${WORK}/cut.sh" "IB Gateway 10.53" "(.1a) 20261120 09:00:00" ibgateway-latest-standalone-linux-x64
+  # The archive past i4jparams.conf is cut off: a reader that decompresses all of it fails.
+  run tar -tzf - < <(tail -c "$(sed -n -E 's/^tail -c ([0-9]+) .*/\1/p' "${WORK}/cut.sh")" "${WORK}/cut.sh")
+  [ "$status" -ne 0 ]
+  build --installer "${WORK}/cut.sh" --print-plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"version: 10.53.1a"* ]]
+  [[ "$output" == *"ibkr_build_stamp: (.1a) 20261120 09:00:00"* ]]
+}
