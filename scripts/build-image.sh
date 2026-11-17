@@ -265,7 +265,9 @@ for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; do
 # tree (a downloaded archive). Without them the image showed the Ubuntu base image's `created`
 # and no revision. They change the image id from build to build, which a rebuild did anyway
 # (README, "Pinning and reproducing a build"): same Gateway and IBC, not the same image id.
-build_revision="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null)" || build_revision=""
+# Asked in the checkout, with no path argument: MSYS_NO_PATHCONV=1 (above) keeps Git Bash from
+# converting a POSIX path for git, which then cannot open it (the label said unknown).
+build_revision="$(cd "${repo_root}" && git rev-parse HEAD 2>/dev/null)" || build_revision=""
 case "${build_revision}" in "" | *[!0-9a-f]*) build_revision=unknown ;; esac
 set -- "$@" --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --label "org.opencontainers.image.revision=${build_revision}"

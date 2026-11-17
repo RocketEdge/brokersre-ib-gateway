@@ -1072,3 +1072,18 @@ cached_meta() {
   [ "$status" -eq 0 ]
   grep -qx "BROKERSRE_HOST_CACHE=${WORK}/xdg/brokersre-ib-gateway" "${WORK}/stub/helper-env"
 }
+
+@test "the revision is asked of git in the checkout, without a path argument (Git Bash cannot pass one)" {
+  # build-image.sh exports MSYS_NO_PATHCONV=1 for docker's container paths; under Git Bash a
+  # POSIX path given to git is then not converted and git cannot open it, so the label said
+  # unknown on a real clone (2026-11-17). A stand-in git records how it was called.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s|%s\n" "$PWD" "$*" >>"${STUB_DIR}/git-calls"' 'echo 0123456789abcdef0123456789abcdef01234567' >"${WORK}/bin/git"
+  chmod +x "${WORK}/bin/git"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = 0123456789abcdef0123456789abcdef01234567 ]
+  [ "$(cut -d'|' -f2 "${WORK}/stub/git-calls")" = "rev-parse HEAD" ]
+  [ "$(cut -d'|' -f1 "${WORK}/stub/git-calls")" = "${REPO}" ]
+}
