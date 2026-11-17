@@ -311,3 +311,23 @@ push from a workflow of this repository public).
 - **Still open:** one `qualify-paper.yml` run against a digest of this package (owner-gated
   environment), and the first scan of `rebuild.yml` and the first hourly run of
   `detect-releases.yml` against it.
+
+## Note 2026-11-17 (later): access proven after inherited access was switched off
+
+- **Outsider, conclusive (20:53 UTC):** the same signed-in non-member, now with a token that
+  has `read:packages`, got a ghcr.io token but was refused the manifests of `stable` and
+  `latest` (403), and the packages API answered it "Package not found". The caveat of the note
+  above no longer applies: a signed-in GitHub user outside the organisation cannot read the
+  image.
+- **Write, after the change:** `detect-releases.yml` (dispatched 20:41 UTC, run 44171904504,
+  `scope=full`: IBKR serves 10.50.1h, the pin was 10.50.1g) opened the stable update, which
+  merged itself (ADR 0009; the owner keeps `STABLE_AUTOMERGE` on). The resulting
+  `publish.yml` run 44174758312 (20:57 UTC) succeeded for both channels through both "not
+  public" checks and "Verify the signature and attestations": the explicit Write grant works
+  with inherited access off. Release `v10.50.1h-stable` names
+  `sha256:99cb19e17f0df3896f2ad729b0bef46575f0b2bea14963534095357d46631185`.
+- **After that publish:** an anonymous token request still answers 401 and the non-member is
+  still refused (403).
+- **Still open:** the `RocketEdge/brokersre` Read grant (its next `image-pin.yml` run), one
+  `qualify-paper.yml` run against a digest of this package, and the first scheduled scan of
+  `rebuild.yml`.
