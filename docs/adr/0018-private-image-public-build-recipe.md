@@ -229,7 +229,8 @@ the second at the placeholder push (no write access). No IBKR software reached t
 <https://github.com/orgs/RocketEdge/packages/container/brokersre-ib-gateway/settings>; the
 checklist is in `tasks/todo.md`):
 
-1. Optional: *Change visibility* from Internal to Private.
+1. Optional: *Change visibility* from Internal to Private; then update L39 and the second
+   bullet of the decision above, which say internal.
 2. *Manage Actions access*, *Add repository*: `RocketEdge/brokersre-ib-gateway` with role
    Write; `RocketEdge/brokersre` with role Read.
 3. Re-enable `publish.yml` and `detect-releases.yml`; dispatch `publish.yml` with
@@ -243,9 +244,11 @@ again (it does not exist, or it was deleted). The procedure of 2026-11-17, writt
 build and a push from a throwaway Docker configuration were checked against a local registry;
 the push to ghcr.io ran on 2026-11-17). A personal access token (classic) with
 `write:packages` is typed at the prompt; no token is stored in a file of your usual
-configuration or a credential store.
+configuration or a credential store. Run it in bash (Git Bash on Windows): zsh refuses
+`read -p` ("no coprocess") and sh (dash) refuses `read -s` ("Illegal option").
 
 ```bash
+# Run in bash: zsh refuses read -p, sh (dash) refuses read -s.
 # 1. The placeholder, built with your usual Docker configuration: FROM scratch, one text
 #    file, no IBKR software, the source label of this repository.
 probe="$(mktemp -d)"
