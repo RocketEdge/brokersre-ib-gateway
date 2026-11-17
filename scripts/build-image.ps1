@@ -126,16 +126,27 @@ function Invoke-BiDockerCapture {
     Runs docker with the given arguments and captures its standard output.
     .DESCRIPTION
     The one place that runs docker and keeps its output; Pester mocks it. Standard error goes
-    to the console. Arguments with spaces are quoted by PowerShell; none may contain a double
-    quote (Windows PowerShell 5.1 and PowerShell 7 pass embedded quotes differently).
+    to the console, or nowhere with -Quiet. Arguments with spaces are quoted by PowerShell;
+    none may contain a double quote (Windows PowerShell 5.1 and PowerShell 7 pass embedded
+    quotes differently).
     .PARAMETER ArgumentList
     The docker arguments.
+    .PARAMETER Quiet
+    Discard docker's standard error (a probe whose failure this script explains itself). The
+    error preference is lowered in this function only: Windows PowerShell 5.1 turns a
+    redirected native standard error line into an error, terminating under 'Stop'.
     .OUTPUTS
     An object with ExitCode (int) and Lines (string[]).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string[]]$ArgumentList)
-    $lines = @(& docker @ArgumentList)
+    param([Parameter(Mandatory = $true)][string[]]$ArgumentList, [switch]$Quiet)
+    if ($Quiet) {
+        $ErrorActionPreference = 'Continue'
+        $lines = @(& docker @ArgumentList 2>$null)
+    }
+    else {
+        $lines = @(& docker @ArgumentList)
+    }
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Lines = [string[]]@($lines | ForEach-Object { [string]$_ }) }
 }
 
@@ -287,6 +298,20 @@ function Invoke-BuildImage {
     }
     if ((Invoke-BiDockerCapture -ArgumentList @('buildx', 'version')).ExitCode -ne 0) {
         Write-BiMessage -Message 'docker buildx is required (Docker Desktop, or Docker Engine 23 or later with the buildx plugin)'
+        return 1
+    }
+    # The daemon, before anything asks it a question: without this check a stopped Docker
+    # Desktop surfaced as an empty architecture, or (with -Platform) as a failed helper build.
+    # Docker's own error is not repeated: it can name DOCKER_HOST, which may hold a user name.
+    $server = Invoke-BiDockerCapture -ArgumentList @('version', '--format', '{{.Server.Version}}') -Quiet
+    if ($server.ExitCode -ne 0 -or (@($server.Lines) -join '').Trim() -eq '') {
+        $context = (@((Invoke-BiDockerCapture -ArgumentList @('context', 'show') -Quiet).Lines) -join '').Trim()
+        if ($context -eq '') { $context = 'unknown' }
+        $hostNote = ''
+        if ($env:DOCKER_HOST) { $hostNote = ', DOCKER_HOST is set' }
+        $advice = 'start Docker Desktop and wait until its engine runs (Windows, macOS), or start the daemon ' +
+        '(Linux: sudo systemctl start docker); check the Docker context and DOCKER_HOST'
+        Write-BiMessage -Message ("the Docker daemon is not reachable (Docker context '{0}'{1}): {2}" -f $context, $hostNote, $advice)
         return 1
     }
     $platform = $settings.Platform

@@ -79,6 +79,7 @@ Describe 'Invoke-BuildImage' {
         $script:buildExit = 0
         $script:smokeExit = 0
         $script:hostArch = 'x86_64'
+        $script:daemonDown = $false
         $script:plan = Get-TestPlan -Stamp $script:stamp -Context $script:context
         Mock Write-BiMessage { [void]$script:messages.Add($Message) }
         Mock Write-BiUsage {}
@@ -87,6 +88,9 @@ Describe 'Invoke-BuildImage' {
         Mock Get-BiUserArgument { return @() }
         Mock Invoke-BiDockerCapture {
             [void]$script:calls.Add([string[]]$ArgumentList)
+            if ($script:daemonDown -and @('info', 'version') -contains $ArgumentList[0]) { return [pscustomobject]@{ ExitCode = 1; Lines = [string[]]@() } }
+            if ($ArgumentList[0] -eq 'version') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('29.9.3') } }
+            if ($ArgumentList[0] -eq 'context') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('desktop-linux') } }
             if ($ArgumentList[0] -eq 'info') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@($script:hostArch) } }
             if ($ArgumentList[0] -eq 'image') { return [pscustomobject]@{ ExitCode = 0; Lines = [string[]]@('sha256:' + ('a' * 64)) } }
             if ($ArgumentList -contains 'resolve') { return [pscustomobject]@{ ExitCode = $script:resolveExit; Lines = [string[]]$script:plan } }
@@ -247,6 +251,17 @@ Describe 'Invoke-BuildImage' {
             Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-v', $expected) | Should -BeTrue
         }
         finally { $env:LOCALAPPDATA = $saved }
+    }
+
+    It 'an unreachable Docker daemon is named as such and returns 1, with or without -Platform: <arguments>' -TestCases @(
+        @{ arguments = @() }, @{ arguments = @('-Platform', 'linux/amd64') }
+    ) {
+        $script:daemonDown = $true
+        Invoke-BuildImage -ArgumentList (@($arguments) + @('-NoSmoke', '-CacheDir', $script:cache)) -RepoRoot $script:repo | Should -Be 1
+        ($script:messages -join "`n") | Should -Match 'the Docker daemon is not reachable'
+        ($script:messages -join "`n") | Should -Match 'desktop-linux'
+        ($script:messages -join "`n") | Should -Not -Match 'architecture'
+        (Get-TestCall -Calls $script:calls -Marker 'run').Count | Should -Be 0
     }
 
     It 'without Docker it returns 1' {

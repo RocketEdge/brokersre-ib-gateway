@@ -59,7 +59,7 @@ setup() {
   write_stub_docker
   export PATH="${WORK}/bin:${PATH}"
   export STUB_DIR="${WORK}/stub"
-  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC
+  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC STUB_DAEMON_DOWN
   start_server
   export BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:${PORT}"
 }
@@ -89,7 +89,15 @@ write_stub_docker() {
 # Stub docker for build-image.bats: records each call in ${STUB_DIR}/calls.
 printf '%s\n' "$*" >>"${STUB_DIR}/calls"
 case "$1" in
-  info) echo "${STUB_ARCH:-x86_64}" ;;
+  info)
+    if [ -n "${STUB_DAEMON_DOWN:-}" ]; then echo "error during connect: daemon not running" >&2 && exit 1; fi
+    echo "${STUB_ARCH:-x86_64}"
+    ;;
+  version)
+    if [ -n "${STUB_DAEMON_DOWN:-}" ]; then echo "error during connect: daemon not running" >&2 && exit 1; fi
+    echo "29.9.3"
+    ;;
+  context) echo "desktop-linux" ;;
   build) echo "sha256:helper" ;;
   buildx)
     case "$2" in
@@ -934,4 +942,16 @@ cached_meta() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"version: 10.53.1a"* ]]
   [[ "$output" == *"ibkr_build_stamp: (.1a) 20261120 09:00:00"* ]]
+}
+
+@test "an unreachable Docker daemon is named as such, exit 1, with or without --platform" {
+  STUB_DAEMON_DOWN=1 build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"the Docker daemon is not reachable"* ]]
+  [[ "$stderr" == *"desktop-linux"* ]]
+  [[ "$stderr" != *"architecture"* ]]
+  STUB_DAEMON_DOWN=1 build --platform linux/amd64 --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"the Docker daemon is not reachable"* ]]
+  ! grep -q -e '^run ' -e '^buildx build' "${WORK}/stub/calls" || false
 }

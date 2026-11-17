@@ -142,6 +142,15 @@ docker buildx version >/dev/null 2>&1 || {
   say "docker buildx is required (Docker Desktop, or Docker Engine 23 or later with the buildx plugin)"
   exit 1
 }
+# The daemon, before anything asks it a question: without this check a stopped Docker Desktop
+# surfaced as an empty architecture, or (with --platform) as a failed helper build. Docker's
+# own error is not repeated: it can name DOCKER_HOST, which may hold a user name.
+server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || server_version=""
+if [ -z "${server_version}" ]; then
+  context="$(docker context show 2>/dev/null)" || context="unknown"
+  say "the Docker daemon is not reachable (Docker context '${context}'$([ -n "${DOCKER_HOST:-}" ] && printf ', DOCKER_HOST is set')): start Docker Desktop and wait until its engine runs (Windows, macOS), or start the daemon (Linux: sudo systemctl start docker); check the Docker context and DOCKER_HOST"
+  exit 1
+fi
 if [ -z "${platform}" ]; then
   host_arch="$(docker info --format '{{.Architecture}}')"
   case "${host_arch}" in
