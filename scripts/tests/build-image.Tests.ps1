@@ -264,6 +264,42 @@ Describe 'Invoke-BuildImage' {
         (Get-TestCall -Calls $script:calls -Marker 'run').Count | Should -Be 0
     }
 
+    It 'proxy variables reach the helper (-e NAME) and the build (--build-arg NAME) by name, never by value' {
+        $secret = 'pw-' + ('SYN{0}' -f 'THETIC')
+        $saved = @{}
+        foreach ($name in @('HTTPS_PROXY', 'NO_PROXY')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            [Environment]::SetEnvironmentVariable('HTTPS_PROXY', ('http://synthetic:{0}@proxy.invalid:3128' -f $secret))
+            [Environment]::SetEnvironmentVariable('NO_PROXY', '127.0.0.1,localhost')
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-e', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual (Get-TestCall -Calls $script:calls -Marker 'resolve')[0] -Expected @('-e', 'NO_PROXY') | Should -BeTrue
+            $build = (Get-TestCall -Calls $script:calls -Marker '--platform')[0]
+            Test-Sequence -Actual $build -Expected @('--build-arg', 'HTTPS_PROXY') | Should -BeTrue
+            Test-Sequence -Actual $build -Expected @('--build-arg', 'NO_PROXY') | Should -BeTrue
+            foreach ($call in $script:calls) { ($call -join ' ') | Should -Not -Match $secret }
+            ($script:messages -join "`n") | Should -Not -Match $secret
+            ($script:results -join "`n") | Should -Not -Match $secret
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        }
+    }
+
+    It 'without proxy variables no proxy name is passed' {
+        $saved = @{}
+        $names = @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')
+        foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $null) }
+            Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+            foreach ($call in $script:calls) { ($call -join ' ') | Should -Not -Match '(?i)proxy' }
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        }
+    }
+
     It 'without Docker it returns 1' {
         Mock Test-BiDockerAvailable { return $false }
         Invoke-BuildImage -ArgumentList @() -RepoRoot $script:repo | Should -Be 1

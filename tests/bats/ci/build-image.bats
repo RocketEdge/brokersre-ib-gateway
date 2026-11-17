@@ -60,6 +60,7 @@ setup() {
   export PATH="${WORK}/bin:${PATH}"
   export STUB_DIR="${WORK}/stub"
   unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC STUB_RUN_RC STUB_DAEMON_DOWN
+  unset HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy
   start_server
   export BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:${PORT}"
 }
@@ -151,7 +152,10 @@ case "$1" in
       done
       args+=("$a")
     done
-    exec env -u BROKERSRE_TEST_IBKR_BASE_URL "${envs[@]}" "${args[@]}"
+    # What the helper's environment would be (docker passes only the -e variables), recorded
+    # for the proxy tests; proxies of the test's own shell never leak in otherwise.
+    for e in "${envs[@]}"; do printf '%s\n' "$e"; done >"${STUB_DIR}/helper-env"
+    exec env -u BROKERSRE_TEST_IBKR_BASE_URL -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u https_proxy -u http_proxy -u no_proxy "${envs[@]}" "${args[@]}"
     ;;
   *) exit 0 ;;
 esac
@@ -954,4 +958,47 @@ cached_meta() {
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"the Docker daemon is not reachable"* ]]
   ! grep -q -e '^run ' -e '^buildx build' "${WORK}/stub/calls" || false
+}
+
+# --- Proxy settings of the caller's shell reach the helper and the build, by name only.
+
+@test "proxy variables set in the shell reach the helper and the build, and their values are never printed" {
+  local secret
+  secret="pw-$(printf 'SYN%s' THETIC)"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  export HTTPS_PROXY="http://synthetic:${secret}@proxy.invalid:3128"
+  export http_proxy="http://synthetic:${secret}@proxy.invalid:3128"
+  export NO_PROXY="127.0.0.1,localhost"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  # The helper got the values (docker reads them from the caller's environment: -e NAME).
+  grep -qx "HTTPS_PROXY=${HTTPS_PROXY}" "${WORK}/stub/helper-env"
+  grep -qx "http_proxy=${http_proxy}" "${WORK}/stub/helper-env"
+  grep -qx "NO_PROXY=127.0.0.1,localhost" "${WORK}/stub/helper-env"
+  ! grep -q '^HTTP_PROXY=' "${WORK}/stub/helper-env" || false
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e HTTPS_PROXY ' >/dev/null
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e http_proxy ' >/dev/null
+  grep '^run ' "${WORK}/stub/calls" | grep -- '-e NO_PROXY ' >/dev/null
+  ! grep '^run ' "${WORK}/stub/calls" | grep -- '-e HTTP_PROXY ' >/dev/null || false
+  # The build got them as build arguments by name (buildx reads the values from the environment).
+  [ "$(buildx_option --build-arg | grep -cx -e HTTPS_PROXY -e http_proxy -e NO_PROXY)" -eq 3 ]
+  # No value in an argument list, on standard output or on standard error.
+  ! grep -q "${secret}" "${WORK}/stub/calls" "${WORK}/stub/buildx-args" || false
+  [[ "$output" != *"${secret}"* ]]
+  [[ "$stderr" != *"${secret}"* ]]
+}
+
+@test "without proxy variables nothing proxy-related is passed" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  ! grep -qi 'proxy' "${WORK}/stub/calls" "${WORK}/stub/buildx-args" || false
+}
+
+@test "the Dockerfile declares no proxy variable, so Docker keeps proxy build arguments out of the image" {
+  # HTTP_PROXY, HTTPS_PROXY, NO_PROXY (and lower case) are predefined build arguments: usable
+  # in RUN, excluded from `docker history` and from the image configuration unless declared.
+  ! grep -Ei '^[[:space:]]*(ARG|ENV|LABEL)[[:space:]].*(https?_proxy|no_proxy|all_proxy|ftp_proxy)' "${SRC}/Dockerfile" || false
 }

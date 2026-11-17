@@ -175,6 +175,16 @@ if ! docker buildx build --load -q -t "${helper_image}" "$(host_path "${repo_roo
   exit 1
 fi
 
+# The proxy variables of the caller's environment, by name. Docker takes their values from this
+# process's environment (`-e NAME`, `--build-arg NAME`), so a value, which may hold a password,
+# is never in an argument list or in the output. They are predefined build arguments: usable in
+# RUN steps, kept out of `docker history` and the image configuration (the Dockerfile declares
+# none). A proxy in Docker's config.json still applies when none of these is set.
+proxy_names=""
+for proxy_name in HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy; do
+  if [ -n "${!proxy_name:-}" ]; then proxy_names="${proxy_names} ${proxy_name}"; fi
+done
+
 # helper ARGS...: run scripts/resolve-installer.sh ARGS in the helper container, with the cache,
 # the repository (read-only), downloads/ and the --installer directory mounted. On Linux it
 # runs as the calling user, so that the cache and downloads/ stay the user's. It is told that
@@ -186,6 +196,7 @@ helper() {
     -e BROKERSRE_HOST_SHELL=bash -e "BROKERSRE_HOST_DOWNLOADS=$(host_path "${repo_root}/downloads")" \
     "${helper_image}" bash /repo/scripts/resolve-installer.sh "$@"
   if [ -n "${installer}" ]; then set -- -v "$(host_path "${installer_dir}"):/installer:ro" "$@"; fi
+  for proxy_name in ${proxy_names}; do set -- -e "${proxy_name}" "$@"; done
   if [ "$(uname -s)" = Linux ]; then set -- --user "$(id -u):$(id -g)" "$@"; fi
   docker run --rm "$@"
 }
@@ -243,6 +254,7 @@ while IFS= read -r line; do
 done <<EOF
 ${plan}
 EOF
+for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
 set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
 say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
 if ! docker "$@" >&2; then

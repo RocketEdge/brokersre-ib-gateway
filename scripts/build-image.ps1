@@ -189,6 +189,29 @@ function Get-BiUserArgument {
     return [string[]]@()
 }
 
+function Get-BiProxyName {
+    <#
+    .SYNOPSIS
+    The names of the proxy variables set in this process's environment.
+    .DESCRIPTION
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY and their lower-case forms, as the caller's shell set
+    them. Only the names are passed on ('-e NAME', '--build-arg NAME'); docker reads the values
+    from its environment, so a value, which may hold a password, is never in an argument list
+    or in the output. On Windows the names are case-insensitive, so a set HTTPS_PROXY also
+    answers for https_proxy; both are passed, with the same value.
+    .OUTPUTS
+    System.String[].
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+    $names = @()
+    foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy')) {
+        if ([Environment]::GetEnvironmentVariable($name)) { $names += $name }
+    }
+    return [string[]]$names
+}
+
 function Get-BiPlanValue {
     <#
     .SYNOPSIS
@@ -354,6 +377,9 @@ function Invoke-BuildImage {
         $installerPath = (Resolve-Path -LiteralPath $settings.Installer).ProviderPath
         $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)))
     }
+    # The shell's proxy variables, by name only (Get-BiProxyName); also passed to the build.
+    $proxyNames = @(Get-BiProxyName)
+    foreach ($name in $proxyNames) { $helperPrefix += @('-e', $name) }
     # BROKERSRE_HOST_SHELL and BROKERSRE_HOST_DOWNLOADS let the helper's advice name PowerShell's
     # command, -Installer and the Windows path of downloads\ (it sees only its mount /downloads).
     $helperPrefix += @('-v', ('{0}:/cache' -f $cacheDir), '-v', ('{0}:/repo:ro' -f $RepoRoot), '-v', ('{0}:/downloads' -f $downloads),
@@ -398,6 +424,8 @@ function Invoke-BuildImage {
         foreach ($line in $plan) {
             if ($line.StartsWith('build_arg: ')) { $build += @('--build-arg', $line.Substring(11)) }
         }
+        # Predefined build arguments: usable in RUN, kept out of docker history and the image.
+        foreach ($name in $proxyNames) { $build += @('--build-arg', $name) }
         $build += @('-f', (Join-Path $RepoRoot 'Dockerfile'), $RepoRoot)
         Write-BiMessage -Message ('building {0}: IB Gateway {1} ({2}) for {3}' -f $image, $version, $channel, $platform)
         if ((Invoke-BiDockerStream -ArgumentList $build) -ne 0) {
