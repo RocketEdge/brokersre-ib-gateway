@@ -14,11 +14,11 @@
   },
   "channels": {
     "stable": {
-      "version": "10.50.1g",
-      "build_datetime": "20261109 16:10:13",
+      "version": "10.50.1h",
+      "build_datetime": "20261116 16:02:08",
       "sha256": {
-        "x64": "13dc8bb05cbcec8d1b0bb0b25748447cf85863fb4b94361f57fcd350f35c7a9c",
-        "arm": "cbd1e3f9368dcc9d517e23dd72cf10db4d045e58b46882d01ab528a0d1f8e343"
+        "x64": "eb578b23b636e19c8417fc969264853a22792bcffa8fc79990cf15ff032fe7aa",
+        "arm": "1352b9f119c194409084a7081e629aba63a3eabb177777ec372a0f2d3bac6537"
       }
     },
     "latest": {

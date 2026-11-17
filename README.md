@@ -249,7 +249,7 @@ The versions this repository pins (generated from [versions.json](versions.json)
 <!-- versions:start -->
 | IBKR channel | IB Gateway | IBC | Tags |
 |---|---|---|---|
-| stable | 10.50.1g | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1g` |
+| stable | 10.50.1h | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1h` |
 | latest | 10.52.1d | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.52`, `10.52.1d` |
 <!-- versions:end -->
 
