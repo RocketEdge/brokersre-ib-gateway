@@ -195,6 +195,23 @@ automerge_problems() {
   [[ "$output" == *"pure conjunction"* ]]
 }
 
+@test "reading IBKR's version.json retries a short blip, within a bound, and still fails an outage" {
+  # 24 runs a day per channel: one dropped connection must not fail a run, and an outage must
+  # still fail it (curl -f, a bounded number of attempts and time).
+  facts="$(awk -f "${LISTER}" "${WF}")"
+  cmp="$(printf '%s\n' "${facts}" | awk -F '\t' '$2 == "id" && $3 == "cmp" { print $1 }')"
+  call="$(printf '%s\n' "${facts}" | awk -F '\t' -v step="${cmp}" '$1 == step && $2 == "run" && /version\.json/ && /curl/ { print $3 }')"
+  [ "$(printf '%s\n' "${call}" | grep -c curl)" -eq 1 ]
+  [[ "${call}" =~ curl\ -sSfL\  ]]
+  [[ "${call}" =~ --retry\ ([0-9]+)\  ]]
+  [ "${BASH_REMATCH[1]}" -ge 2 ] && [ "${BASH_REMATCH[1]}" -le 5 ]
+  [[ "${call}" == *"--retry-all-errors"* ]]
+  [[ "${call}" =~ --max-time\ ([0-9]+)\  ]]
+  [ "${BASH_REMATCH[1]}" -le 30 ]
+  [[ "${call}" =~ --retry-max-time\ ([0-9]+)\  ]]
+  [ "${BASH_REMATCH[1]}" -le 120 ]
+}
+
 @test "a pending full check is never replaced by an hourly run" {
   # GitHub keeps one pending run per concurrency group and cancels the older one. With one
   # group for all runs, a daily run that GitHub started hours late (seen: 6.5 to 8 hours) and

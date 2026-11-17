@@ -67,7 +67,9 @@ jobs:
           CHANNEL: ${{ matrix.channel }}
         run: |
           set -euo pipefail
-          res=$(curl -sSfL "https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
+          # Up to 3 retries 5 s apart, at most 20 s per attempt and 90 s in all: a dropped
+          # connection or a 5xx blip does not fail one of the 48 runs a day, an outage still does.
+          res=$(curl -sSfL --retry 3 --retry-all-errors --retry-delay 5 --max-time 20 --retry-max-time 90 "https://download2.interactivebrokers.com/installers/ibgateway/${CHANNEL}-standalone/version.json" | sed -E 's/^ibgateway[a-z]+_callback\(//; s/\);\s*$//')
           remote=$(jq -r .buildVersion <<< "$res")
           remote_dt=$(jq -r .buildDateTime <<< "$res")
           # External input: refuse anything that is not a plain IBKR build label before it reaches
