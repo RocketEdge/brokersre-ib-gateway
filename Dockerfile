@@ -26,6 +26,11 @@ ARG IB_GATEWAY_VERSION
 ARG IB_GATEWAY_SHA256_X64
 ARG IB_GATEWAY_SHA256_ARM
 ARG IB_GATEWAY_URL_BASE=https://download2.interactivebrokers.com/installers/ibgateway
+# IBKR's build stamp of the installer, "(.<suffix>) <buildDateTime>" (versions.json's
+# build_datetime for a pinned build, IBKR's version.json for a newer one, the installer's own
+# stamp for --installer). When set, the installed Gateway must carry exactly this stamp and the
+# version IB_GATEWAY_VERSION, or the build fails (fetch-installer.sh --check-stamp, ADR 0018).
+ARG IB_GATEWAY_BUILD_STAMP
 ARG IBC_VERSION
 ARG IBC_RELEASE_TAG
 ARG IBC_SHA256
@@ -45,6 +50,7 @@ RUN chmod +x /tmp/setup/fetch-installer.sh && /tmp/setup/fetch-installer.sh /tmp
 RUN chmod +x /tmp/setup/ibgateway.sh \
  && /tmp/setup/ibgateway.sh -q -dir "/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}" \
  && install_dir="/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}" \
+ && /tmp/setup/fetch-installer.sh --check-stamp "${install_dir}" \
  && if [ -d "${install_dir}/jre" ]; then echo "${install_dir}/jre" > "${install_dir}/.install4j/inst_jre.cfg"; fi \
  && sed -i "s/-Xmx768m/-Xmx${JAVA_HEAP_MB}m/" "${install_dir}/ibgateway.vmoptions" \
  && rm -f /tmp/setup/ibgateway.sh
