@@ -44,6 +44,10 @@ Next step.
   sets both. `BATS_TEST_TIMEOUT` exported from `setup_file` left all three Docker tests
   waiting on bats' `sleep` watchdog after their builds had finished (not isolated; not used).
   A failed resolve first left its 360 MB download in the cache for a day; it now removes it.
+  In CI the process-level Pester test failed under both editions: with `$ErrorActionPreference
+  = 'Stop'` a Windows PowerShell 5.1 host makes `& exe 2>$null` throw on the first stderr
+  line; it uses `Start-Process` with file redirection now. CodeQL flagged the fake IBKR
+  server (`py/path-injection`); it now serves only resolved paths inside its root.
 - **Next step:** phase 2 (README recipe, compose defaults to the local tag, Windows kit builds
   a missing image), phase 3 (private publishing, hourly detection), phase 4 (delete the public
   package). A paper login with a self-built 10.50.1h image would qualify it (L35).

@@ -189,7 +189,10 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   for usage errors. In Pester, `$script:` inside a function defined in `BeforeAll` does not
   reach the variables the mocks and the tests share (pass them as parameters), and a function
   that returns an array of arrays must `return , $array` or the caller indexes the first
-  inner element.
+  inner element. A test that runs a script as a process uses `Start-Process` with
+  `-RedirectStandardError <file>`, never `& exe 2>$null`: under `$ErrorActionPreference =
+  'Stop'` (the CI steps) a Windows PowerShell 5.1 host turns the redirected standard error
+  line into a terminating error (first CI run of the wrapper's tests, 2026-11-17).
 - A `head ... | grep -m 1` under `pipefail` is the `grep -q` trap again (SIGPIPE to the
   writer): `resolve-installer.sh` reads the installer header with `sed -n` over the whole
   input. Setting `BATS_TEST_TIMEOUT` in `setup_file` left every test of a suite waiting on its
