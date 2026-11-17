@@ -143,7 +143,7 @@ a daily patch window that never reboots on its own. It takes **no IBKR credentia
 parameter**.
 
 **The gateway image.** RocketEdge no longer distributes a public image of the gateway (it
-contains IBKR's software, and the former public package is being withdrawn;
+contains IBKR's software; the former public package was withdrawn on 2026-11-17;
 [README, "Why you build the image yourself"](../README.md#why-you-build-the-image-yourself)).
 Build it on your workstation ([README, "Build the image"](../README.md#build-the-image)), push it to a
 private registry of your own, here Azure Container Registry, and pass its digest as

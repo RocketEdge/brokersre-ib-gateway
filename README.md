@@ -74,10 +74,14 @@ what was not run is marked **not tested**.
 ### Why you build the image yourself
 
 The image contains IB Gateway as installed from IBKR's installer, and IB Gateway is IBKR's
-software. RocketEdge no longer distributes a public image that contains IB Gateway; the former
-public package `ghcr.io/rocketedge/brokersre-ib-gateway` is being withdrawn (decided
-2026-11-17). RocketEdge's own signed image, built from this recipe for its BrokerSRE service,
-is published only privately from then on. This repository is the recipe instead. When you
+software. RocketEdge no longer distributes a public image that contains IB Gateway: the former
+public package `ghcr.io/rocketedge/brokersre-ib-gateway` was withdrawn on 2026-11-17 (decided
+the same day) and can no longer be pulled. At the moment RocketEdge publishes no gateway image
+at all: the package exists again, not public, and holds only a placeholder without IBKR
+software. RocketEdge's own signed image, built from this recipe for its BrokerSRE service, will
+go to that package, which ghcr.io does not serve to anonymous users (private, or internal to
+RocketEdge's GitHub enterprise), and only after two checks that an anonymous read is refused.
+This repository is the recipe instead. When you
 build, your machine downloads IB Gateway from IBKR itself, under your
 own agreement with IBKR, and the image stays with you (keep it in a private registry if you
 move it, [below](#pushing-to-your-own-private-registry)). The decision is
@@ -483,8 +487,12 @@ their documented ones:
   docker push ghcr.io/<owner>/brokersre-ib-gateway:10.50.1h
   ```
 
-  GitHub documents a newly published package as private; check it on the package's page
-  under *Package settings*, *Danger Zone*, and keep it private.
+  GitHub documents a newly published package as private, but it is not always: a package
+  that a workflow of a public repository creates comes out public, and one pushed with a
+  personal token into an organisation that belongs to a GitHub enterprise came out internal,
+  visible to every member of the enterprise (both seen on 2026-11-17 with RocketEdge's
+  package). Check it on the package's page under *Package settings*, *Danger Zone*, and set it
+  to private.
 
 - **Azure Container Registry** (the Azure CLI, logged in):
 
@@ -617,12 +625,13 @@ rebuild brings a new Gateway.
 ### Coming from the public image
 
 Earlier versions of this repository's compose files and of the Windows kit ran
-`ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default, the public package that is being
-withdrawn. What that means for a gateway set up that way:
+`ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default, the public package that RocketEdge
+withdrew on 2026-11-17: it was deleted with every image in it, and the name now answers an
+anonymous pull with an error. What that means for a gateway set up that way:
 
 - **Until you change anything** it keeps running, and it starts again after a restart: Docker
-  keeps the image on the host. What stops working once the package is gone is every pull: a
-  new host, a `docker compose pull`, an `IBGW_IMAGE` that names a digest you have not pulled.
+  keeps the image on the host. What no longer works is every pull: a new host, a
+  `docker compose pull`, an `IBGW_IMAGE` that names a digest you have not pulled.
 - **After you update this repository** (`git pull`), the compose files name
   `brokersre-ib-gateway:stable` and never pull it: `up` stops with
   `No such image: brokersre-ib-gateway:stable` until you have built it.
@@ -1071,8 +1080,9 @@ credentials enter through `_FILE` variables, are rendered into
 child process starts; every build input is verified at build time (the base image and IBC by
 SHA-256, the Gateway installer by SHA-256 or, when IBKR has moved past the pin, by IBKR's own
 build stamp before and after installation). RocketEdge's own image (for BrokerSRE; its former
-public package is being withdrawn) is signed (keyless cosign), carries one CycloneDX SBOM per
-platform and GitHub build provenance, and both platforms are scanned by Trivy v0.76.2 before any tag moves; an image you build has
+public package was withdrawn on 2026-11-17, and none is published at the moment) is signed
+(keyless cosign), carries one CycloneDX SBOM per platform and GitHub build provenance, and
+both platforms are scanned by Trivy v0.76.2 before any tag moves; an image you build has
 none of that unless you add it. See [SECURITY.md](SECURITY.md).
 
 ## Verifying what you built
@@ -1128,8 +1138,8 @@ docker compose -f compose/docker-compose.example.yml logs ib-gateway | grep cont
 
 RocketEdge's own image is built from the same recipe for its BrokerSRE service; its signature,
 SBOMs and provenance are verified by BrokerSRE before a client pins a digest. Its former public
-package is being withdrawn (decided 2026-11-17), after which they are not available to the
-public; an image you build has none of them unless you add them.
+package was withdrawn on 2026-11-17, so they are not available to the public; an image you
+build has none of them unless you add them.
 
 ## Evidence for due diligence
 
@@ -1170,7 +1180,8 @@ In this repository the same script runs in the workflow `Qualify (paper login)`,
 dispatched by hand, only from `main`, only for an image given by digest, behind a required
 reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The digests
 `7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d), which RocketEdge published
-publicly on or before 2026-11-16 in its former public package, passed the script with a real
+publicly on or before 2026-11-16 in its former public package (deleted with it on
+2026-11-17), passed the script with a real
 paper account on 2026-11-16, run by hand: those two Gateway builds are the ones
 `versions.json` pins. A digest that a channel tag moves to later,
 after a rebuild for example, is not covered by those runs, and the workflow has not run yet
@@ -1275,8 +1286,10 @@ passes, a `latest` update waits for a human (ADR 0009; the repository variable
 pushes it by digest, scans both platforms of that digest, signs, and only then moves tags; OS
 packages are refreshed with `-rYYYYMMDD` tags monthly, and within a day of a fixable
 CRITICAL/HIGH finding (a target, not a guarantee: GitHub can delay or drop a scheduled run).
-The former public package of that image is being withdrawn (Phase 4 of
-[the spec](docs/specs/2026-11-17-private-image-public-recipe.md)).
+The former public package of that image was withdrawn on 2026-11-17 (Phase 4 of
+[the spec](docs/specs/2026-11-17-private-image-public-recipe.md)); no RocketEdge image is
+published at the moment, and the next publish goes to a package that is not public
+([ADR 0018](docs/adr/0018-private-image-public-build-recipe.md)).
 
 ## Automatic updates and repository secrets
 

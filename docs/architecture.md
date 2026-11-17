@@ -10,7 +10,7 @@ flowchart LR
   df --> rt["Dockerfile stage 2: ubuntu:26.04@digest + tini, Xvfb, socat, x11vnc, Java libs; uid 1000; rootfs/"]
   vj --> plan["plan: channel list (publish-channels.sh), no tag in both channels (check-bake-tags.sh)"]
   gate["job private-package: placeholder FROM scratch pushed; ghcr.io must refuse an anonymous token (check-package-private.sh); checked again right before the push"] --> push
-  rt --> push["multi-arch build, no cache, pushed BY DIGEST (no tag) to the PRIVATE package (ADR 0018)"]
+  rt --> push["multi-arch build, no cache, pushed BY DIGEST (no tag) to the NON-PUBLIC package: private or internal (ADR 0018, L40)"]
   push --> scan["Trivy v0.76.2 gate on linux/amd64 and linux/arm64 of that digest; each report checked for its platform"]
   scan --> sbom["one SBOM per platform, attested to that platform's manifest"]
   sbom --> sign["cosign sign + VEX attestation + build provenance on the index"]
@@ -29,9 +29,16 @@ one bash script, `scripts/resolve-installer.sh`, run in a helper container; the 
 pass arguments, run the build and the smoke test with the host's Docker, and print the
 result. CI's `build-test` job and the sidecar's end-to-end job build with `build-image.sh` and
 test the result as `brokersre-ib-gateway:stable`: no job started by a push or a pull request
-pulls RocketEdge's image, which is private (ADR 0018). Only `publish.yml`, the daily scan of
-`rebuild.yml` and `qualify-paper.yml` read the package, each after a registry login with the
-workflow's token.
+pulls RocketEdge's image, which ghcr.io does not serve to anonymous users (ADR 0018). Only
+`publish.yml`, the daily scan of `rebuild.yml` and `qualify-paper.yml` read the package, each
+after a registry login with the workflow's token, which reaches the package only through its
+"Manage Actions access" list: the package is not linked to this repository.
+
+State on 2026-11-17: the former public package was deleted; the package was created again by
+hand with a personal token (internal, not linked to this repository) and holds only a
+placeholder without IBKR software; `publish.yml`, `rebuild.yml` and `detect-releases.yml` are
+disabled until the owner has set its access. No RocketEdge image is published
+([ADR 0018, amendment of 2026-11-17](adr/0018-private-image-public-build-recipe.md#amendment-2026-11-17-how-the-package-was-created-again)).
 
 ```mermaid
 flowchart TB
