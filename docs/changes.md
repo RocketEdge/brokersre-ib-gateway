@@ -5,6 +5,25 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #37: zsh's "without bracketed paste" tests ran with it on
+
+- **What changed:** `pty-answers.py` loads zle (`zmodload zsh/zle`) before `unset
+  zle_bracketed_paste` in the test's `.zshrc`. Before pasting it now checks, for every shell,
+  that the bracketed-paste mode the shell switched on (`ESC[?2004h` on the screen) is the one
+  `--bracketed-paste` asks for, and otherwise pastes nothing and fails; the Ctrl-C tests ask
+  for `off` in sh. New test: the driver against stand-in shells that show the other mode.
+- **Result:** with the fixed driver the four zsh "without bracketed paste" tests fail on the
+  blocks of the first review round (`254f448`, no subshell) and pass on the subshell blocks;
+  with the driver of `761517a` they had passed on both, and the new guard test fails there.
+- **What did NOT work / root cause:** `zle_bracketed_paste` belongs to the zle module; the
+  `unset` in `.zshrc` ran before zle was loaded and zle set it again at the first prompt.
+  Ubuntu's `/etc/zsh/zshrc` had loaded zle earlier, so the tests were right until `f57f6e2`
+  skipped that file (`GLOBAL_RCS` unset), and nothing checked the mode the shell was in.
+  The comment of `f57f6e2` also said that no host start-up file runs: zsh still reads
+  `/etc/zsh/zshenv` and bash `/etc/bash.bashrc`; the comments now say so.
+- **Next step:** none planned; a start-up file that changes the mode now fails the test
+  instead of weakening it.
+
 ### 2026-11-17 — Review of #37: pasted secret blocks, Ctrl-C, the C# wording
 
 - **What changed:** the independent review of pull request #37 pasted each secret block in
