@@ -862,6 +862,39 @@ cached_meta() {
   [[ "$stderr" != *"rm '"* ]]
 }
 
+@test "the bash advice quotes a path with a single quote safely: the command removes exactly that file" {
+  local downloads="${WORK}/it's a \"repo\" \$HOME/downloads"
+  mkdir -p "${downloads}"
+  printf 'an archived copy of something else\n' >"${downloads}/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  run --separate-stderr env BROKERSRE_HOST_SHELL=bash BROKERSRE_HOST_DOWNLOADS="${downloads}" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${downloads}"
+  [ "$status" -eq 1 ]
+  local command
+  command="$(printf '%s\n' "$stderr" | sed -n 's/^    \(rm .*\)$/\1/p')"
+  [ -n "${command}" ]
+  bash -c "${command}"
+  [ ! -e "${downloads}/ibgateway-10.50.1g-standalone-linux-x64.sh" ]
+  [ -d "${downloads}" ]
+}
+
+@test "the PowerShell advice doubles every single quote in the path, typographic ones too" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # PowerShell ends a single-quoted string at ' and at the typographic quotes U+2018/U+2019.
+  run --separate-stderr env BROKERSRE_HOST_SHELL=powershell \
+    BROKERSRE_HOST_DOWNLOADS="C:\\Users\\o'brien\\Ann$(printf '\342\200\231')s repo\\downloads" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  local expected
+  expected="Remove-Item -LiteralPath 'C:\\Users\\o''brien\\Ann$(printf '\342\200\231\342\200\231')s repo\\downloads\\ibgateway-10.50.1g-standalone-linux-x64.sh'"
+  [[ "$stderr" == *"${expected}"* ]]
+}
+
 @test "without a hint from a wrapper the refusal names the file relative to the repository" {
   printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
   serve_version stable 10.50.1g "20261109 16:10:13"

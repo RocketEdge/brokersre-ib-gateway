@@ -253,16 +253,26 @@ remove_failed_run() {
 # (BROKERSRE_HOST_SHELL bash|powershell, BROKERSRE_HOST_DOWNLOADS), because this helper sees
 # only its own mount /downloads; without them the path is named relative to the repository.
 leftover_advice() {
-  local name="$1" dir="${BROKERSRE_HOST_DOWNLOADS:-}" sep=/
+  local name="$1" dir="${BROKERSRE_HOST_DOWNLOADS:-}" sep=/ path quoted quote
   case "${dir}" in *\\*) sep="\\" ;; esac
+  path="${dir}${sep}${name}"
   case "${BROKERSRE_HOST_SHELL:-}:${dir}" in
     powershell:?*)
-      printf "If no other build is running, remove it and build again:\n    Remove-Item -LiteralPath '%s%s%s'\n  If you put it there yourself, move it elsewhere, or build from it with -Installer." \
-        "${dir}" "${sep}" "${name}"
+      # A single-quoted PowerShell string: every single quote is doubled, and PowerShell also
+      # ends such a string at the typographic quotes U+2018, U+2019, U+201A and U+201B (written
+      # as UTF-8 bytes, so that this file stays ASCII), which are doubled the same way.
+      quoted="${path//\'/\'\'}"
+      for quote in $'\342\200\230' $'\342\200\231' $'\342\200\232' $'\342\200\233'; do
+        quoted="${quoted//"${quote}"/${quote}${quote}}"
+      done
+      printf "If no other build is running, remove it and build again:\n    Remove-Item -LiteralPath '%s'\n  If you put it there yourself, move it elsewhere, or build from it with -Installer." \
+        "${quoted}"
       ;;
     bash:?*)
-      printf "If no other build is running, remove it and build again:\n    rm '%s%s%s'\n  If you put it there yourself, move it elsewhere, or build from it with --installer." \
-        "${dir}" "${sep}" "${name}"
+      # A single-quoted shell word: each ' becomes '\'' (close, escaped quote, reopen).
+      quoted="${path//\'/\'\\\'\'}"
+      printf "If no other build is running, remove it and build again:\n    rm '%s'\n  If you put it there yourself, move it elsewhere, or build from it with --installer." \
+        "${quoted}"
       ;;
     *)
       printf 'If no other build is running, remove downloads/%s of the repository and build again.\n  If you put it there yourself, move it elsewhere, or build from it with --installer (-Installer).' \
