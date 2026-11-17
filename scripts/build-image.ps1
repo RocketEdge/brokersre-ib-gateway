@@ -212,6 +212,30 @@ function Get-BiProxyName {
     return [string[]]$names
 }
 
+function Get-BiRevision {
+    <#
+    .SYNOPSIS
+    The commit of the checkout at RepoRoot, or 'unknown'.
+    .DESCRIPTION
+    Labels the image (org.opencontainers.image.revision). 'unknown' when git is not installed or
+    RepoRoot is not a git work tree (a downloaded archive). The error preference is lowered in
+    this function only: Windows PowerShell 5.1 turns git's redirected standard error into an
+    error, terminating under 'Stop'.
+    .PARAMETER RepoRoot
+    The repository root.
+    .OUTPUTS
+    System.String: lower-case hex, or 'unknown'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) { return 'unknown' }
+    $ErrorActionPreference = 'Continue'
+    $revision = (@(& git -C $RepoRoot rev-parse HEAD 2>$null) -join '').Trim()
+    if ($LASTEXITCODE -eq 0 -and $revision -match '^[0-9a-f]+$') { return $revision }
+    return 'unknown'
+}
+
 function Get-BiPlanValue {
     <#
     .SYNOPSIS
@@ -426,6 +450,11 @@ function Invoke-BuildImage {
         }
         # Predefined build arguments: usable in RUN, kept out of docker history and the image.
         foreach ($name in $proxyNames) { $build += @('--build-arg', $name) }
+        # The build's own OCI labels, as build-image.sh and the bake path set them: the build
+        # time in UTC, to the second, and the commit of this checkout (Get-BiRevision).
+        $created = [DateTime]::UtcNow.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+        $build += @('--label', ('org.opencontainers.image.created={0}' -f $created),
+            '--label', ('org.opencontainers.image.revision={0}' -f (Get-BiRevision -RepoRoot $RepoRoot)))
         $build += @('-f', (Join-Path $RepoRoot 'Dockerfile'), $RepoRoot)
         Write-BiMessage -Message ('building {0}: IB Gateway {1} ({2}) for {3}' -f $image, $version, $channel, $platform)
         if ((Invoke-BiDockerStream -ArgumentList $build) -ne 0) {

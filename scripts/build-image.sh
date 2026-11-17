@@ -255,6 +255,15 @@ done <<EOF
 ${plan}
 EOF
 for proxy_name in ${proxy_names}; do set -- "$@" --build-arg "${proxy_name}"; done
+# The build's own OCI labels (the bake path sets the same through bake-env.sh): the build time
+# in UTC, to the second, and the commit of this checkout, or unknown when it is not a git work
+# tree (a downloaded archive). Without them the image showed the Ubuntu base image's `created`
+# and no revision. They change the image id from build to build, which a rebuild did anyway
+# (README, "Pinning and reproducing a build"): same Gateway and IBC, not the same image id.
+build_revision="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null)" || build_revision=""
+case "${build_revision}" in "" | *[!0-9a-f]*) build_revision=unknown ;; esac
+set -- "$@" --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --label "org.opencontainers.image.revision=${build_revision}"
 set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
 say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
 if ! docker "$@" >&2; then

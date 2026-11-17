@@ -300,6 +300,25 @@ Describe 'Invoke-BuildImage' {
         }
     }
 
+    It 'labels the build with its time (UTC) and the revision Get-BiRevision gives (<revision>)' -TestCases @(
+        @{ revision = ('c' * 40) }, @{ revision = 'unknown' }
+    ) {
+        Mock Get-BiRevision { return $revision }
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $build = (Get-TestCall -Calls $script:calls -Marker '--platform')[0]
+        Test-Sequence -Actual $build -Expected @('--label', ('org.opencontainers.image.revision={0}' -f $revision)) | Should -BeTrue
+        $created = @($build | Where-Object { $_ -like 'org.opencontainers.image.created=*' })
+        $created.Count | Should -Be 1
+        $created[0] | Should -Match '^org\.opencontainers\.image\.created=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+    }
+
+    It 'Get-BiRevision names the commit of a git work tree and unknown elsewhere' {
+        Get-BiRevision -RepoRoot $script:repo | Should -Be 'unknown'
+        if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+            Get-BiRevision -RepoRoot (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) | Should -Match '^[0-9a-f]{40}$'
+        }
+    }
+
     It 'without Docker it returns 1' {
         Mock Test-BiDockerAvailable { return $false }
         Invoke-BuildImage -ArgumentList @() -RepoRoot $script:repo | Should -Be 1

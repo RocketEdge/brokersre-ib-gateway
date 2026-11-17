@@ -1002,3 +1002,32 @@ cached_meta() {
   # in RUN, excluded from `docker history` and from the image configuration unless declared.
   ! grep -Ei '^[[:space:]]*(ARG|ENV|LABEL)[[:space:]].*(https?_proxy|no_proxy|all_proxy|ftp_proxy)' "${SRC}/Dockerfile" || false
 }
+
+# --- OCI labels of a helper build: created (build time, UTC) and revision (the commit).
+
+@test "a helper build is labelled with its build time (UTC) and revision unknown outside a git work tree" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.created=//p')" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = unknown ]
+}
+
+@test "a helper build from a git work tree is labelled with its commit" {
+  require_command git
+  git -C "${REPO}" init -q
+  git -C "${REPO}" add -A
+  git -C "${REPO}" -c user.email=test@example.invalid -c user.name=test commit -q -m test
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option --label | sed -n 's/^org.opencontainers.image.revision=//p')" = "$(git -C "${REPO}" rev-parse HEAD)" ]
+}
+
+@test "the image's url label points at the README's build section, not the retired package page" {
+  grep -q 'org.opencontainers.image.url="https://github.com/RocketEdge/brokersre-ib-gateway#build-the-image"' "${SRC}/Dockerfile"
+  grep -q '^## Build the image$' "${SRC}/README.md"
+  ! grep -q 'pkgs/container' "${SRC}/Dockerfile" || false
+}
