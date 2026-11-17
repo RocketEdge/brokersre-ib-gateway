@@ -536,22 +536,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-image.ps1 -Cha
 ```
 
 - It builds the version pinned in `versions.json` when IBKR still serves it, and checks the
-  installer's SHA-256 against the pin. When IBKR has moved on (IBKR serves only its newest
-  build), it builds IBKR's current build instead: it accepts the installer only when IBKR's
+  installer's SHA-256 against the pin. When IBKR serves another version (IBKR serves only one
+  build per channel, usually newer than the pin), it builds IBKR's current build instead: it
+  accepts the installer only when IBKR's
   `version.json` is the same before and after the download and the installed Gateway carries
   the build stamp IBKR announced. Such an image is labelled
   `com.rocketedge.brokersre.qualified=no` and a warning tells you how to qualify it with one
   paper login. `--strict` refuses to build it (exit 4).
 - `--installer FILE` builds from an installer you already have; its version comes from its
-  build stamp. Every accepted installer is cached by version
+  build stamp, and a file you keep in `downloads/` is never overwritten or removed. Every
+  accepted installer is cached by version and SHA-256 with its source
   (`~/.cache/brokersre-ib-gateway`, `%LOCALAPPDATA%\brokersre-ib-gateway` for PowerShell), so
-  the same version builds again while IBKR is unreachable.
+  the same version builds again while IBKR is unreachable; a file given with `--installer`
+  stands in for IBKR's download only when it is the pinned installer.
 - After the build it runs the offline IBC smoke test (`--no-smoke` skips it). The image is
   tagged `brokersre-ib-gateway:<channel>` and `brokersre-ib-gateway:<version>` (`--tag`
   replaces both), and the last lines are `key: value`: `version`, `channel`,
   `qualified_by_project`, `installer_sha256`, `ibkr_build_stamp`, `image`, `image_id`.
 - Exit codes: `0` built, `1` download, check, build or smoke test failed, `2` usage, `3` IBKR
-  unreachable and nothing usable cached, `4` `--strict` and IBKR serves another version. The
+  unreachable and no usable cached installer, `4` `--strict` and IBKR serves another version. The
   decision is [ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the interface is
   in [the spec](docs/specs/2026-11-17-private-image-public-recipe.md).
 

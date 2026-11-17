@@ -39,14 +39,18 @@ The installed Gateway records the same facts in
 A build is accepted when:
 
 - the version equals the pin in `versions.json` and the installer's SHA-256 equals the pin; or
-- (default) the version is newer than the pin, the installer came from IBKR over HTTPS, and
-  after installation the stamp `(.<suffix>) <buildDateTime>` equals what `version.json`
-  announced before AND after the download; the image is then labelled not qualified; or
+- (default) the version is another than the pin (newer, or older when IBKR rolls a channel
+  back), the installer came from IBKR over HTTPS (redirects too), and after installation the
+  stamp `(.<suffix>) <buildDateTime>` equals what `version.json` announced before AND after
+  the download; the image is then labelled not qualified; or
 - the user supplied an installer file (`--installer`): its stamp after installation must
   name a version, which becomes the image's version; its SHA-256 is recorded.
 
-Every accepted installer is cached by version with its SHA-256, so the same version can be
-rebuilt after IBKR has moved on, without network access to IBKR.
+Every accepted installer is cached by version and SHA-256, with its source (`ibkr`,
+`installer`, or `override` for the tests' server), so the same version can be rebuilt after
+IBKR has moved on, without network access to IBKR. A build reuses a cached version other than
+the pin only when it came from the same origin; bytes given with `--installer` are reused
+only as the pin, when their SHA-256 is the pin's.
 
 ### Interface (contract for every part of the work)
 
@@ -67,13 +71,16 @@ scripts/build-image.ps1 -Channel stable|latest -Strict -Installer FILE -Platform
 - Default cache: `${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway` (Linux, macOS, WSL,
   Git Bash); `%LOCALAPPDATA%\brokersre-ib-gateway` (PowerShell).
 - Exit codes: `0` built (and smoke-tested unless `--no-smoke`); `1` download, verification,
-  build or smoke test failed; `2` usage; `3` IBKR unreachable and no cached installer for the
-  pinned version; `4` `--strict` and IBKR serves a version other than the pin.
+  build or smoke test failed (also any docker failure outside these codes); `2` usage; `3` IBKR
+  unreachable and no usable cached installer (offline the cached pin is preferred, else the
+  newest cached installer of the channel that came from IBKR; with `--strict` only the pin);
+  `4` `--strict` and IBKR serves a version other than the pin.
 - Last lines printed (machine-readable `key: value`): `version`, `channel`,
   `qualified_by_project: yes|no`, `installer_sha256`, `ibkr_build_stamp`, `image`, `image_id`.
 - Image labels added: `com.rocketedge.brokersre.ibkr.version`,
   `com.rocketedge.brokersre.ibkr.build_stamp`, `com.rocketedge.brokersre.installer.sha256`,
-  `com.rocketedge.brokersre.qualified` (`yes` when version and SHA-256 equal the pin).
+  `com.rocketedge.brokersre.qualified` (`yes` when version and SHA-256 equal the pin),
+  `com.rocketedge.brokersre.installer.source` (`ibkr`, `installer` or `override`).
 - `--print-plan` resolves and prints what it would build (version, pinned or not, cache hit)
   and exits 0 without downloading or building.
 - The smoke test is the existing offline IBC check (no network, IBC starts, the command
@@ -115,3 +122,12 @@ anything to Azure; automating the second factor.
 5. **BrokerSRE and the blog** (monorepo): pins to the new private digests via the pin flow,
    private-registry credentials for the ACR import, blog brief reworked; paper re-verification
    of a self-built image.
+
+## Corrections (review of #39, 2026-11-17)
+
+The implementation's behaviour was the better choice in two places, so the text above follows
+it: a build falls forward to any version other than the pin (IBKR may roll a channel back, and
+the owner's table row "newer" describes the case seen on 2026-11-17), and exit `3` means that
+IBKR is unreachable and no usable installer is cached, not only that the pin is missing. The
+review also added the cache's source (and the label `installer.source`), the cache key by
+version and SHA-256, HTTPS for redirects in every mode, and exit `1` for a docker failure.
