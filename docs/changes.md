@@ -18,12 +18,22 @@ Next step.
   build from the tag and name the digest as RocketEdge's private image. `detect-releases.yml`
   runs hourly (`23 * * * *`) besides 06:00 UTC; `scripts/detect-scope.sh` decides whether a
   run downloads and hashes (daily, dispatch, first sight of a version) or stops after
-  `version.json`; one concurrency group. ADR 0018 records these and that stable bumps keep
-  merging themselves; L39.
+  `version.json`. ADR 0018 records these and that stable bumps keep merging themselves; L39.
+  Review of the pull request (same day): `publish.yml` gets a first job, `private-package`,
+  that pushes a placeholder without IBKR content and requires an anonymous read of it to be
+  refused (`scripts/check-package-private.sh`) before `publish` may start; the qualification
+  logs in and pulls before the credential files exist (login pinned by commit);
+  `qualified_by_project: yes` is defined as "equals the pin, which passed the offline CI, not
+  a paper login" in both build scripts' help, the spec, ADR 0018 and L35; detection runs in
+  one concurrency group per kind of check (full, hourly), retries `version.json` briefly, and
+  counts only this repository's update pull requests; three surviving mutations got tests.
 - **Result:** `tests/bats/ci/private-package.bats` (9 tests) and `detect-scope.bats` (11)
   were red on `main` for the reasons above (two are guards of properties `main` already had)
   and are green; `workflows.bats` stays green; actionlint 1.7.12 clean. CI and Sidecar runs
-  of the pull request: see its description.
+  of the pull request: see its description. After the review: 13, 15 and 7 tests
+  (`check-package-private.bats` new), each new one red first (the guards against the review's
+  mutations M3, M7 and M9 red with the mutation applied to the real workflow); the `--help`
+  tests in bats and Pester (Windows PowerShell 5.1 and PowerShell 7) red first.
 - **What did NOT work / root cause:** `rebuild.yml`'s daily scan read the channel tag
   (`docker buildx imagetools inspect`) and scanned with `TRIVY_IMAGE_SRC=remote` without a
   login: against a private package it would have failed every day. `qualify-paper.yml` logged
@@ -34,6 +44,11 @@ Next step.
   workflow sets one; it now reads step scripts and inputs only. Hourly detection with the full
   check every hour would have downloaded about 27 GB a day from IBKR (565 MB per channel per
   run) and reopened a closed pull request within the hour instead of the next day (ADR 0009).
+  The first version assumed that a package created again would be private; GitHub documents
+  that a package created with a workflow's token inherits the visibility model of the
+  repository (public here), and only one earlier run saw the opposite, so the visibility is
+  now proven before any IBKR byte is pushed. A single concurrency group would have let an
+  hourly run replace a daily run that GitHub started hours late.
 - **Next step:** the owner's steps in `tasks/todo.md` (delete the public package, re-enable
   the three workflows, publish both channels, check the package is private and grant read
   access); the first publish after the deletion is what proves the private path (L39). After
