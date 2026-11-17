@@ -224,12 +224,14 @@ Describe 'The gateway image on this computer' {
             # A mocked wsl.exe: mktemp and wslpath answer like Linux, the build's exit code and a
             # failing step are set per test; every call is recorded as '<args joined by |> I=<interactive>'.
             $script:wslCalls = New-Object System.Collections.Generic.List[string]
+            $script:wslDeadlines = New-Object System.Collections.Generic.List[string]
             $script:wslBuildExit = 0
             $script:wslFailStep = ''
             Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl {
                 $joined = $ArgumentList -join '|'
                 $interactiveCall = [bool](Get-Variable -Name Interactive -ValueOnly -ErrorAction SilentlyContinue)
                 $script:wslCalls.Add(('{0} I={1}' -f $joined, $interactiveCall))
+                $script:wslDeadlines.Add(('{0} T={1}' -f $joined, (Get-Variable -Name TimeoutSeconds -ValueOnly -ErrorAction SilentlyContinue)))
                 if ($script:wslFailStep -ne '' -and $joined -like $script:wslFailStep) { return (Get-TestNativeResult -ExitCode 2 -Output @('tar: failed')) }
                 if ($joined -eq '-d|Ubuntu-24.04|--exec|mktemp|-d') { return (Get-TestNativeResult -Output @('/tmp/tmp.k1T')) }
                 if ($joined -like '-d|Ubuntu-24.04|--exec|wslpath|-a|*') { return (Get-TestNativeResult -Output @('/mnt/c/src/brokersre-ib-gateway')) }
@@ -239,24 +241,70 @@ Describe 'The gateway image on this computer' {
             Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'PowerShell must not be called' }
         }
 
-        It 'copies the tree into a temporary directory of the distribution, builds there and removes the copy' {
+        It 'copies what the image build reads into a temporary directory of the distribution, builds there and removes the copy' {
             $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false
             $result.Ran | Should -BeTrue
             $result.ExitCode | Should -Be 0
             @($script:wslCalls) | Should -Be @(
                 '-d|Ubuntu-24.04|--exec|mktemp|-d I=False'
                 ('-d|Ubuntu-24.04|--exec|wslpath|-a|{0} I=False' -f $script:repositoryRoot)
-                '-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|--exclude=./.git|--exclude=./downloads|--exclude=./tests/.bats-core|-cf|/tmp/tmp.k1T/source.tar|. I=False'
+                '-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|-cf|/tmp/tmp.k1T/source.tar|Dockerfile|.dockerignore|versions.json|rootfs|scripts/build-image.sh|scripts/resolve-installer.sh|scripts/fetch-installer.sh|scripts/build-helper|tests/container/run.sh I=False'
                 '-d|Ubuntu-24.04|--exec|mkdir|/tmp/tmp.k1T/source I=False'
                 '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False'
+                '-d|Ubuntu-24.04|--exec|rm|-f|/tmp/tmp.k1T/source.tar I=False'
                 '-d|Ubuntu-24.04|--cd|/tmp/tmp.k1T/source|--exec|bash|scripts/build-image.sh|--channel|latest I=True'
                 '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
             )
         }
 
+        It 'packs only named build inputs: never compose/ (secrets, .env), downloads/, .git or a local tool folder' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $pack = @($script:wslCalls | Where-Object { $_ -like '*|tar|-C|/mnt/c/*' })
+            $pack.Count | Should -Be 1
+            $parts = @(($pack[0] -replace ' I=False\z', '').Split('|'))
+            $inputs = @($parts | Select-Object -Skip ([array]::IndexOf($parts, '-cf') + 2))
+            $inputs.Count | Should -BeGreaterThan 0
+            $inputs | Should -Not -Contain '.'
+            @($inputs | Where-Object { $_ -match '(\A|/)(compose|secrets|downloads|\.git|\.venv|node_modules|bin|obj)(/|\z)|\.env\z|\A\.|\*' -and $_ -ne '.dockerignore' }).Count | Should -Be 0
+        }
+
+        It 'every named input exists in this repository, so a clone builds' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $pack = @($script:wslCalls | Where-Object { $_ -like '*|tar|-C|/mnt/c/*' })
+            $parts = @(($pack[0] -replace ' I=False\z', '').Split('|'))
+            foreach ($name in @($parts | Select-Object -Skip ([array]::IndexOf($parts, '-cf') + 2))) {
+                Test-Path -LiteralPath (Join-Path $script:repositoryRoot $name) | Should -BeTrue -Because $name
+            }
+        }
+
+        It 'removes the archive right after unpacking it, before the build starts' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $calls = @($script:wslCalls)
+            $unpacked = [array]::IndexOf($calls, '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False')
+            $removed = [array]::IndexOf($calls, '-d|Ubuntu-24.04|--exec|rm|-f|/tmp/tmp.k1T/source.tar I=False')
+            $built = @(0..($calls.Count - 1) | Where-Object { $calls[$_] -like '*|bash|scripts/build-image.sh|*' })[0]
+            $unpacked | Should -BeGreaterThan -1
+            $removed | Should -Be ($unpacked + 1)
+            $built | Should -BeGreaterThan $removed
+        }
+
+        It 'gives each copy step a deadline of 120 s (the inputs are about 0.3 MB) and the build none' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            @($script:wslDeadlines | Where-Object { $_ -match '\|(tar|mkdir|rm)\|' -and $_ -notmatch ' T=120\z' }).Count | Should -Be 0
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -and $_ -notlike '* I=True' }).Count | Should -Be 0
+        }
+
+        It 'does not build and removes the copy when unpacking fails' {
+            $script:wslFailStep = '*|tar|-C|/tmp/tmp.k1T/source|-xf|*'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' }).Count | Should -Be 0
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
         It 'never builds from the Windows folder, which WSL shows under /mnt/c with mode 0777' {
             Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
-            @($script:wslCalls | Where-Object { $_ -like '*scripts/build-image.sh*' -and $_ -notlike '*|--cd|/tmp/tmp.k1T/source|*' }).Count | Should -Be 0
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -and $_ -notlike '*|--cd|/tmp/tmp.k1T/source|*' }).Count | Should -Be 0
         }
 
         It 'passes the build''s exit code through and still removes the copy' {
@@ -270,7 +318,7 @@ Describe 'The gateway image on this computer' {
             $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
             $result.Ran | Should -BeFalse
             $result.Detail | Should -Match 'copy'
-            @($script:wslCalls | Where-Object { $_ -like '*build-image.sh*' }).Count | Should -Be 0
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' }).Count | Should -Be 0
             $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
         }
 
@@ -278,7 +326,7 @@ Describe 'The gateway image on this computer' {
             $script:wslFailStep = '*|mktemp|-d'
             $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
             $result.Ran | Should -BeFalse
-            @($script:wslCalls | Where-Object { $_ -like '*build-image.sh*' -or $_ -like '*|rm|*' }).Count | Should -Be 0
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -or $_ -like '*|rm|*' }).Count | Should -Be 0
         }
     }
 

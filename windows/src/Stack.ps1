@@ -513,13 +513,17 @@ function Invoke-GwWslImageBuild {
     .DESCRIPTION
     WSL shows a Windows folder under /mnt/c (drvfs) with mode 0777 on every file and folder, and
     a build from there would hand those modes to the image's build context; it is also slow.
-    So the tree is copied first, with no shell involved (every step is one 'wsl --exec'):
-    'mktemp -d' makes a temporary directory, 'wslpath -a' names the repository's Linux path,
-    'tar' packs the tree there into source.tar (without .git, downloads/ and tests/.bats-core),
-    and 'tar' unpacks it into <temp>/source as the distribution's user, whose umask removes
-    the write bits for group and others. Then 'bash scripts/build-image.sh --channel <channel>'
-    runs from that copy on the console (no deadline). The temporary directory is removed in
-    every case once it exists. The installer cache is the distribution user's
+    So the build's inputs are copied first, with no shell involved (every step is one
+    'wsl --exec', 120 s each): 'mktemp -d' makes a temporary directory, 'wslpath -a' names the
+    repository's Linux path, 'tar' packs a NAMED list of what scripts/build-image.sh reads
+    (Dockerfile, .dockerignore, versions.json, rootfs/, the build, resolve and fetch scripts,
+    scripts/build-helper/, tests/container/run.sh; about 0.3 MB) into source.tar, 'tar' unpacks
+    it into <temp>/source as the distribution's user, whose umask removes the write bits for
+    group and others, and the archive is removed at once. Never the whole tree: a checkout
+    where someone followed the quick start holds IBKR credentials in compose/secrets and
+    settings in .env files, and a closed window or a killed process skips the cleanup below.
+    Then 'bash scripts/build-image.sh --channel <channel>' runs from that copy on the console
+    (no deadline). The temporary directory is removed in every case once it exists. The installer cache is the distribution user's
     ~/.cache/brokersre-ib-gateway, not %LOCALAPPDATA%. The Dockerfile sets the modes of what
     it copies itself as well, so the image does not depend on this copy either.
     .PARAMETER Distro
@@ -551,12 +555,25 @@ function Invoke-GwWslImageBuild {
         if ($mapped.ExitCode -ne 0 -or $source -eq '') {
             return (& $notRun ('the copy of the repository into {0} failed: wslpath did not translate {1}' -f $Distro, $RepositoryRoot))
         }
+        # What scripts/build-image.sh reads, and nothing else: the Dockerfile and its context
+        # (.dockerignore admits Dockerfile, rootfs/, scripts/fetch-installer.sh and downloads/,
+        # which the script creates), the pins, the helper image and its script, and the smoke
+        # test. A named list instead of the whole tree, so that compose/secrets, .env files,
+        # downloads/ and local tool folders never reach the distribution's /tmp.
+        $buildInputs = @(
+            'Dockerfile', '.dockerignore', 'versions.json', 'rootfs',
+            'scripts/build-image.sh', 'scripts/resolve-installer.sh', 'scripts/fetch-installer.sh', 'scripts/build-helper',
+            'tests/container/run.sh'
+        )
+        $archive = '{0}/source.tar' -f $temp
         $steps = New-Object System.Collections.Generic.List[object]
-        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', $source, '--exclude=./.git', '--exclude=./downloads', '--exclude=./tests/.bats-core', '-cf', ('{0}/source.tar' -f $temp), '.'))
+        $steps.Add([string[]](@('-d', $Distro, '--exec', 'tar', '-C', $source, '-cf', $archive) + $buildInputs))
         $steps.Add([string[]]@('-d', $Distro, '--exec', 'mkdir', ('{0}/source' -f $temp)))
-        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', ('{0}/source' -f $temp), '-xf', ('{0}/source.tar' -f $temp)))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', ('{0}/source' -f $temp), '-xf', $archive))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'rm', '-f', $archive))
         foreach ($step in $steps) {
-            $done = Invoke-GwWsl -ArgumentList $step
+            # About 0.3 MB in some 30 files: seconds even from /mnt/c, so 120 s is a wide margin.
+            $done = Invoke-GwWsl -ArgumentList $step -TimeoutSeconds 120
             if ($done.ExitCode -ne 0) {
                 return (& $notRun ('the copy of the repository into {0} failed ({1}: {2})' -f $Distro, $step[3], (($done.Output | Select-Object -First 1) -join '')))
             }
@@ -565,7 +582,7 @@ function Invoke-GwWslImageBuild {
         return [pscustomobject]@{ Ran = $true; ExitCode = [int]$build.ExitCode; Detail = '' }
     }
     finally {
-        Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'rm', '-rf', $temp) | Out-Null
+        Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'rm', '-rf', $temp) -TimeoutSeconds 120 | Out-Null
     }
 }
 
