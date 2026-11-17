@@ -154,13 +154,13 @@ az acr create --resource-group <resource-group> --name <registry> --sku Basic
 az acr login --name <registry>
 docker tag brokersre-ib-gateway:stable <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
 docker push <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
-docker image inspect <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h --format '{{index .RepoDigests 0}}'
 ```
 
-The last line prints `<registry>.azurecr.io/brokersre-ib-gateway@sha256:<digest>`: that is
-`gatewayImage`. Leave anonymous pull off on the registry. **Not tested**: none of these
-commands ran against a real ACR (the tag, push and digest lines ran against a local
-`registry:2`), and ACR Tasks (`az acr build`) were not tried: the build needs its helper
+The push ends with `10.50.1h: digest: sha256:<digest> size: ...`;
+`<registry>.azurecr.io/brokersre-ib-gateway@sha256:<digest>` is `gatewayImage`. Leave
+anonymous pull off on the registry. **Not tested**: none of these commands ran against a real
+ACR (the build, tag and push ran against a local `registry:2`), and ACR Tasks
+(`az acr build`) were not tried: the build needs its helper
 container next to the build, so build locally and push. **The VM cannot log in to a private
 registry yet** ([limitations](../docs/limitations.md) L37): it has no registry credential and
 its identity has no `AcrPull` role, so with a private registry its first `docker compose up`

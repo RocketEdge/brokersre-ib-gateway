@@ -389,12 +389,14 @@ pattern for every registry below:
 docker run -d --name local-registry -p 127.0.0.1:5000:5000 registry:2
 docker tag brokersre-ib-gateway:stable localhost:5000/brokersre-ib-gateway:10.50.1h
 docker push localhost:5000/brokersre-ib-gateway:10.50.1h
-docker image inspect localhost:5000/brokersre-ib-gateway:10.50.1h --format '{{index .RepoDigests 0}}'
 ```
 
-The last line prints `localhost:5000/brokersre-ib-gateway@sha256:<digest>`: that is the
-reference to pin (`IBGW_IMAGE=...@sha256:<digest>`). The other registries were **not tested**;
-the commands are their documented ones:
+The push ends with `10.50.1h: digest: sha256:<digest> size: 856`: pin
+`localhost:5000/brokersre-ib-gateway@sha256:<digest>` (`IBGW_IMAGE=...@sha256:<digest>`).
+Later, `docker image inspect localhost:5000/brokersre-ib-gateway:10.50.1h --format '{{json .RepoDigests}}'`
+lists it again; take the entry that starts with your registry (Docker Desktop's image store
+also lists one for the local name). The other registries were **not tested**; the commands are
+their documented ones:
 
 - **GitHub Container Registry (private package).** A token with `write:packages`
   (a classic personal access token), then:
@@ -440,11 +442,16 @@ the commands are their documented ones:
   ```
 
 On the machine that runs it, the compose files of this repository never pull the gateway
-image on their own (`pull_policy: never`); pull yours on purpose, after `docker login`:
+image on their own (`pull_policy: never`; a plain `docker compose pull` says `Skipped`); pull
+yours on purpose, after `docker login`:
 
 ```bash
 IBGW_IMAGE=localhost:5000/brokersre-ib-gateway@sha256:<digest> docker compose -f compose/docker-compose.example.yml pull --policy missing
 ```
+
+You should see `Image localhost:5000/brokersre-ib-gateway@sha256:<digest> Pulled`. `up -d
+--pull missing` with the same `IBGW_IMAGE` pulls and starts in one step (both run here against
+the local registry, the start in test mode without a login).
 
 ### Building in your own CI
 
