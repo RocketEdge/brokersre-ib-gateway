@@ -81,7 +81,7 @@ Describe 'Function documentation' {
         $required = @(
             'Write-GwSecretFile', 'Protect-GwSecretFolder', 'Start-GwStack', 'Stop-GwStack', 'Remove-GwStack', 'Disable-GwSleep', 'Set-GwUpdateActiveWindow',
             'Register-GwStartTask', 'Register-GwResumeClockTask', 'Set-GwWslConfigValue', 'Add-GwFirewallBlockRule', 'Undo-GwHardening',
-            'Invoke-GwSetup', 'Invoke-GwHarden', 'Invoke-GwUninstall'
+            'Invoke-GwSetup', 'Invoke-GwHarden', 'Invoke-GwUninstall', 'Invoke-GwImageBuild'
         )
         foreach ($name in $required) {
             (Get-Command -Name $name).Parameters.ContainsKey('WhatIf') | Should -BeTrue -Because $name

@@ -321,6 +321,41 @@ function Invoke-GwWsl {
     }
 }
 
+function Invoke-GwPowerShellFile {
+    <#
+    .SYNOPSIS
+    The only place the kit runs a PowerShell script file as a process of its own.
+    .DESCRIPTION
+    Runs '<PowerShell of this edition> -NoProfile -ExecutionPolicy Bypass -File <Path>
+    <arguments>': powershell.exe under Windows PowerShell 5.1, pwsh.exe under PowerShell 7, both
+    from $PSHOME, so the script runs under the edition the operator chose. Used by setup to run
+    the repository's scripts\build-image.ps1, which documents itself as run this way (a process
+    of its own keeps its strict mode, its exit code and its result lines apart from the kit).
+    '-ExecutionPolicy Bypass' affects that process only; the kit itself is started the same
+    way (README, step 1).
+    .PARAMETER Path
+    Absolute path of the .ps1 file.
+    .PARAMETER ArgumentList
+    Arguments for the script, one element each.
+    .PARAMETER Interactive
+    Let the script use the console (progress of a long build) instead of capturing its output;
+    no deadline then.
+    .OUTPUTS
+    PSCustomObject from Invoke-GwNative.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowEmptyCollection()][string[]]$ArgumentList = @(),
+        [switch]$Interactive
+    )
+    $executable = 'powershell.exe'
+    if ($PSVersionTable.PSEdition -eq 'Core') { $executable = 'pwsh.exe' }
+    $arguments = [string[]](@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Path) + @($ArgumentList))
+    return (Invoke-GwNative -FilePath (Join-Path $PSHOME $executable) -ArgumentList $arguments -Interactive:$Interactive -TimeoutSeconds 0)
+}
+
 function Invoke-GwPowerCfg {
     <#
     .SYNOPSIS

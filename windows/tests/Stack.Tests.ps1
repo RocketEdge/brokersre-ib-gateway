@@ -31,7 +31,7 @@ Describe 'Get-GwComposeSetting' {
 
 Describe 'ConvertTo-GwComposeText' {
     BeforeAll {
-        $script:rendered = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'ghcr.io/rocketedge/brokersre-ib-gateway:stable' `
+        $script:rendered = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'brokersre-ib-gateway:stable' `
             -TradingMode 'paper' -TimeZone 'America/New_York' -AutoRestartTime '11:45 PM'
     }
 
@@ -88,9 +88,26 @@ Describe 'ConvertTo-GwComposeText' {
     }
 
     It 'accepts an image pinned by digest' {
-        $digest = 'ghcr.io/rocketedge/brokersre-ib-gateway@sha256:' + ('ab' * 32)
+        $digest = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('ab' * 32)
         $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $digest -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
         $text | Should -Match ([regex]::Escape($digest))
+    }
+
+    It 'never pulls an image name without a repository path (<ref>): only the build makes it' -ForEach @(
+        @{ ref = 'brokersre-ib-gateway:stable' }
+        @{ ref = 'brokersre-ib-gateway:10.50.1h' }
+        @{ ref = 'brokersre-ib-gateway@sha256:' + ('ab' * 32) }
+    ) {
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $ref -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
+        $text | Should -Match '(?m)^    pull_policy: never$'
+    }
+
+    It 'lets compose pull an image the operator named in a registry (<ref>)' -ForEach @(
+        @{ ref = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('ab' * 32) }
+        @{ ref = 'myregistry.azurecr.io/brokersre-ib-gateway:10.50.1h' }
+    ) {
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $ref -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
+        $text | Should -Match '(?m)^    pull_policy: missing$'
     }
 
     It 'rejects an image reference that could inject YAML: <value>' -ForEach @(
@@ -108,6 +125,12 @@ Describe 'ConvertTo-GwComposeText' {
     It 'rejects a time zone or restart time that is not in the expected form' {
         { ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'New York' -AutoRestartTime '11:45 PM' } | Should -Throw
         { ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '23:45' } | Should -Throw
+    }
+
+    It 'fails loudly when the template does not carry the pull_policy line exactly once' {
+        $without = $script:templateText.Replace('    pull_policy: never', '')
+        { ConvertTo-GwComposeText -TemplateText $without -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM' } |
+            Should -Throw -ExpectedMessage '*pull_policy*'
     }
 
     It 'fails loudly when the template still contains an unknown placeholder' {
@@ -131,7 +154,7 @@ Describe 'Rendered compose file against the real docker compose (read-only)' {
         New-Item -ItemType Directory -Path (Join-Path $directory 'secrets') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $directory 'secrets\ib-username'), 'fake-user')
         [System.IO.File]::WriteAllText((Join-Path $directory 'secrets\ib-password'), 'fake-pass')
-        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'ghcr.io/rocketedge/brokersre-ib-gateway:stable' `
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'brokersre-ib-gateway:stable' `
             -TradingMode 'paper' -TimeZone 'America/New_York' -AutoRestartTime '11:45 PM'
         $file = Join-Path $directory 'compose.yaml'
         [System.IO.File]::WriteAllText($file, $text, (New-Object System.Text.UTF8Encoding($false)))
@@ -150,7 +173,78 @@ Describe 'Rendered compose file against the real docker compose (read-only)' {
         $service.restart | Should -Be 'unless-stopped'
         $service.ulimits.nofile.soft | Should -Be 65536
         $service.logging.options.'max-size' | Should -Be '10m'
+        $service.image | Should -Be 'brokersre-ib-gateway:stable'
+        $service.pull_policy | Should -Be 'never'
         $config.name | Should -Be 'brokersre-gateway-paper'
+    }
+}
+
+Describe 'The gateway image on this computer' {
+    BeforeAll {
+        $script:repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+
+    It 'knows which channel scripts/build-image.ps1 builds for <ref>: "<channel>"' -ForEach @(
+        @{ ref = 'brokersre-ib-gateway:stable'; channel = 'stable' }
+        @{ ref = 'brokersre-ib-gateway:latest'; channel = 'latest' }
+        @{ ref = 'brokersre-ib-gateway:10.50.1h'; channel = '' }
+        @{ ref = 'brokersre-ib-gateway@sha256:' + ('ab' * 32); channel = '' }
+        @{ ref = 'myregistry.azurecr.io/brokersre-ib-gateway:stable'; channel = '' }
+        @{ ref = 'other/brokersre-ib-gateway:stable'; channel = '' }
+    ) {
+        Get-GwImageBuildChannel -ImageRef $ref | Should -Be $channel
+    }
+
+    It 'looks for the image with a read-only docker image inspect' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('sha256:' + ('ab' * 32)) }
+        Test-GwImagePresent -Runtime $script:desktop -ImageRef 'brokersre-ib-gateway:stable' | Should -BeTrue
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwDocker -Times 1 -Exactly -ParameterFilter {
+            ($ArgumentList -join ' ') -eq 'image inspect --format {{.Id}} brokersre-ib-gateway:stable'
+        }
+    }
+
+    It 'reports an image that is not on this computer as missing' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -ExitCode 1 -Output @('Error: No such image: brokersre-ib-gateway:stable') }
+        Test-GwImagePresent -Runtime $script:desktop -ImageRef 'brokersre-ib-gateway:stable' | Should -BeFalse
+    }
+
+    It 'builds with scripts\build-image.ps1 of this repository for Docker Desktop, on the console' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { Get-TestNativeResult }
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { throw 'wsl must not be called' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -Confirm:$false
+        $result.Ran | Should -BeTrue
+        $result.ExitCode | Should -Be 0
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile -Times 1 -Exactly -ParameterFilter {
+            $Path -eq (Join-Path (Join-Path $script:repositoryRoot 'scripts') 'build-image.ps1') -and ($ArgumentList -join ' ') -eq '-Channel stable' -and $Interactive
+        }
+    }
+
+    It 'builds with bash scripts/build-image.sh inside the distribution for Docker Engine in WSL' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { Get-TestNativeResult }
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'PowerShell must not be called' }
+        Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false | Out-Null
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwWsl -Times 1 -Exactly -ParameterFilter {
+            ($ArgumentList -join '|') -eq ('-d|Ubuntu-24.04|--cd|{0}|--exec|bash|scripts/build-image.sh|--channel|latest' -f $script:repositoryRoot) -and $Interactive
+        }
+    }
+
+    It 'passes the exit code of the build through (<code>)' -ForEach @(@{ code = 1 }, @{ code = 3 }, @{ code = 4 }) {
+        $script:buildExitCode = $code
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { Get-TestNativeResult -ExitCode $script:buildExitCode }
+        (Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -Confirm:$false).ExitCode | Should -Be $code
+    }
+
+    It 'builds nothing under -WhatIf' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'nothing may be built under -WhatIf' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -WhatIf
+        $result.Ran | Should -BeFalse
+    }
+
+    It 'runs nothing and says why when the repository has no build script' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'there is nothing to run' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -RepositoryRoot (Join-Path $TestDrive 'no-repository') -Confirm:$false
+        $result.Ran | Should -BeFalse
+        $result.Detail | Should -Match 'build-image\.ps1'
     }
 }
 

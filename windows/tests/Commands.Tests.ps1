@@ -36,7 +36,12 @@ BeforeAll {
             return (Get-TestNativeResult -Output @($script:startedAt))
         }
         if ($ArgumentList[0] -eq 'info') { return (& $script:infoHandler) }
+        if ($joined -match '^image inspect ') { return (Get-TestNativeResult -ExitCode $script:imageInspectExitCode) }
         return (Get-TestNativeResult)
+    }
+    Mock -ModuleName BrokerSre.Gateway Invoke-GwImageBuild {
+        $script:dockerCalls.Add(('BUILD {0}' -f $Channel))
+        return [pscustomobject]@{ Ran = $true; ExitCode = $script:buildExitCode; Detail = '' }
     }
     Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl {
         $script:wslCalls.Add(($ArgumentList -join ' '))
@@ -82,6 +87,8 @@ Describe 'Commands' {
         $script:probeHandler = { Get-TestNativeResult -Output @('winkit-probe') }
         $script:infoHandler = { Get-TestNativeResult -Output @('29.9.3') }
         $script:upExitCode = 0
+        $script:imageInspectExitCode = 0
+        $script:buildExitCode = 0
         $script:stopExitCode = 0
         $script:downExitCode = 0
         $script:startedAt = ''
@@ -101,7 +108,9 @@ Describe 'Commands' {
             [System.IO.File]::ReadAllBytes((Join-Path $script:folder 'secrets\ib-password')) | Should -Be ([System.Text.Encoding]::UTF8.GetBytes($script:fakePassword))
             $compose = [System.IO.File]::ReadAllText((Join-Path $script:folder 'compose.yaml'))
             $compose | Should -Match '- "127\.0\.0\.1:4002:4004"'
-            $compose | Should -Match 'image: ghcr\.io/rocketedge/brokersre-ib-gateway:stable'
+            $compose | Should -Match '(?m)^    image: brokersre-ib-gateway:stable$'
+            $compose | Should -Match '(?m)^    pull_policy: never$'
+            (Get-GwKitState -Path $script:folder).ImageRef | Should -Be 'brokersre-ib-gateway:stable'
             $state = Get-GwKitState -Path $script:folder
             $state.Runtime | Should -Be 'DockerDesktop'
             $state.TradingMode | Should -Be 'paper'
@@ -188,7 +197,7 @@ Describe 'Commands' {
             ($script:console -join "`n") | Should -Match 'sha256'
             $script:console.Clear()
             $other = Join-Path $TestDrive ('gw-' + [guid]::NewGuid().ToString('N'))
-            $pinned = 'ghcr.io/rocketedge/brokersre-ib-gateway@sha256:' + ('cd' * 32)
+            $pinned = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('cd' * 32)
             Invoke-GwSetup -Path $other -ImageRef $pinned -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
             ($script:console -join "`n") | Should -Not -Match 'Recommendation'
         }
@@ -283,6 +292,88 @@ Describe 'Commands' {
             $script:prompts.Count | Should -Be 0
             @($script:dockerCalls | Where-Object { $_ -match '^run | up | stop| down' }).Count | Should -Be 0
             $script:waitCalls | Should -Be 0
+        }
+
+        It 'builds no image, also when the image is not on this computer' {
+            $script:imageInspectExitCode = 1
+            Invoke-GwSetup -Path $script:folder -WhatIf | Out-Null
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' }).Count | Should -Be 0
+        }
+    }
+
+    Context 'Invoke-GwSetup and the gateway image' {
+        It 'builds the image when it is not on this computer, then starts it' {
+            $script:imageInspectExitCode = 1
+            $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 0
+            $calls = @($script:dockerCalls)
+            @($calls | Where-Object { $_ -like 'BUILD *' }) | Should -Be @('BUILD stable')
+            $build = [array]::IndexOf($calls, 'BUILD stable')
+            $up = [array]::FindIndex([string[]]$calls, [Predicate[string]] { param($call) $call -match ' up -d' })
+            $build | Should -BeLessThan $up
+            ($script:console -join "`n") | Should -Match 'build-image'
+        }
+
+        It 'builds the latest channel for brokersre-ib-gateway:latest' {
+            $script:imageInspectExitCode = 1
+            Invoke-GwSetup -Path $script:folder -ImageRef 'brokersre-ib-gateway:latest' -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' }) | Should -Be @('BUILD latest')
+        }
+
+        It 'builds nothing when the image is already on this computer' {
+            $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' }).Count | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -eq 'image inspect --format {{.Id}} brokersre-ib-gateway:stable' }).Count | Should -Be 1
+        }
+
+        It 'starts nothing and names the exit code when the build fails (<code>)' -ForEach @(
+            @{ code = 1; text = 'failed' }
+            @{ code = 3; text = 'IBKR' }
+        ) {
+            $script:imageInspectExitCode = 1
+            $script:buildExitCode = $code
+            $result = Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            $result.Outcome | Should -Be 'ImageBuildFailed'
+            @($script:dockerCalls | Where-Object { $_ -match ' up ' }).Count | Should -Be 0
+            $script:waitCalls | Should -Be 0
+            ($script:console -join "`n") | Should -Match ('exit code {0}' -f $code)
+            ($script:console -join "`n") | Should -Match $text
+        }
+
+        It 'does not build a local name it cannot make, starts nothing and says how to build it' {
+            $script:imageInspectExitCode = 1
+            $result = Invoke-GwSetup -Path $script:folder -ImageRef 'brokersre-ib-gateway:10.50.1h' -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 1
+            $result.Outcome | Should -Be 'ImageMissing'
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' -or $_ -match ' up ' }).Count | Should -Be 0
+            ($script:console -join "`n") | Should -Match 'build-image\.ps1'
+        }
+
+        It 'leaves an image named in a registry to docker compose, which pulls it, and says to log in first' {
+            $script:imageInspectExitCode = 1
+            $named = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('cd' * 32)
+            $result = Invoke-GwSetup -Path $script:folder -ImageRef $named -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false
+            $result.ExitCode | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' }).Count | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -match ' up -d' }).Count | Should -Be 1
+            ($script:console -join "`n") | Should -Match 'docker login registry\.example'
+        }
+
+        It 'builds nothing with -NoStart' {
+            $script:imageInspectExitCode = 1
+            (Invoke-GwSetup -Path $script:folder -NoStart -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false).ExitCode | Should -Be 0
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' -or $_ -like 'image inspect *' }).Count | Should -Be 0
+        }
+
+        It 'builds nothing while a rejected login is on record' {
+            $script:loginOutcome = 'LoginFailed'
+            Invoke-GwSetup -Path $script:folder -UserNameSecure $script:secureUser -PasswordSecure $script:securePassword -Confirm:$false | Out-Null
+            $script:dockerCalls.Clear()
+            $script:imageInspectExitCode = 1
+            (Invoke-GwSetup -Path $script:folder -Confirm:$false).Outcome | Should -Be 'LoginRejectedEarlier'
+            @($script:dockerCalls | Where-Object { $_ -like 'BUILD *' }).Count | Should -Be 0
         }
     }
 
