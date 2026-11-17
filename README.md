@@ -1,10 +1,14 @@
 # brokersre-ib-gateway
 
 IB Gateway and IBC in a container built for **unattended, observable operation**: one
-parametrised Dockerfile for both IBKR channels, every input pinned by SHA-256, no `sudo`, a
-read-only root filesystem, a truthful `HEALTHCHECK`, the IBC command server on loopback,
-structured JSON on stdout and raw logs on a shared volume, `tini` as PID 1, multi-arch images
-signed with Sigstore cosign and shipped with an SBOM.
+parametrised Dockerfile for both IBKR channels, every input verified (pinned by SHA-256, or
+checked against IBKR's own build stamp), no `sudo`, a read-only root filesystem, a truthful
+`HEALTHCHECK`, the IBC command server on loopback, structured JSON on stdout and raw logs on
+a shared volume, `tini` as PID 1, amd64 and arm64.
+
+**You build the image yourself**, with one command and nothing but Docker: there is no public
+image ([why](#why-there-is-no-public-image)). [Build the image](#build-the-image) is the
+recipe.
 
 Derived from [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker) (MIT) and
 maintained by [RocketEdge](https://rocketedge.com) as the gateway image of its
@@ -16,7 +20,7 @@ by or endorsed by Interactive Brokers.
 
 ## Table of Contents
 
-- [Images and tags](#images-and-tags)
+- [Build the image](#build-the-image)
 - [Quick start](#quick-start)
 - [Running on Windows](#running-on-windows)
 - [Going live](#going-live)
@@ -31,11 +35,11 @@ by or endorsed by Interactive Brokers.
 - [Optional sidecar: API probe, status endpoints, alerts](#optional-sidecar-api-probe-status-endpoints-alerts)
 - [Shipping to Azure Log Analytics](#shipping-to-azure-log-analytics)
 - [Security posture](#security-posture)
-- [Verifying an image](#verifying-an-image)
+- [Verifying what you built](#verifying-what-you-built)
 - [Evidence for due diligence](#evidence-for-due-diligence)
 - [Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login)
-- [Get notified of new images](#get-notified-of-new-images)
-- [Is a newer image available?](#is-a-newer-image-available)
+- [Get notified of new versions](#get-notified-of-new-versions)
+- [Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available)
 - [Building and testing](#building-and-testing)
 - [Upgrade policy](#upgrade-policy)
 - [Automatic updates and repository secrets](#automatic-updates-and-repository-secrets)
@@ -43,10 +47,193 @@ by or endorsed by Interactive Brokers.
 - [Documentation](#documentation)
 - [License](#license)
 
-## Images and tags
+## Build the image
 
-Registry: `ghcr.io/rocketedge/brokersre-ib-gateway`. The pinned versions live in
-[versions.json](versions.json).
+One command builds the image on your machine, with Docker as the only tool you need. It
+downloads IB Gateway from IBKR, checks the installer, builds the image, runs an offline test of
+IBC in it and prints what it built. Everything below was run on a Windows 11 computer with
+Docker Desktop 29.9.3 (Git Bash, PowerShell 7 and Windows PowerShell 5.1) on 2026-11-17;
+what was not run is marked **not tested**.
+
+- [Why there is no public image](#why-there-is-no-public-image)
+- [What you need](#what-you-need)
+- [Build it](#build-it)
+- [What the last lines mean](#what-the-last-lines-mean)
+- [The latest channel](#the-latest-channel)
+- [Apple silicon and other arm64 hosts](#apple-silicon-and-other-arm64-hosts)
+- [Behind a corporate proxy](#behind-a-corporate-proxy)
+- [Offline, or when IBKR has moved on](#offline-or-when-ibkr-has-moved-on)
+- [Pinning and reproducing a build](#pinning-and-reproducing-a-build)
+- [Pushing to your own private registry](#pushing-to-your-own-private-registry)
+- [Building in your own CI](#building-in-your-own-ci)
+- [Upgrading and rolling back](#upgrading-and-rolling-back)
+- [Troubleshooting the build](#troubleshooting-the-build)
+
+### Why there is no public image
+
+The image contains IB Gateway as installed from IBKR's installer, and IB Gateway is IBKR's
+software. RocketEdge does not redistribute it, so it publishes no image that contains it: the
+image RocketEdge builds for its own BrokerSRE service is private. This repository is the
+recipe instead. When you build, your machine downloads IB Gateway from IBKR itself, under your
+own agreement with IBKR, and the image stays with you (keep it in a private registry if you
+move it, [below](#pushing-to-your-own-private-registry)). The decision is
+[ADR 0018](docs/adr/0018-private-image-public-build-recipe.md).
+
+### What you need
+
+| Host | Docker | Shell | Tested |
+|---|---|---|---|
+| Linux, x86-64 or arm64 | Docker Engine 23 or later with the buildx plugin (`docker-buildx-plugin` in Docker's own package repositories) | bash | no (the build-test job of this repository's CI runs it on GitHub's Ubuntu runner) |
+| macOS, Intel | Docker Desktop | bash 3.2, which macOS ships, runs the script from zsh too | no |
+| macOS, Apple silicon | Docker Desktop; builds `linux/arm64` by default ([below](#apple-silicon-and-other-arm64-hosts)) | as above | no |
+| Windows 10 or 11 | Docker Desktop with the WSL 2 backend, Linux containers | Git Bash (Git for Windows) | yes |
+| Windows 10 or 11 | Docker Desktop | PowerShell 7 or Windows PowerShell 5.1 | yes |
+| WSL 2 | Docker Desktop's WSL integration, or Docker Engine inside the distribution | bash; clone into the Linux file system (`~/...`), not under `/mnt/c` | no |
+
+Also: `git` to clone this repository, about 6 GB of free disk and a connection to
+`download2.interactivebrokers.com`, Docker Hub and GitHub. Nothing else is installed on the
+host: finding, downloading and checking IBKR's installer run in a small helper container that
+the script builds first (the official Docker CLI image pinned by digest, plus bash, curl and
+jq).
+
+What one build took on the development computer (20 cores, Docker Desktop 29.9.3, 2026-11-17,
+from Singapore):
+
+| | Time | Notes |
+|---|---|---|
+| First build, nothing cached (a new buildx builder, an empty installer cache) | 9 min 1 s | of which about 3 min downloading IBKR's installer (360,312,436 bytes for `stable` x64) |
+| Build with Docker's build cache warm, the installer downloaded once more (`latest` channel) | 3 min 54 s | |
+| Rebuild of the same version, installer and Docker's build cache warm (`stable`) | 1 min 14 s | the offline IBC test included |
+
+| On disk after one build | Size |
+|---|---|
+| The image (`docker image inspect brokersre-ib-gateway:stable --format '{{.Size}}'`) | 1,622,526,158 bytes (1.6 GB) |
+| Docker's build cache of that build (`docker buildx du`, on a builder used for nothing else) | 3.55 GB; `docker builder prune` frees it |
+| The installer cache, per IB Gateway version and architecture | 344 MiB |
+| The helper image `brokersre-ib-gateway-build-helper:local` | 232 MB |
+
+### Build it
+
+Clone the repository and run the script from its folder.
+
+Linux, macOS, WSL or Git Bash:
+
+```bash
+git clone https://github.com/RocketEdge/brokersre-ib-gateway.git
+cd brokersre-ib-gateway
+scripts/build-image.sh
+```
+
+PowerShell 7, or Windows PowerShell 5.1 (the second form):
+
+```powershell
+git clone https://github.com/RocketEdge/brokersre-ib-gateway.git
+cd brokersre-ib-gateway
+pwsh -NoProfile -File scripts/build-image.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-image.ps1
+```
+
+You should see, on standard error: a line naming what it downloads
+(`resolve-installer: downloading https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh`,
+or `IBKR serves the pinned ... using the cached copy`), then
+`build-image: building brokersre-ib-gateway:stable: IB Gateway 10.50.1h (stable) for linux/amd64`
+and Docker's build output, then the offline IBC test:
+
+```text
+== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) ==
+PASS  IBC command server listening on 7462 within 180s
+...
+PASS  shutdown_complete event emitted
+
+ALL CONTAINER TESTS PASSED
+resolve-installer: cached 10.50.1h (x64) in /cache/installers/10.50.1h/x64
+```
+
+and at the end, on standard output, seven `key: value` lines (here the build of 2026-11-17,
+when IBKR's `stable` channel served 10.50.1h and `versions.json` still pinned 10.50.1g):
+
+```text
+version: 10.50.1h
+channel: stable
+qualified_by_project: no
+installer_sha256: eb578b23b636e19c8417fc969264853a22792bcffa8fc79990cf15ff032fe7aa
+ibkr_build_stamp: (.1h) 20261116 16:02:08
+image: brokersre-ib-gateway:stable
+image_id: sha256:c48cdbacf48c60bda36c9e3093dbe0d3501b3f01439851b101dd6b79fd02a8ff
+```
+
+The exit status is 0. The image is tagged twice, `brokersre-ib-gateway:stable` and
+`brokersre-ib-gateway:10.50.1h`. `--tag NAME` (repeatable; `-Tag` in PowerShell) replaces both.
+`--help` lists every option; `--print-plan` says what would be built and builds nothing.
+
+The installer cache is `~/.cache/brokersre-ib-gateway` (`$XDG_CACHE_HOME` when set) for the
+bash script and `%LOCALAPPDATA%\brokersre-ib-gateway` for the PowerShell script;
+`--cache-dir DIR` (`-CacheDir`) chooses another.
+
+### What the last lines mean
+
+| Line | Meaning |
+|---|---|
+| `version` | The IB Gateway build in the image, as IBKR names it (`10.50.1h`) |
+| `channel` | IBKR's channel it came from: `stable` or `latest` |
+| `qualified_by_project` | `yes`: the version and the installer's SHA-256 are the ones pinned in [versions.json](versions.json), which the project has built, tested and logged in with. `no`: IBKR serves a newer build than the pin (or you gave an installer of your own); the script built it after checking it against IBKR's own build stamp, and no login has been made with it by the project |
+| `installer_sha256` | SHA-256 of the installer the image was built from; also the label `com.rocketedge.brokersre.installer.sha256` |
+| `ibkr_build_stamp` | IBKR's build stamp, `(.<suffix>) <build date and time>`; the installed Gateway carries exactly this stamp, or the build would have failed |
+| `image` | The first tag of the image |
+| `image_id` | Docker's id of the image you just built |
+
+**`qualified_by_project: no`.** IBKR serves only its newest build of a channel, at an address
+that never changes; when it publishes a new one, the installer no longer matches the pin, so
+the script builds IBKR's current build instead. It accepts that build only when IBKR's
+`version.json` names the same build before and after the download and the installer and the
+installed Gateway carry IBKR's stamp. That proves the bytes are the build IBKR announced; it does
+not prove that this Gateway logs in through IBC. A warning says so after the build:
+
+```text
+WARNING: IB Gateway 10.50.1h (stable) is not qualified by this project.
+  versions.json pins 10.50.1g; this image holds 10.50.1h, build stamp (.1h) 20261116 16:02:08.
+  ...
+    scripts/qualify-paper.sh --image brokersre-ib-gateway:stable --secrets-dir <dir>
+```
+
+What to do, in order of preference:
+
+1. Qualify it yourself with one login to a **paper** account of your own:
+   `scripts/qualify-paper.sh --image brokersre-ib-gateway:10.50.1h --secrets-dir <dir>`
+   ([Qualifying an image with a real paper login](#qualifying-an-image-with-a-real-paper-login));
+   exit 0 means the image logged in, was healthy and stopped tidily.
+2. Or wait until this repository pins the new build (a pull request that changes
+   `versions.json`), pull, and build again: the line then says `yes`.
+3. Or refuse such builds: `--strict` (`-Strict`) builds only the pinned version and exits 4
+   when IBKR serves another one.
+
+### The latest channel
+
+```bash
+scripts/build-image.sh --channel latest
+```
+
+```powershell
+pwsh -NoProfile -File scripts/build-image.ps1 -Channel latest
+```
+
+`latest` is **IBKR's channel name** for its newest Gateway, not Docker's moving tag. The image is
+tagged `brokersre-ib-gateway:latest` and `brokersre-ib-gateway:<version>`. On 2026-11-17 IBKR's
+`latest` channel served the pinned build, so the last lines read:
+
+```text
+version: 10.52.1d
+channel: latest
+qualified_by_project: yes
+installer_sha256: 11443650c0305751b8e239c894e4730db8a452c03a41255298f29f89a4fcc603
+ibkr_build_stamp: (.1d) 20261112 16:03:29
+image: brokersre-ib-gateway:latest
+image_id: sha256:0d2f7ce4012b679ef5ebac0a8c8475669d756419c738d429fabe84a578ee75e0
+```
+
+The versions this repository pins (generated from [versions.json](versions.json) by
+`scripts/readme-versions.sh`; the tags are those of RocketEdge's own image, yours are
+`brokersre-ib-gateway:<channel>` and `brokersre-ib-gateway:<version>`):
 
 <!-- versions:start -->
 | IBKR channel | IB Gateway | IBC | Tags |
@@ -55,16 +242,324 @@ Registry: `ghcr.io/rocketedge/brokersre-ib-gateway`. The pinned versions live in
 | latest | 10.52.1d | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.52`, `10.52.1d` |
 <!-- versions:end -->
 
-The table is generated from `versions.json` by `scripts/readme-versions.sh` (CI fails when it is
-stale). `latest` is **IBKR's channel name**, not Docker's convention; this repository never
-publishes a moving "newest build" tag under another name. In production pin the **digest**
-printed by the publish workflow and in each release's `digests-<channel>.json`.
+### Apple silicon and other arm64 hosts
+
+The script builds for the Docker host's architecture: `linux/arm64` on Apple silicon and on
+arm64 Linux, from IBKR's arm64 installer. IBKR ships no Java runtime for Linux on arm64, so
+the arm64 image runs Ubuntu's OpenJDK 25 instead of the runtime IBKR bundles for x86-64.
+**No arm64 image has completed a login on real hardware**
+([limitations](docs/limitations.md) L05); qualify yours with a paper login before you rely on it.
+
+To build the other architecture, name it; Docker then emulates it (Docker Desktop has the
+emulation built in; on Linux it needs QEMU's binfmt handlers). A separate tag keeps it apart
+from the image of your own architecture, and under emulation the build and the IBC test are
+much slower, so `SMOKE_TIMEOUT=900` gives the test more time (PowerShell: set
+`$env:SMOKE_TIMEOUT = '900'` first, then `-Platform linux/arm64 -Tag ...`):
+
+```bash
+SMOKE_TIMEOUT=900 scripts/build-image.sh --platform linux/arm64 --tag brokersre-ib-gateway:stable-arm64
+```
+
+On the Windows computer (x86-64, Docker Desktop's emulation) this took 8 min 53 s on
+2026-11-17, including the download of IBKR's arm64 installer (221,123,393 bytes); the IBC test
+passed (the command server answered within its 900 s), and the image is 1,708,394,140 bytes. Docker prints
+`WARNING: The requested image's platform (linux/arm64) does not match the detected host platform`
+for each test container; that is expected under emulation. On Apple silicon,
+`--platform linux/amd64` builds an x86-64 image under emulation. **Not tested on a Mac**, nor on
+an arm64 Linux host.
+
+### Behind a corporate proxy
+
+Three parts of a build go to the network, and each takes its proxy from a different place:
+
+| What | Goes to | Takes the proxy from |
+|---|---|---|
+| Docker pulling the base images (`ubuntu`, `docker`) and BuildKit's own image | Docker Hub | the Docker **daemon**: Docker Desktop, Settings, Resources, Proxies; Docker Engine: `/etc/docker/daemon.json` (`"proxies"`) or a systemd drop-in ([Docker's guide](https://docs.docker.com/engine/daemon/proxy/)) |
+| The helper container: IBKR's `version.json` and installer | `download2.interactivebrokers.com` | the Docker **CLI**'s `config.json`, key `proxies` |
+| The image build: Ubuntu packages, IBC from GitHub | `archive.ubuntu.com`, `github.com` | the same `config.json`: the CLI passes it to every build as `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (both cases) |
+
+So put the proxy into `~/.docker/config.json` (`%USERPROFILE%\.docker\config.json` on
+Windows), next to the keys already there:
+
+```json
+{
+  "proxies": {
+    "default": {
+      "httpProxy": "http://proxy.example.com:3128",
+      "httpsProxy": "http://proxy.example.com:3128",
+      "noProxy": "localhost,127.0.0.1"
+    }
+  }
+}
+```
+
+and the same proxy into the daemon's settings. **`HTTPS_PROXY` set in your shell does not
+reach the build**: the script does not pass it into the helper container (checked: with
+`HTTPS_PROXY` pointing at a closed port the helper still reached IBKR directly).
+
+Checked on 2026-11-17 with a local Squid proxy standing in for a corporate one: with
+`proxies` in `config.json`, `scripts/build-image.sh --print-plan` reached IBKR through it (the
+proxy logged `CONNECT download2.interactivebrokers.com:443`), and a `RUN` step of a build saw
+`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lower-case forms and fetched through the
+proxy. **Not tested**: a real corporate proxy, a proxy that needs authentication, the daemon's
+proxy for pulls, and a proxy that inspects TLS with its own certificate authority: neither the
+helper container nor the build can be given an extra CA certificate, so such a proxy makes the
+download fail ([limitations](docs/limitations.md) L38).
+
+### Offline, or when IBKR has moved on
+
+**The cache.** Every installer a successful build used is kept in the installer cache, by
+version and architecture, with its SHA-256 (`installers/<version>/<arch>/` holds the file and a
+`meta` file). When IBKR cannot be reached, the script builds the pinned version from the cache;
+without `--strict` it falls back to the newest cached version of the channel; with nothing
+cached it exits 3. A version you built once therefore builds again after IBKR has moved on, as
+long as you keep the cache. With IBKR unreachable the build says so before it starts:
+
+```text
+resolve-installer: IBKR is unreachable (https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json); building the cached 10.50.1h, accepted 2026-11-17T03:51:49Z
+```
+
+and the last lines then say `qualified_by_project` as for any build of that version. Only IBKR
+may be missing: the image build itself still needs Docker Hub (the Ubuntu base image), Ubuntu's
+package archive and GitHub (IBC), unless Docker's build cache already holds those steps from an
+earlier build. Look at the cache:
+
+```bash
+cat ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/meta
+```
+
+```text
+version: 10.50.1h
+channel: stable
+arch: x64
+sha256: eb578b23b636e19c8417fc969264853a22792bcffa8fc79990cf15ff032fe7aa
+ibkr_build_stamp: (.1h) 20261116 16:02:08
+source: ibkr
+accepted_at: 2026-11-17T03:51:49Z
+```
+
+**An installer you downloaded yourself.** IBKR offers the installers on its website: the
+[IB Gateway download page](https://www.interactivebrokers.com/en/trading/ibgateway-latest.php)
+has the tabs *Latest* and *Stable*, each with *Linux (X86_64)* and *Linux (ARM64)* (read
+through a search engine on 2026-11-17; the page refused an automated fetch, so where its
+buttons point was not checked). The Linux files are named
+`ibgateway-<stable|latest>-standalone-linux-<x64|arm>.sh`, and IBKR's download server serves
+them at the address the script uses, which you can also fetch by hand:
+
+```bash
+curl -fLO https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh
+scripts/build-image.sh --installer ibgateway-stable-standalone-linux-x64.sh
+```
+
+`--installer FILE` (`-Installer`) asks IBKR nothing: the version, the channel and the
+architecture come from the installer's own build stamp, its SHA-256 is recorded, and the image
+is `qualified_by_project: yes` only when both equal the pin. Use it on a machine without
+access to IBKR (copy the file over), or to rebuild exactly the bytes you kept. An installer for
+the other architecture, or one whose stamp cannot be read, is refused (exit 1).
+
+### Pinning and reproducing a build
+
+What a build used is written down in three places:
+
+- **The image's labels**: `com.rocketedge.brokersre.ibkr.version`, `.ibkr.channel`,
+  `.ibkr.build_stamp`, `.installer.sha256`, `.qualified`, `.ibc.version`, `.ibc.release`.
+- **[versions.json](versions.json)** of the commit you built from: the Ubuntu base image by
+  digest, IBC by release and SHA-256, and the pinned Gateway versions with their SHA-256 and
+  build stamps. The helper image is pinned by digest in `scripts/build-helper/Dockerfile`.
+- **The installer cache**: the installer's bytes, by version.
+
+To build the same Gateway again, check out the same commit and build with the same cache
+(or `--installer` with the kept file). Two things are not frozen: Ubuntu packages are
+installed and upgraded at build time (so a later build has later security fixes), and the
+helper's Alpine packages come from Alpine's index at its first build
+([limitations](docs/limitations.md) L36). A rebuild therefore has the same IB Gateway and IBC,
+not the same image id. To run exactly one image, name it by its id, by a tag you do not
+rebuild, or by its digest in your registry.
+
+### Pushing to your own private registry
+
+To run the image on another machine, push it to a registry **only you can read**. A public
+repository would publish IBKR's software. In every case: log in, tag, push, and keep the
+version tag next to the channel tag.
+
+Run on 2026-11-17 against a throwaway local registry (`registry:2` on `localhost:5000`), as the
+pattern for every registry below:
+
+```bash
+docker run -d --name local-registry -p 127.0.0.1:5000:5000 registry:2
+docker tag brokersre-ib-gateway:stable localhost:5000/brokersre-ib-gateway:10.50.1h
+docker push localhost:5000/brokersre-ib-gateway:10.50.1h
+docker image inspect localhost:5000/brokersre-ib-gateway:10.50.1h --format '{{index .RepoDigests 0}}'
+```
+
+The last line prints `localhost:5000/brokersre-ib-gateway@sha256:<digest>`: that is the
+reference to pin (`IBGW_IMAGE=...@sha256:<digest>`). The other registries were **not tested**;
+the commands are their documented ones:
+
+- **GitHub Container Registry (private package).** A token with `write:packages`
+  (a classic personal access token), then:
+
+  ```bash
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+  docker tag brokersre-ib-gateway:stable ghcr.io/<owner>/brokersre-ib-gateway:10.50.1h
+  docker push ghcr.io/<owner>/brokersre-ib-gateway:10.50.1h
+  ```
+
+  GitHub documents a newly published package as private; check it on the package's page
+  under *Package settings*, *Danger Zone*, and keep it private.
+
+- **Azure Container Registry** (the Azure CLI, logged in):
+
+  ```bash
+  az acr create --resource-group <group> --name <registry> --sku Basic
+  az acr login --name <registry>
+  docker tag brokersre-ib-gateway:stable <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
+  docker push <registry>.azurecr.io/brokersre-ib-gateway:10.50.1h
+  ```
+
+  Leave anonymous pull off (the default). ACR Tasks (`az acr build`) were not tested: the
+  build needs the helper container next to it, so build locally and push.
+
+- **Amazon ECR** (the AWS CLI, logged in):
+
+  ```bash
+  aws ecr create-repository --repository-name brokersre-ib-gateway --region <region>
+  aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+  docker tag brokersre-ib-gateway:stable <account>.dkr.ecr.<region>.amazonaws.com/brokersre-ib-gateway:10.50.1h
+  docker push <account>.dkr.ecr.<region>.amazonaws.com/brokersre-ib-gateway:10.50.1h
+  ```
+
+- **Docker Hub, private repository**: create the repository as *Private* on Docker Hub first
+  (a push to a name that does not exist creates it with your namespace's default repository
+  privacy, which may be public), then:
+
+  ```bash
+  docker login -u <docker-hub-user>
+  docker tag brokersre-ib-gateway:stable <docker-hub-user>/brokersre-ib-gateway:10.50.1h
+  docker push <docker-hub-user>/brokersre-ib-gateway:10.50.1h
+  ```
+
+On the machine that runs it, the compose files of this repository never pull the gateway
+image on their own (`pull_policy: never`); pull yours on purpose, after `docker login`:
+
+```bash
+IBGW_IMAGE=localhost:5000/brokersre-ib-gateway@sha256:<digest> docker compose -f compose/docker-compose.example.yml pull --policy missing
+```
+
+### Building in your own CI
+
+A minimal GitHub Actions workflow for a **private** copy of this repository: it builds with the
+build helper and pushes to that account's GitHub Container Registry. Run it in a private
+repository, and after the first run check that the package is private (its page, *Package
+settings*): a package that a workflow publishes is linked to the repository the workflow runs
+in. The build runs on GitHub's Ubuntu runner, which has Docker and buildx; nothing is
+cached between runs, so every run downloads the installer from IBKR. Linted with actionlint
+1.7.12 (which runs shellcheck on the `run:` scripts), no finding; it has **not run** on GitHub.
+
+```yaml
+# .github/workflows/build-gateway-image.yml
+name: Build gateway image
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 7 * * 1"   # Mondays 07:30 UTC
+permissions:
+  contents: read
+  packages: write          # push to this account's GitHub Container Registry
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build with the build helper (the result lines go to build.txt)
+        run: scripts/build-image.sh --channel stable --platform linux/amd64 > build.txt
+      - name: Push to the private package
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat build.txt
+          version="$(sed -n 's/^version: //p' build.txt)"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/brokersre-ib-gateway"
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag brokersre-ib-gateway:stable "$image:$version"
+          docker push "$image:$version"
+```
+
+Add `--strict` to the build to push only versions the project has qualified (the run then
+fails with exit 4 while IBKR serves another one), or keep `qualified_by_project` from
+`build.txt` and qualify the version with a paper login before you deploy it. For arm64, run
+the same job with `--platform linux/arm64` on an arm64 runner (not tested).
+
+### Upgrading and rolling back
+
+An upgrade is a rebuild. Before it, give the image you run a name the build will not move:
+
+```bash
+docker tag brokersre-ib-gateway:stable brokersre-ib-gateway:previous
+scripts/build-image.sh
+```
+
+The new build moves `brokersre-ib-gateway:stable` and adds `brokersre-ib-gateway:<version>`;
+`:previous` and the old version tag stay. Start the new one (the gateway logs in again; have
+the phone ready for the second factor):
+
+```bash
+docker compose -f compose/docker-compose.example.yml up -d
+```
+
+To roll back, start the old image by name:
+
+```bash
+IBGW_IMAGE=brokersre-ib-gateway:previous docker compose -f compose/docker-compose.example.yml up -d
+```
+
+`docker image ls brokersre-ib-gateway` lists what you have. With a registry, push each version
+and roll back by pinning the earlier digest. A rebuild of the same version (for Ubuntu's
+security fixes) is a new image under the same version tag: tag the old one first if you want
+to keep it. [Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a
+rebuild brings a new Gateway.
+
+### Troubleshooting the build
+
+| You see | Exit | Cause | Fix |
+|---|---|---|---|
+| `SHA-256 MISMATCH: IBKR's stable channel says 10.50.1g, the pinned version, but the installer differs` | 1 | IBKR replaced the installer of the pinned version without a new version label | Nothing was built. Build from your cache or with `--installer`, or wait for a pin update; report it in an issue |
+| `the downloaded installer is not the build IBKR announced` | 1 | The installer's stamp differs from IBKR's `version.json` | Run again later; if it repeats, report it |
+| `IBKR's stable channel changed during the download again` | 1 | IBKR published a build while the script downloaded, twice | Run again |
+| `the image build failed; nothing was cached` or `the IBC smoke test failed` | 1 | Docker's build or the offline IBC test failed; the lines above say which step | Read the lines above; see the rows below for disk and network |
+| `build-image: ... needs a value`, `unknown option` | 2 | A typing error | `scripts/build-image.sh --help` |
+| `IBKR is unreachable (...version.json), and no installer of the stable channel (x64) is in the cache` | 3 | No connection to IBKR and nothing cached | Check the connection or the [proxy](#behind-a-corporate-proxy); or build with `--installer` |
+| `--strict: IBKR's stable channel serves 10.50.1h; versions.json pins 10.50.1g` | 4 | `--strict` and IBKR moved on | Build without `--strict` and qualify the image, or use the cache |
+| `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running` (Windows), `Cannot connect to the Docker daemon` (Linux, macOS) | 1 | Docker Desktop is not running (Linux: the daemon is stopped, or your user may not use it) | Start Docker Desktop and wait until it says the engine is running; Linux: `sudo systemctl start docker`, and add your user to the `docker` group |
+| PowerShell, below Docker's line above: `the Docker host's architecture '' is not supported; pass -Platform` | 1 | The same: the script could not ask the daemon for its architecture | Start Docker Desktop (passing `-Platform` does not help) |
+| `docker buildx is required` | 1 | Docker without the buildx plugin (an old Docker Engine) | Install `docker-buildx-plugin` from Docker's repository, or Docker Desktop |
+| `no space left on device` in the build output | 1 | The Docker disk is full (Docker Desktop: its virtual disk) | `docker builder prune`, `docker image prune`; Docker Desktop: Settings, Resources, Disk usage limit |
+| `$'\r': command not found` or `/usr/bin/env: 'bash\r'` | 1 | The scripts have Windows line endings: the files were copied or edited with a tool that wrote CRLF (a clone keeps LF, `.gitattributes` says so) | Clone again with git; do not convert the files |
+| A path such as `C:/Program Files/Git/cache` in an error, from a `docker run` you typed in Git Bash | | Git Bash rewrote a container path | Put `MSYS_NO_PATHCONV=1` in front of the command, or write the path with `//` (`//var/log/...`); the build script does this itself |
+| `cannot read a build stamp from ...: not an install4j IB Gateway installer` | 1 | `--installer` names a file that is not IBKR's Linux installer (for example the Windows or macOS one, or an HTML error page) | Download `ibgateway-<channel>-standalone-linux-<x64 or arm>.sh` |
 
 ## Quick start
 
 You need Docker with Linux containers (Docker Desktop on Windows or macOS, Docker Engine on
 Linux), a clone of this repository, and an IBKR username used by nothing else: IBKR allows one
 session per username. The example starts in **paper** mode with the read-only API.
+
+### 0. Build the image
+
+From the repository folder, in bash, zsh, Git Bash or WSL:
+
+```bash
+scripts/build-image.sh
+```
+
+or in PowerShell: `pwsh -NoProfile -File scripts/build-image.ps1` (Windows PowerShell 5.1:
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-image.ps1`).
+
+You should see, after a few minutes, `ALL CONTAINER TESTS PASSED` and seven last lines ending
+with `image: brokersre-ib-gateway:stable`; the compose files use that name. If a line reads
+`qualified_by_project: no`, IBKR serves a newer Gateway than the project has qualified:
+[what that means](#what-the-last-lines-mean). Everything about the build, from prerequisites to
+proxies, is in [Build the image](#build-the-image).
 
 ### 1. Store the two secrets as files
 
@@ -121,6 +616,10 @@ and later logs only the first, [log contract](docs/log-contract.md)): approve th
 IBKR Mobile.
 The image never answers a second factor for you. Stop following the log with Ctrl+C.
 
+The compose file runs `brokersre-ib-gateway:stable`, the image of step 0, and never pulls an
+image: without step 0, `up` stops with `No such image: brokersre-ib-gateway:stable`.
+`IBGW_IMAGE` names another image, for example the version tag the build printed.
+
 ### 3. Check that it is logged in
 
 ```bash
@@ -141,6 +640,7 @@ Git Bash and PowerShell.
 
 | You see | Cause | Fix |
 |---|---|---|
+| `No such image: brokersre-ib-gateway:stable` from `docker compose up` | The image was not built on this host | [Step 0](#0-build-the-image) |
 | event `doctor_failed` naming `credentials`, and the container stops | A secret file is missing, empty or UTF-16 | Write it again with the commands in step 1 |
 | event `doctor_failed` naming another check, and the container stops | The preflight found a setting the gateway cannot run with; the message says which and how to fix it | Fix the setting. `docker compose ... run --rm ib-gateway doctor` shows every check |
 | event `login_failed_dialog`, phase `needs-human` | IBKR rejected the username or password | Correct the files, then `docker compose ... up -d --force-recreate`. The gateway does not retry on its own, so it cannot lock the account |
@@ -155,8 +655,9 @@ Git Bash and PowerShell.
 
 `windows/` holds a host kit for Windows 10 22H2 and Windows 11 (Docker Desktop with the WSL 2
 backend, or Docker Engine inside a WSL 2 distribution). `setup.ps1` checks the computer, stores
-the credentials as two protected files, starts the gateway and tells you when to approve the
-login on your phone. `doctor.ps1` reports what can interrupt the gateway (sleep, Windows Update,
+the credentials as two protected files, builds the image with `scripts/build-image.ps1` when it
+is not on the computer yet, starts the gateway and tells you when to approve the login on your
+phone. `doctor.ps1` reports what can interrupt the gateway (sleep, Windows Update,
 WSL idle shutdown, clock drift, folder permissions). `harden.ps1` applies the fixes and can undo
 them. The kit never automates the second factor, never restarts a running gateway on its own,
 and stops the gateway when IBKR rejected the login. It was tested with mocked Docker and with
@@ -171,8 +672,12 @@ Paper first. Before the same setup holds a live session, check each line:
 - [ ] **A username of its own.** IBKR allows one session per username: a login with the same
       username in IBKR Mobile, Client Portal or TWS ends the gateway's session. Use a second
       username for people.
-- [ ] **The image is pinned by digest** (`IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`)
-      and [verified](#verifying-an-image). A tag can move; a digest cannot.
+- [ ] **The image cannot move under you** and you [verified it](#verifying-what-you-built):
+      `IBGW_IMAGE` names the version tag you built and do not rebuild, or the digest of your
+      copy in your own private registry (`IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...`).
+      The channel tag moves with every build.
+- [ ] **The Gateway in it was qualified**: `qualified_by_project: yes`, or one paper login of
+      your own with that image ([qualifying](#qualifying-an-image-with-a-real-paper-login)).
 - [ ] **`TRADING_MODE=live`**, and `READ_ONLY_API=no` only if the strategy places orders.
 - [ ] **A daily restart time** (`AUTO_RESTART_TIME`, two-digit hour) outside IBKR's reset
       windows for your region; `doctor` checks the form and, for three time-zone families,
@@ -421,26 +926,65 @@ No `sudo`, no SSH or telnet client; runs as uid 1000; works with `read_only: tru
 `/tmp` and `/run/brokersre` mounted with `uid=1000,gid=1000`, see [docs/env-vars.md](docs/env-vars.md));
 credentials enter through `_FILE` variables, are rendered into
 `/run/brokersre/config.ini` (tmpfs, mode 0600) and are removed from the environment before any
-child process starts; every artefact (base image, Gateway installer, IBC zip) is verified by
-SHA-256 at build time; images are signed (keyless cosign), carry one CycloneDX SBOM per platform
-and GitHub build provenance, and both platforms are scanned by Trivy v0.76.2 before any tag
-moves. See [SECURITY.md](SECURITY.md).
+child process starts; every build input is verified at build time (the base image and IBC by
+SHA-256, the Gateway installer by SHA-256 or, when IBKR has moved past the pin, by IBKR's own
+build stamp before and after installation). RocketEdge's own image (private, for BrokerSRE) is
+signed (keyless cosign), carries one CycloneDX SBOM per platform and GitHub build provenance,
+and both platforms are scanned by Trivy v0.76.2 before any tag moves; an image you build has
+none of that unless you add it. See [SECURITY.md](SECURITY.md).
 
-## Verifying an image
+## Verifying what you built
+
+Four checks, each of which compares two independent records of the same fact. Here for the
+`stable` build of 2026-11-17; put in your version.
+
+**1. The labels**: what the build says it put into the image.
 
 ```bash
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest-from-the-release>
-IDENTITY='^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
-ISSUER=https://token.actions.githubusercontent.com
-cosign verify "$IMAGE" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY"
-# One SBOM per platform, attested to that platform's manifest (digests-<channel>.json, key "platforms"):
-PLATFORM=ghcr.io/rocketedge/brokersre-ib-gateway@$(jq -r '.platforms["linux/amd64"]' digests-stable.json)
-cosign verify-attestation --type cyclonedx "$PLATFORM" --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$IDENTITY" | jq .
+docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels}}'
 ```
 
-The identity ends in `@refs/heads/main$`: without the branch, a signature made by the same
-workflow file on another branch would verify too. Images published up to 2026-11-11 carry one
-SBOM, attested to the index digest, which describes linux/amd64 only.
+You should see, among others, `"com.rocketedge.brokersre.ibkr.version":"10.50.1h"`,
+`"com.rocketedge.brokersre.ibkr.build_stamp":"(.1h) 20261116 16:02:08"`,
+`"com.rocketedge.brokersre.installer.sha256":"eb578b23...fe7aa"` and
+`"com.rocketedge.brokersre.qualified":"no"`, the same values as the build's last lines.
+
+**2. The installer**: the SHA-256 of the file in the installer cache equals the label.
+
+```bash
+sha256sum ~/.cache/brokersre-ib-gateway/installers/10.50.1h/x64/ibgateway-10.50.1h-standalone-linux-x64.sh
+```
+
+```powershell
+(Get-FileHash "$env:LOCALAPPDATA\brokersre-ib-gateway\installers\10.50.1h\x64\ibgateway-10.50.1h-standalone-linux-x64.sh").Hash.ToLowerInvariant()
+```
+
+**3. The installed Gateway**: the stamp inside the image equals the label and IBKR's
+announcement (the two slashes keep Git Bash from rewriting the path; PowerShell passes them
+through unchanged):
+
+```bash
+docker run --rm --entrypoint cat brokersre-ib-gateway:stable //home/ibgateway/Jts/ibgateway/10.50.1h/.install4j/i4jparams.conf | grep -o 'applicationVersion="[^"]*"'
+curl -fsS https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json
+```
+
+```powershell
+docker run --rm --entrypoint cat brokersre-ib-gateway:stable //home/ibgateway/Jts/ibgateway/10.50.1h/.install4j/i4jparams.conf | Select-String -Pattern 'applicationVersion="[^"]*"' | ForEach-Object { $_.Matches.Value }
+curl.exe -fsS https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json
+```
+
+You should see `applicationVersion="(.1h) 20261116 16:02:08"` and, while IBKR still serves that
+build, `ibgatewaystable_callback({"buildVersion":"10.50.1h","buildDateTime":"20261116 16:02:08"});`.
+
+**4. The running gateway**: its first event names the version it runs.
+
+```bash
+docker compose -f compose/docker-compose.example.yml logs ib-gateway | grep container_start
+```
+
+RocketEdge's own image, built from the same recipe for its BrokerSRE service, is private; its
+signature, SBOMs and provenance are verified by BrokerSRE before a client pins a digest, and
+are not available to the public.
 
 ## Evidence for due diligence
 
@@ -459,8 +1003,11 @@ really log in, run the qualification against a **paper** account of your own:
 
 ```bash
 # two files, written as in the quick start: <dir>/ib-username and <dir>/ib-password
-scripts/qualify-paper.sh --image ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest> --secrets-dir <dir>
+scripts/qualify-paper.sh --image brokersre-ib-gateway:10.50.1h --secrets-dir <dir>
 ```
+
+Give it the image you built (by its version tag, as here, or by digest in your registry). This
+is how a build that says `qualified_by_project: no` is qualified on your side.
 
 It starts the image in the hardened reference configuration, makes **one** login attempt in
 paper mode with the read-only API, and checks: the phase reaches `logged-in`, the health check
@@ -475,23 +1022,23 @@ a username that another session is using.
 
 In this repository the same script runs in the workflow `Qualify (paper login)`, which is
 dispatched by hand, only from `main`, only for an image given by digest, behind a required
-reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The published digests
-`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d) passed the script with a
-real paper account on 2026-11-16, run by hand. A digest that a channel tag moves to later,
+reviewer ([ADR 0014](docs/adr/0014-paper-login-qualification.md)). The digests
+`7773ff7` (`stable`, 10.50.1g) and `cc3a6a9` (`latest`, 10.52.1d), published by RocketEdge
+before its image became private, passed the script with a real paper account on 2026-11-16,
+run by hand: those two Gateway builds are the ones `versions.json` pins. A digest that a channel tag moves to later,
 after a rebuild for example, is not covered by those runs, and the workflow has not run yet
 ([limitations](docs/limitations.md), L16). The account you use must have its paper trading account enabled at IBKR;
 credentials that work on IBKR's website are not proof of that.
 
-## Get notified of new images
+## Get notified of new versions
 
-Every new IB Gateway version and every OS-patch rebuild creates a
-[release](https://github.com/RocketEdge/brokersre-ib-gateway/releases). Its notes carry the
-exact digest to pin and the `cosign verify` command; the release's `digests-<channel>.json` always
-holds the digest the channel tag points at and the digest of each platform's manifest. The
-other release assets are `sbom-<channel>-linux-amd64.cdx.json`,
-`sbom-<channel>-linux-arm64.cdx.json` and `ibgateway-vendor-jars.openvex.json`. When an already released version is rebuilt (an
-image fix, no new IB Gateway), its release is updated in place, which GitHub does not announce.
-Follow the releases in either of two ways:
+Every new IB Gateway version this repository pins, and every OS-patch rebuild of RocketEdge's
+own image, creates a [release](https://github.com/RocketEdge/brokersre-ib-gateway/releases).
+For you a release means: pull this repository and build again. Its digests and assets
+(`digests-<channel>.json`, the SBOMs, `ibgateway-vendor-jars.openvex.json`) describe
+RocketEdge's private image; the VEX document applies to any image of the same Gateway version.
+When an already released version is rebuilt (an image fix, no new IB Gateway), its release is
+updated in place, which GitHub does not announce. Follow the releases in either of two ways:
 
 - **E-mail from GitHub** (needs a GitHub account): on this repository click **Watch**, then
   **Custom**, tick **Releases** and click **Apply**. In your GitHub
@@ -503,57 +1050,47 @@ Follow the releases in either of two ways:
   or the Slack RSS app).
 
 Release names carry the channel (`v10.50.1g-stable`, `v10.51.1e-latest`); look for `-stable` if
-that is the channel you run. A release changes nothing you run: images are pinned by digest.
-BrokerSRE clients receive a new digest as a pull request in their own repository from the weekly
-image-pin workflow and merge it only after it is verified.
+that is the channel you run. A release changes nothing you run. A release is not the only way
+IBKR moves: IBKR publishes new Gateway builds on its own schedule, and the next section shows
+how to see that.
 
-## Is a newer image available?
+## Is a newer IB Gateway available?
 
-`scripts/check-upgrade.sh --container ib-gateway` compares the digest a gateway runs with the
-digest its channel tag points at and prints one JSON document: exit 0 up to date, 10 a
-different image behind the tag, 2 no answer. It only asks; it never pulls or restarts
-anything. [docs/upgrade-check.md](docs/upgrade-check.md) has a cron and a Task Scheduler
-example that only notify. It was tested with a stand-in `docker`, by hand against other
-projects' public images, and against this repository's registry on a gateway running a
-published image (`up-to-date`, exit 0; [limitations](docs/limitations.md) L27).
+For an image you built, "newer" means IBKR's channel serves another Gateway build than the one
+in your image. Compare the two; nothing is downloaded or built:
+
+```bash
+scripts/build-image.sh --print-plan | grep '^version:'
+docker image inspect brokersre-ib-gateway:stable --format '{{index .Config.Labels "com.rocketedge.brokersre.ibkr.version"}}'
+```
+
+In PowerShell (Windows PowerShell 5.1 drops the inner double quotes of the `--format` above,
+so the label is read as JSON):
+
+```powershell
+pwsh -NoProfile -File scripts/build-image.ps1 -PrintPlan | Select-String '^version:'
+(docker image inspect brokersre-ib-gateway:stable --format '{{json .Config.Labels}}' | ConvertFrom-Json).'com.rocketedge.brokersre.ibkr.version'
+```
+
+The first line is what IBKR serves now (`version: 10.50.1h` on 2026-11-17), the second what
+your image holds. When they differ, a rebuild brings the new Gateway
+([Upgrading and rolling back](#upgrading-and-rolling-back)); `--print-plan` also says whether
+that version is the one `versions.json` pins (`pinned: yes`) and therefore qualified.
+[docs/upgrade-check.md](docs/upgrade-check.md) has a cron and a Task Scheduler example that
+only notify. For an image in a registry (yours), `scripts/check-upgrade.sh` compares the digest
+a gateway runs with the digest a channel tag points at in that registry; it answers exit 2
+for an image that was built locally and never pushed.
 
 ## Building and testing
 
-Build the image with the build helper. It needs Docker with buildx (Docker Desktop, or Docker
-Engine 23 or later) and bash or PowerShell, nothing else: finding, downloading and checking
-IBKR's installer run in a small helper container.
-
-```bash
-scripts/build-image.sh                     # stable, for this machine's architecture
-scripts/build-image.sh --channel latest    # IBKR's latest channel
-scripts/build-image.sh --print-plan        # what it would build; downloads and builds nothing
-scripts/build-image.sh --help              # all options
-```
-
-```powershell
-pwsh -NoProfile -File scripts/build-image.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-image.ps1 -Channel latest
-```
-
-- It builds the version pinned in `versions.json` when IBKR still serves it, and checks the
-  installer's SHA-256 against the pin. When IBKR has moved on (IBKR serves only its newest
-  build), it builds IBKR's current build instead: it accepts the installer only when IBKR's
-  `version.json` is the same before and after the download and the installed Gateway carries
-  the build stamp IBKR announced. Such an image is labelled
-  `com.rocketedge.brokersre.qualified=no` and a warning tells you how to qualify it with one
-  paper login. `--strict` refuses to build it (exit 4).
-- `--installer FILE` builds from an installer you already have; its version comes from its
-  build stamp. Every accepted installer is cached by version
-  (`~/.cache/brokersre-ib-gateway`, `%LOCALAPPDATA%\brokersre-ib-gateway` for PowerShell), so
-  the same version builds again while IBKR is unreachable.
-- After the build it runs the offline IBC smoke test (`--no-smoke` skips it). The image is
-  tagged `brokersre-ib-gateway:<channel>` and `brokersre-ib-gateway:<version>` (`--tag`
-  replaces both), and the last lines are `key: value`: `version`, `channel`,
-  `qualified_by_project`, `installer_sha256`, `ibkr_build_stamp`, `image`, `image_id`.
-- Exit codes: `0` built, `1` download, check, build or smoke test failed, `2` usage, `3` IBKR
-  unreachable and nothing usable cached, `4` `--strict` and IBKR serves another version. The
-  decision is [ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the interface is
-  in [the spec](docs/specs/2026-11-17-private-image-public-recipe.md).
+The build is [Build the image](#build-the-image) (`scripts/build-image.sh`, `.ps1`). Its
+options in short: `--channel stable|latest`, `--strict`, `--installer FILE`,
+`--platform linux/amd64|linux/arm64`, `--tag NAME`, `--no-smoke` (skip the offline IBC test),
+`--cache-dir DIR`, `--print-plan`, `--help`. Exit codes: `0` built, `1` download, check, build
+or smoke test failed, `2` usage, `3` IBKR unreachable and nothing usable cached, `4` `--strict`
+and IBKR serves another version. The decision is
+[ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the interface is in
+[the spec](docs/specs/2026-11-17-private-image-public-recipe.md).
 
 Tests:
 
@@ -576,13 +1113,20 @@ only the pins and fails while IBKR serves another version, unless the pinned ins
 
 ## Upgrade policy
 
-See [docs/upgrade-policy.md](docs/upgrade-policy.md). Summary: `detect-releases.yml` checks
-IBKR daily and opens a pull request when IBKR publishes a build; a `stable` update merges itself
-once CI passes, a `latest` update waits for a human (ADR 0009); `publish.yml` builds, pushes by
-digest, scans both platforms of that digest, signs, and only then moves tags; OS packages are
-refreshed with `-rYYYYMMDD` tags monthly, and within a day of a fixable CRITICAL/HIGH finding
-in a published image (a target, not a guarantee: GitHub can delay or drop a scheduled run).
-Consumers pin digests.
+For you: the image changes only when you build it. Rebuild when IBKR serves a newer Gateway
+([Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available)) and now and then for
+Ubuntu's security fixes, keep the previous image until the new one has logged in, and run an
+image name that cannot move ([Upgrading and rolling back](#upgrading-and-rolling-back)).
+
+For the project and RocketEdge's own image, see [docs/upgrade-policy.md](docs/upgrade-policy.md).
+Summary: `detect-releases.yml` checks IBKR daily and opens a pull request when IBKR publishes a
+build, which moves the pins in `versions.json` (what `qualified_by_project: yes` refers to); a
+`stable` update merges itself once CI passes, a `latest` update waits for a human (ADR 0009);
+`publish.yml` builds RocketEdge's image, pushes it by digest, scans both platforms of that
+digest, signs, and only then moves tags; OS packages are refreshed with `-rYYYYMMDD` tags
+monthly, and within a day of a fixable CRITICAL/HIGH finding (a target, not a guarantee:
+GitHub can delay or drop a scheduled run). That image is private from Phase 4 of
+[the spec](docs/specs/2026-11-17-private-image-public-recipe.md) on.
 
 ## Automatic updates and repository secrets
 
@@ -658,8 +1202,10 @@ mapping. Removed: SSH tunnel, `TRADING_MODE=both`, the TWS desktop image, `telne
 Renamed: `JAVA_HEAP_SIZE` is `JAVA_HEAP_MB` (megabytes, or `auto`). Added: `HEALTHCHECK`, phase
 file, JSON event contract on stdout and on the log volume, a preflight (`doctor`) that names
 variables carried over from gnzsnz which this image ignores, a relay that follows the login,
-resource samples, command server on loopback, checksum pinning of every input, SBOM and
-signatures, read-only filesystem support.
+resource samples, command server on loopback, checksum pinning of every input, a build helper
+that checks IBKR's installer against IBKR's own build stamp, read-only filesystem support.
+gnzsnz publishes an image; this project does not ([why](#why-there-is-no-public-image)): build
+yours with [Build the image](#build-the-image).
 `scripts/migrate-from-gnzsnz.sh old.env > new.env` converts a gnzsnz `.env` file and reports
 every variable it dropped or renamed on stderr, without printing a value.
 
@@ -683,4 +1229,5 @@ MIT, see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). IBC is GPL-3.0 and is ag
 linked; its licence text ships at `/usr/share/doc/ibc/LICENSE.txt` and its complete source is the
 tagged release in [RocketEdge/ibc](https://github.com/RocketEdge/ibc). IB Gateway is Interactive
 Brokers' software, fetched from IBKR at build time under IBKR's terms; it is not redistributed
-from this repository.
+from this repository, and RocketEdge publishes no image that contains it
+([why](#why-there-is-no-public-image)).
