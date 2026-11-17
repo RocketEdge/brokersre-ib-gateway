@@ -80,12 +80,13 @@ stamp_of() { printf '(.%s) %s' "${1##*.}" "$2"; }
 # sha256_of FILE: lower-case hex SHA-256 of FILE.
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
-# curl_ibkr ARGS...: curl with the protocol policy: HTTPS only (redirects too) unless the test
-# override is set, bounded connection time, no progress meter.
+# curl_ibkr ARGS...: curl with the protocol policy: HTTPS only, bounded connection time, no
+# progress meter. The test override may name an http:// server, but a redirect must lead to
+# HTTPS even then, so that a redirect away from HTTPS is refused in tests as it is in use.
 curl_ibkr() {
   local proto="=https"
   if [ -n "${BROKERSRE_TEST_IBKR_BASE_URL:-}" ]; then proto="=http,https"; fi
-  curl -fsS --proto "${proto}" --proto-redir "${proto}" --connect-timeout 20 "$@"
+  curl -fsS --proto "${proto}" --proto-redir "=https" --connect-timeout 20 "$@"
 }
 
 # fetch_version_json: print the channel's version.json body; non-zero when IBKR cannot be

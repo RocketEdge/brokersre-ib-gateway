@@ -666,3 +666,15 @@ cached_installer() {
   [ "$status" -eq 1 ]
   [ "$(installer_requests stable x64)" -eq 0 ]
 }
+
+@test "an installer download redirected away from HTTPS is refused, also under the test override" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  mkdir -p "${WWW}/elsewhere"
+  cp "${WORK}/newer-x64.sh" "${WWW}/elsewhere/ibgateway.sh"
+  printf 'http://127.0.0.1:%s/elsewhere/ibgateway.sh\n' "${PORT}" \
+    >"${WWW}/stable-standalone/ibgateway-stable-standalone-linux-x64.sh.redirect"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  ! grep -q '^GET /elsewhere/ibgateway.sh$' "${WORK}/requests.log" || false
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}

@@ -14,6 +14,8 @@ Contract:
       path is answered with ROOT/<path>.<n>, and every request after the last numbered file with
       the last one; otherwise ROOT/<path>; otherwise 404. Content is read at request time, so a
       test may rewrite a file between requests.
+    - When ROOT/<path>.redirect exists, the answer is `302 Found` with its content (a URL) as
+      the Location, the way a CDN can send a client elsewhere.
     - Every request is appended to REQUEST_LOG as one line, `GET /<path>`.
     - Only files inside ROOT are served: the path is resolved (symbolic links and `..`
       included) and anything outside ROOT is a 404. No other method is served.
@@ -59,6 +61,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _counts[path] = count
             with open(REQUEST_LOG, "a", encoding="utf-8") as log:
                 log.write(f"GET /{path}\n")
+        redirect = _pick(path + ".redirect", 1)
+        if redirect is not None:
+            with open(redirect, encoding="utf-8") as handle:
+                location = handle.read().strip()
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         chosen = _pick(path, count)
         if chosen is None:
             self.send_error(404)
