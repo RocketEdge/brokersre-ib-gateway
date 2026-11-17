@@ -12,6 +12,7 @@ knowing Docker, and keep it running through restarts, sleep and Windows Update.
 - [Start after a restart](#start-after-a-restart)
 - [If IBKR rejects the login](#if-ibkr-rejects-the-login)
 - [The weekly Sunday login](#the-weekly-sunday-login)
+- [Coming from the public image](#coming-from-the-public-image)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Files the kit creates](#files-the-kit-creates)
@@ -41,7 +42,7 @@ Every script that changes something accepts `-WhatIf` (show what would happen, c
 - It never places, changes or cancels an order. The API is read-only unless you pass `-AllowApiOrders`.
 - It never puts your username or password in `compose.yaml`, on a command line, in a log or on the screen.
 - It never sets up Windows auto-logon and never stores a Windows password.
-- It sends nothing anywhere. The only network use is Docker pulling images and one time query to `time.windows.com`.
+- It sends nothing anywhere. The network use: building the gateway image when it is not on the computer (the repository's build script downloads IB Gateway from IBKR and Ubuntu, IBC and helper images from their publishers), Docker pulling a small probe image, and one time query to `time.windows.com`.
 
 ## Before you start
 
@@ -51,7 +52,8 @@ Every script that changes something accepts `-WhatIf` (show what would happen, c
 | Hardware virtualization enabled in the UEFI/BIOS | Task Manager > Performance > CPU > "Virtualization: Enabled" |
 | WSL 2, version 2.1.5 or later (Docker Desktop's documented minimum) | `wsl --version`; install with `wsl --install`, update with `wsl --update` |
 | A container runtime, see the next section | `docker version` |
-| 8 GB RAM or more, 10 GB free disk | |
+| 8 GB RAM or more, 10 GB free disk (the first build of the image needs about 6 GB of it) | |
+| This repository on the computer (clone or ZIP): RocketEdge no longer distributes a public image, so `setup.ps1` builds it from the repository the kit came with | `..\scripts\build-image.ps1` exists next to the kit folder |
 | An IBKR username with IBKR Mobile (IB Key) enrolled for two-factor authentication | Log in once to Client Portal |
 | For paper trading: the paper trading username, not the live one | |
 
@@ -119,15 +121,30 @@ You should see, in this order:
 
 1. `IBKR username (typing is hidden):` and `IBKR password (typing is hidden):` Type each and press Enter. Nothing is shown while you type.
 2. `Only your account can read the folder, and a container can still read the files.`
-3. Docker downloading the image (about 1 GB, first time only).
+3. The first time only: `The image brokersre-ib-gateway:stable is not on this computer. Building it ...`, then
+   the build's own progress (`scripts\build-image.ps1`: it downloads IB Gateway from IBKR, about
+   350 MB, builds the image and runs an offline test of IBC; about 9 minutes on the
+   development computer) and its last lines, among them `qualified_by_project: yes` or `no`
+   ([what that means](../README.md#what-the-last-lines-mean)), then `Built brokersre-ib-gateway:stable.`
+   On later runs: `The image brokersre-ib-gateway:stable is on this computer.`
 4. `Logging in...`
 5. `Approve the IBKR Mobile prompt on your phone now` Approve it on the phone.
 6. `Logged in. API ready on 127.0.0.1:4002`
 
 Variants: `.\setup.ps1 -Live` for live trading (port 4001, use another folder with `-Path`),
 `-AllowApiOrders` if your programs must place orders, `-Runtime WslEngine -Distro Ubuntu-24.04`
-for option B, `-ImageRef ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest>` to pin the
-image (recommended; the digest is in the release notes).
+for option B, `-ImageRef brokersre-ib-gateway:latest` for IBKR's `latest` channel (setup builds
+it the same way), `-ImageRef <registry>/brokersre-ib-gateway@sha256:<digest>` for the copy you
+pushed to your own private registry (recommended in production; `docker login <registry>`
+first: compose pulls it). Setup builds only `brokersre-ib-gateway:stable` and `:latest`;
+for any other name you build the image yourself first
+([README of the repository, "Build the image"](../README.md#build-the-image)).
+
+RocketEdge no longer distributes a public image of the gateway (the image contains IB Gateway,
+IBKR's software; the former public package `ghcr.io/rocketedge/brokersre-ib-gateway` is being
+withdrawn, decided 2026-11-17). The build downloads IB Gateway from IBKR on your computer,
+under your own agreement with IBKR. Coming from the kit's former default, the public image:
+[Coming from the public image](#coming-from-the-public-image).
 
 If you were too slow with the phone, run `.\setup.ps1` again: it keeps your secrets, changes
 nothing that is already right and follows the login again. The gateway keeps prompting by itself.
@@ -303,6 +320,36 @@ docker exec brokersre-ib-gateway-paper cat /var/log/ibgateway/state/phase
 
 You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-live`.)
 
+## Coming from the public image
+
+Earlier versions of the kit ran `ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default,
+the public package that is being withdrawn. A gateway set up that way keeps running and starts
+again after a restart, because Docker keeps the image on the computer; what fails once the
+package is gone is any pull of it. To move to an image built on this computer, when someone
+can approve the second factor:
+
+1. Update the repository (`git pull`, or download the ZIP again into the same place: the
+   scheduled tasks run `start.ps1` from it).
+2. In the kit folder, run setup with the options you used before (`-Live`, `-Path`, ...) and
+   `-Force`:
+
+   ```powershell
+   .\setup.ps1 -Force
+   ```
+
+   Setup finds `brokersre-ib-gateway:stable` missing and builds it (Docker Desktop:
+   `..\scripts\build-image.ps1`; Docker Engine in WSL: `build-image.sh` from a copy in the
+   distribution). The `compose.yaml` it writes names the new image and `pull_policy: never`,
+   so it differs from the old one, and setup replaces a differing file only with `-Force`
+   (it keeps a backup, `compose.yaml.bak-<time>`). Docker Compose then replaces the container:
+   the gateway logs in again, with the second factor.
+3. If you passed `-ImageRef ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`, leave it out
+   now, or name the copy you pushed to your own registry.
+
+Without `-Force` setup stops with `compose.yaml exists and differs from what these options
+generate` and changes nothing. `start.ps1` never builds: until setup has run, the scheduled
+start keeps using the old `compose.yaml` and the image Docker still has.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -311,6 +358,10 @@ You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-li
 | `FAIL ContainerRuntime: No container runtime answered` | Docker Desktop is not running, or Docker Engine in WSL does not answer | Start Docker Desktop and wait for "Engine running"; for option B run `wsl -d <distribution> -- docker info` |
 | `FAIL ContainerRuntime: Docker is set to Windows containers` | Docker Desktop is in Windows-container mode | Tray icon > "Switch to Linux containers..." |
 | `FAIL Port4002: Another program is listening` | Trader Workstation or another gateway uses the port | Close it, or find it: `Get-NetTCPConnection -LocalPort 4002 -State Listen` |
+| `The image build failed (exit code 3): IBKR could not be reached ...` | No connection to IBKR's download server and no installer of that channel cached yet | Check the internet connection or the proxy ([README of the repository, "Behind a corporate proxy"](../README.md#behind-a-corporate-proxy)), then run `.\setup.ps1` again |
+| `The image build failed (exit code 1): ...` | The download, a check of the installer, the image build or its offline test failed; the lines above say which | The troubleshooting table of the build ([README of the repository](../README.md#troubleshooting-the-build)) |
+| `... is not on this computer, and setup builds only brokersre-ib-gateway:stable and brokersre-ib-gateway:latest` | `-ImageRef` names a local image that does not exist | Build it first (`..\scripts\build-image.ps1`), or run `.\setup.ps1 -Force` without `-ImageRef` |
+| `No such image: brokersre-ib-gateway:stable` in `kit.log` after a restart | The image was removed (for example `docker image prune -a`); `start.ps1` never builds | Run `.\setup.ps1` once: it builds the image again and starts the gateway |
 | No prompt arrives on the phone | IBKR Mobile is not enrolled for this username, or notifications are off | Open IBKR Mobile; enrol IB Key for the username; the gateway prompts again by itself |
 | `IBKR rejected the username or password` and the gateway was stopped; later `Not started: IBKR rejected the stored credentials` | Wrong credentials, a password changed or expired at IBKR, or the live username used for paper trading | `.\setup.ps1 -ResetSecrets`. Until then neither `setup.ps1` nor the start task starts the gateway; see [If IBKR rejects the login](#if-ibkr-rejects-the-login) |
 | `The gateway needs a person and will not continue by itself`, and the gateway was stopped | The gateway image reported the state `needs-human` (it does so after a rejected login it remembers) | Look at `docker logs <container>`, then `.\setup.ps1 -ResetSecrets` |
@@ -377,12 +428,17 @@ SYSTEM and Administrators, inheritance off):
 | File | Content |
 |---|---|
 | `secrets\ib-username`, `secrets\ib-password` | Your credentials, UTF-8 without byte-order mark and without newline; the folder's access list names only your account |
-| `compose.yaml` | The stack: image, API on `127.0.0.1`, read-only root file system, no capabilities, 90 s stop timeout, log size limits. Generated; change it through `setup.ps1` options |
+| `compose.yaml` | The stack: image (`pull_policy: never` for an image built on this computer, `missing` for one you named in a registry), API on `127.0.0.1`, read-only root file system, no capabilities, 90 s stop timeout, log size limits. Generated; change it through `setup.ps1` options |
 | `kit-state.json` | What setup detected: runtime, trading mode, container name, port; and the time of a login IBKR rejected, until you enter the credentials again. No secret |
 | `harden-journal.json` | Every host change made by `harden.ps1` with its previous value |
 | `kit.log`, `kit.log.1` | What the scheduled tasks did; at most 256 KB each |
 
-Elsewhere: scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
+Elsewhere: the gateway image `brokersre-ib-gateway:stable` (and `:<version>`) in Docker, and
+the installer cache of the build in `%LOCALAPPDATA%\brokersre-ib-gateway`, or, with Docker
+Engine in WSL (option B), in the distribution user's `~/.cache/brokersre-ib-gateway` (one IB
+Gateway installer of about 360 MB per version, architecture and SHA-256, never pruned;
+`uninstall.ps1` removes neither;
+[how to see and clean it](../README.md#see-and-clean-the-installer-cache)); scheduled tasks in the Task Scheduler folder `\BrokerSRE`; with `-SetActiveHours`
 three values under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`; with `-WslConfig`
 keys in `%UserProfile%\.wslconfig` (a `.brokersre-backup-<time>` copy is kept until undo); with
 `-FirewallLoopbackOnly` the rule `BrokerSRE-Gateway-Block-Api-Ports`; with `-DisableSleep` two
@@ -409,6 +465,7 @@ intentions, not facts. `doctor.ps1` tells you the outcome on your computer.
 | Ending a hung `docker compose up` together with its child processes | Proven with `cmd.exe` and a child process under both PowerShell editions, not with a real hung `docker compose` | If `kit.log` reports a failed start and the gateway starts anyway, report it |
 | `-ResetSecrets` replacing the container | Only the reason was measured (Docker Compose 2 leaves a running container untouched when only a secret file's content changed; `--force-recreate` replaces it), with a small test container | After `-ResetSecrets`, `docker ps` shows the gateway container "Up" for seconds, not days |
 | The C# snippet | Not compiled by this repository | Build it against IBKR's TWS API client |
+| The image build through `setup.ps1` with Docker Engine inside WSL (option B) | Tested with a mocked `wsl.exe` only (the development computer has no WSL distribution of its own): setup copies only what the build reads (the Dockerfile, `.dockerignore`, `versions.json`, `rootfs/`, the build scripts and the smoke test; about 0.3 MB, never `compose/secrets`, `.env` files or `downloads/`) into a temporary directory of the distribution (`mktemp -d`, `tar`, the archive removed right after unpacking), runs `bash scripts/build-image.sh` there, never from `/mnt/c` (which shows every file as 0777), and removes the copy; a copy holding only that list built with `scripts/build-image.sh` in Git Bash on the development computer (exit 0, smoke test passed), not in a WSL distribution; the installer cache is the distribution user's `~/.cache/brokersre-ib-gateway` | Run `.\setup.ps1 -Runtime WslEngine` on a computer where the image is not built yet |
 
 ## How the kit is tested
 
@@ -426,7 +483,13 @@ change round-trips through undo (and an entry the kit could not have written is 
 timed-out command is ended together with its child process, `uninstall.ps1 -RemoveData` keeps
 the files when an earlier step failed, and both `setup.ps1` and `start.ps1` stop the stack at a
 rejected login, also one that happened before they ran, and never start it again while the
-rejection is on record. `tests/Kit.Tests.ps1` also reads the image's own contract files
+rejection is on record, and `setup.ps1` builds a missing `brokersre-ib-gateway:stable` or
+`:latest` before it starts anything (and starts nothing when the build fails), never builds
+under `-WhatIf` or `-NoStart`, and leaves an image named in a registry to compose. The build
+step itself ran for real once on the development computer (Docker Desktop, PowerShell 7,
+2026-11-17): `Initialize-GwGatewayImage` with `brokersre-ib-gateway:latest` missing ran
+`scripts\build-image.ps1 -Channel latest` and the image was built; no gateway was started.
+`tests/Kit.Tests.ps1` also reads the image's own contract files
 (`rootfs/etc/brokersre/ibc-patterns.tsv`, `docs/log-contract.md`) and fails when the image
 gains a state the kit does not know.
 

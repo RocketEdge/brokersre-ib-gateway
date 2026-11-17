@@ -58,6 +58,8 @@
 #   (a fake server, or a closed port to simulate an unreachable IBKR); every use is announced
 #   on stderr, and what it serves is cached and labelled as source `override`. Without it the
 #   helper talks to IBKR only, over HTTPS only; redirects must lead to HTTPS in either case.
+#   BROKERSRE_HOST_SHELL (bash or powershell) and BROKERSRE_HOST_DOWNLOADS (downloads/ as the
+#   host names it) come from the wrappers and only shape advice in messages (leftover_advice).
 # Side effects: network (IBKR), files under --cache and --downloads; human messages on stderr.
 set -euo pipefail
 
@@ -244,6 +246,39 @@ new_run() {
 remove_failed_run() {
   local code=$?
   if [ "${code}" -ne 0 ] && [ -n "${run_dir:-}" ]; then rm -rf "${run_dir}"; fi
+}
+
+# leftover_advice NAME: how to remove downloads/NAME and how to build from it instead, in the
+# words of the caller. The wrappers say who they are and where downloads/ is on the host
+# (BROKERSRE_HOST_SHELL bash|powershell, BROKERSRE_HOST_DOWNLOADS), because this helper sees
+# only its own mount /downloads; without them the path is named relative to the repository.
+leftover_advice() {
+  local name="$1" dir="${BROKERSRE_HOST_DOWNLOADS:-}" sep=/ path quoted quote
+  case "${dir}" in *\\*) sep="\\" ;; esac
+  path="${dir}${sep}${name}"
+  case "${BROKERSRE_HOST_SHELL:-}:${dir}" in
+    powershell:?*)
+      # A single-quoted PowerShell string: every single quote is doubled, and PowerShell also
+      # ends such a string at the typographic quotes U+2018, U+2019, U+201A and U+201B (written
+      # as UTF-8 bytes, so that this file stays ASCII), which are doubled the same way.
+      quoted="${path//\'/\'\'}"
+      for quote in $'\342\200\230' $'\342\200\231' $'\342\200\232' $'\342\200\233'; do
+        quoted="${quoted//"${quote}"/${quote}${quote}}"
+      done
+      printf "If no other build is running, remove it and build again:\n    Remove-Item -LiteralPath '%s'\n  If you put it there yourself, move it elsewhere, or build from it with -Installer." \
+        "${quoted}"
+      ;;
+    bash:?*)
+      # A single-quoted shell word: each ' becomes '\'' (close, escaped quote, reopen).
+      quoted="${path//\'/\'\\\'\'}"
+      printf "If no other build is running, remove it and build again:\n    rm '%s'\n  If you put it there yourself, move it elsewhere, or build from it with --installer." \
+        "${quoted}"
+      ;;
+    *)
+      printf 'If no other build is running, remove downloads/%s of the repository and build again.\n  If you put it there yourself, move it elsewhere, or build from it with --installer (-Installer).' \
+        "${name}"
+      ;;
+  esac
 }
 
 # resolve_installer_file: the --installer path: everything from the file itself.
@@ -493,7 +528,11 @@ cmd_resolve() {
     # The Dockerfile takes whatever is there, so other bytes than this build's are refused.
     if [ -e "${downloads}/${context_name}" ]; then
       if [ "$(sha256_of "${downloads}/${context_name}" 2>/dev/null)" != "${installer_sha}" ]; then
-        die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched: move it elsewhere, or build from it with --installer."
+        # The usual cause is not a file the user put there: a build killed before its cleanup
+        # (or a second build from the same folder, which shares downloads/) leaves its copy.
+        die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched.
+  It may be a leftover of an interrupted build or of a build running in parallel from this
+  folder. $(leftover_advice "${context_name}")"
       fi
       context_owned=no
       say "downloads/${context_name} already holds this installer; it is used and left in place"

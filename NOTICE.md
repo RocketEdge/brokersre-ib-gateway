@@ -17,7 +17,7 @@ tests, SBOM, signing, provenance) is new. The original copyright notice is retai
 | Component | Licence | How it is obtained |
 |---|---|---|
 | Ubuntu 26.04 base image | various (Ubuntu) | `ubuntu:26.04` pinned by digest in `versions.json` |
-| IB Gateway | Interactive Brokers' end-user terms | Downloaded from `download2.interactivebrokers.com` at build time and verified by SHA-256; **not redistributed** from this repository |
+| IB Gateway | Interactive Brokers' end-user terms | Downloaded from `download2.interactivebrokers.com` by the person who builds the image, at build time, and verified by SHA-256 or by IBKR's own build stamp; **not redistributed**: not from this repository, and not as an image (RocketEdge no longer distributes a public image that contains it and is withdrawing its former public package; ADR 0018) |
 | IBC | GPL-3.0 | Downloaded from the [RocketEdge/ibc](https://github.com/RocketEdge/ibc) release named in `versions.json`, verified by SHA-256. IBC runs as a separate program (aggregation, not linking); its licence text ships at `/usr/share/doc/ibc/LICENSE.txt` and its complete corresponding source is the tagged commit in that repository |
 | tini, Xvfb, x11vnc, socat, gettext, jq, OpenJDK (arm64 only) | their respective Ubuntu package licences | Ubuntu archive |
 

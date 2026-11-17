@@ -24,8 +24,26 @@ is a tested one.
 | A gateway and your strategy on the same host, the API not published at all | [../examples/compose-with-client.yml](../examples/compose-with-client.yml) | [../examples/README.md](../examples/README.md) |
 | A person's look at the Gateway's screen when it is stuck (break-glass; added to the one-gateway file with a second `-f`) | [docker-compose.console.yml](docker-compose.console.yml) | [../docs/console.md](../docs/console.md) |
 
-Copy the file you need and pin the image by digest (`IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`)
-before you rely on it.
+Every file runs the image you built with `scripts/build-image.sh` or `scripts/build-image.ps1`
+([README, "Build the image"](../README.md#build-the-image)), tagged
+`brokersre-ib-gateway:stable`; RocketEdge no longer distributes a public image. Before you
+rely on a file, name an image that cannot move: the version tag the build printed
+(`IBGW_IMAGE=brokersre-ib-gateway:10.50.1h`, for example) or the digest of your copy in your
+own private registry (`IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...`).
+
+**The gateway image is never pulled.** Every gateway service says `pull_policy: never`: an
+image this host does not have stops `up` at once with `No such image: <name>`, instead of a
+lookup in a registry (for a bare name that would be Docker Hub). An image from your own
+registry is pulled on purpose, once, after `docker login <registry>`:
+
+```bash
+IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:<digest> docker compose -f compose/docker-compose.example.yml pull --policy missing
+```
+
+`up -d --pull missing` does the same as part of the start. `pull --policy` needs Docker Compose
+2.22.0 or later ([docker/compose#10981](https://github.com/docker/compose/pull/10981)); with any
+version, `docker pull <registry>/brokersre-ib-gateway@sha256:<digest>` before `up` does the
+same.
 
 ## The one rule: one username per gateway
 
@@ -153,7 +171,7 @@ default). The relay listens only while that gateway is logged in.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `IBGW_IMAGE` | `ghcr.io/rocketedge/brokersre-ib-gateway:stable` | Image of every gateway. Pin a digest in production. |
+| `IBGW_IMAGE` | `brokersre-ib-gateway:stable` | Image of every gateway: the one you built. Never pulled (`pull_policy: never`); in production a version tag or a digest in your own registry. |
 | `IBGW_SECRETS_DIR` | `./secrets` (next to the compose file) | Directory that holds one sub-directory of secrets per instance. |
 | `PRIVATE_IP` | `127.0.0.1` | Host address the relays are bound to. Use the private address your strategy host can reach; never `0.0.0.0` on a host the internet can reach. |
 | `IBGW_LIVE_PORT`, `IBGW_PAPER_PORT` | `4001`, `4002` | Host ports, for a host where these are taken. |
@@ -241,6 +259,7 @@ at the standby's host port after you have started it; nothing here does that on 
 
 | You see | Cause | Fix |
 |---|---|---|
+| `No such image: brokersre-ib-gateway:stable` | The image was not built on this host (or not under that name) | Build it: `scripts/build-image.sh` ([README](../README.md#build-the-image)); or set `IBGW_IMAGE` to the name the build printed |
 | `no service selected` | No profile was named | Add `--profile live --profile paper` or set `COMPOSE_PROFILES` |
 | `down` returns at once and the gateways keep running | `down` without a profile stops nothing | Name the same profiles as for `up`, or set `COMPOSE_PROFILES` |
 | Phase `existing-session` in one gateway | Two gateways (or a gateway and another program) hold the same username | Run `scripts/check-compose-usernames.sh compose/secrets`; give every gateway its own username |

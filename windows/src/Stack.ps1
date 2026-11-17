@@ -54,8 +54,11 @@ function ConvertTo-GwComposeText {
     .PARAMETER TemplateText
     Content of compose.yaml.tmpl.
     .PARAMETER ImageRef
-    Image reference, a tag ('ghcr.io/rocketedge/brokersre-ib-gateway:stable') or, better, a
-    digest ('...@sha256:<64 hex>').
+    Image reference: the tag the repository's build script makes ('brokersre-ib-gateway:stable'),
+    a version tag, or a digest in the operator's own registry ('<registry>/...@sha256:<64 hex>').
+    A reference without a '/' (a name built on this computer) is rendered with pull_policy
+    never, so compose never looks it up in a registry; one with a repository path is rendered
+    with pull_policy missing, so compose pulls the image the operator named when it is absent.
     .PARAMETER TradingMode
     'paper' or 'live'.
     .PARAMETER TimeZone
@@ -78,8 +81,10 @@ function ConvertTo-GwComposeText {
         [switch]$AllowApiOrders
     )
     if ($ImageRef -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}(@sha256:[0-9a-f]{64})?\z') {
-        throw (New-Object System.ArgumentException('ImageRef must be an image reference such as ghcr.io/rocketedge/brokersre-ib-gateway:stable or name@sha256:<64 hex digits>.'))
+        throw (New-Object System.ArgumentException('ImageRef must be an image reference such as brokersre-ib-gateway:stable or <registry>/brokersre-ib-gateway@sha256:<64 hex digits>.'))
     }
+    $pullPolicy = 'never'
+    if ($ImageRef.Contains('/')) { $pullPolicy = 'missing' }
     if ($TimeZone -cnotmatch '\A[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}\z') {
         throw (New-Object System.ArgumentException('TimeZone must be an IANA zone name such as America/New_York or Etc/UTC.'))
     }
@@ -102,6 +107,14 @@ function ConvertTo-GwComposeText {
     }
     $text = $TemplateText.Replace("`r`n", "`n")
     foreach ($token in $values.Keys) { $text = $text.Replace($token, $values[$token]) }
+    # The pull policy is a literal line of the template (compose validates the key even in
+    # sidecar/tests/test_docs.py, which resolves the template without interpolation), so it is
+    # replaced as a line, and a template without exactly one such line is an error.
+    $policyLine = [regex]'(?m)^    pull_policy: never$'
+    if ($policyLine.Matches($text).Count -ne 1) {
+        throw (New-Object System.InvalidOperationException('The compose template must contain the line "    pull_policy: never" exactly once.'))
+    }
+    $text = $policyLine.Replace($text, ('    pull_policy: {0}' -f $pullPolicy))
     $leftover = [regex]::Match($text, '__[A-Z][A-Z_]*__')
     if ($leftover.Success) {
         throw (New-Object System.InvalidOperationException(('The compose template contains a placeholder the kit does not know: {0}.' -f $leftover.Value)))
@@ -392,6 +405,185 @@ function Remove-GwStack {
     if (-not $PSCmdlet.ShouldProcess($Path, ('docker compose {0}' -f ($arguments.ToArray() -join ' ')))) { return $false }
     $result = Invoke-GwCompose -Runtime $Runtime -Path $Path -ArgumentList $arguments.ToArray()
     return ($result.ExitCode -eq 0)
+}
+
+function Get-GwImageBuildChannel {
+    <#
+    .SYNOPSIS
+    The IBKR channel whose build makes this image name, or an empty string.
+    .DESCRIPTION
+    Pure. The repository's build script (scripts\build-image.ps1, scripts/build-image.sh) tags
+    the image it builds 'brokersre-ib-gateway:<channel>' and 'brokersre-ib-gateway:<version>'
+    (ADR 0018). Only the two channel names can be built on request: a version tag names one
+    Gateway build, which IBKR may no longer serve, and a name with a registry path is an image
+    the operator keeps elsewhere. RocketEdge no longer distributes a public image to pull
+    instead (the image holds IBKR's installed software; ADR 0018).
+    .PARAMETER ImageRef
+    Image reference from setup's -ImageRef.
+    .OUTPUTS
+    System.String: 'stable', 'latest' or ''.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$ImageRef)
+    $match = [regex]::Match($ImageRef, '\Abrokersre-ib-gateway:(stable|latest)\z')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return ''
+}
+
+function Test-GwImagePresent {
+    <#
+    .SYNOPSIS
+    True when the container engine has the image locally.
+    .DESCRIPTION
+    Read-only: 'docker image inspect --format {{.Id}} <ref>' against the detected runtime; it
+    never pulls. Any failure (no such image, engine not answering) counts as "not present",
+    and the caller then builds the image or lets compose report the problem.
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .PARAMETER ImageRef
+    Image reference.
+    .OUTPUTS
+    System.Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
+        [Parameter(Mandatory = $true)][string]$ImageRef
+    )
+    $result = Invoke-GwContainerCli -Runtime $Runtime -ArgumentList @('image', 'inspect', '--format', '{{.Id}}', $ImageRef) -TimeoutSeconds 60
+    return ($result.ExitCode -eq 0)
+}
+
+function Invoke-GwImageBuild {
+    <#
+    .SYNOPSIS
+    Builds the gateway image of one IBKR channel with the repository's build script.
+    .DESCRIPTION
+    Docker Desktop (and any engine docker.exe reaches): runs scripts\build-image.ps1 of the
+    repository the kit belongs to, as its own process ('-File', Invoke-GwPowerShellFile), with
+    '-Channel <channel>'. Docker Engine inside a WSL distribution: runs
+    'bash scripts/build-image.sh --channel <channel>' in that distribution with the repository
+    as the working directory ('wsl --cd', which translates the Windows path), so the build uses
+    the engine the gateway will run on. Either way the script resolves, downloads and verifies
+    IBKR's installer in its helper container, builds the image, runs the offline IBC smoke test
+    and tags 'brokersre-ib-gateway:<channel>' and ':<version>' (ADR 0018). Its progress and its
+    result lines go to the console; nothing is captured and no deadline applies (the first
+    build downloads about 350 MB from IBKR and takes minutes). The kit adds nothing to the
+    script's behaviour: no option, no retry; the script's exit code is passed through
+    (0 built, 1 failed, 2 usage, 3 IBKR unreachable and nothing cached, 4 strict refusal).
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .PARAMETER Channel
+    'stable' or 'latest'.
+    .PARAMETER RepositoryRoot
+    Root of the repository checkout that holds scripts\build-image.ps1; default the parent of
+    the kit folder.
+    .OUTPUTS
+    PSCustomObject: Ran (false under -WhatIf or when the script is missing), ExitCode (the
+    script's; -1 when it did not run) and Detail (why it did not run).
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
+        [Parameter(Mandatory = $true)][ValidateSet('stable', 'latest')][string]$Channel,
+        [string]$RepositoryRoot = (Split-Path -Parent $script:GwModuleRoot)
+    )
+    $scriptPath = Join-Path (Join-Path $RepositoryRoot 'scripts') 'build-image.ps1'
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        return [pscustomobject]@{ Ran = $false; ExitCode = -1; Detail = ('{0} was not found: the kit builds the image from the repository it came with' -f $scriptPath) }
+    }
+    if (-not $PSCmdlet.ShouldProcess($RepositoryRoot, ('Build the gateway image of the IBKR channel {0} (scripts\build-image.ps1 -Channel {0})' -f $Channel))) {
+        return [pscustomobject]@{ Ran = $false; ExitCode = -1; Detail = 'not run (-WhatIf)' }
+    }
+    if ([string]$Runtime.Mode -eq 'WslEngine') {
+        return (Invoke-GwWslImageBuild -Distro ([string]$Runtime.Distro) -Channel $Channel -RepositoryRoot $RepositoryRoot)
+    }
+    $result = Invoke-GwPowerShellFile -Path $scriptPath -ArgumentList @('-Channel', $Channel) -Interactive
+    return [pscustomobject]@{ Ran = $true; ExitCode = [int]$result.ExitCode; Detail = '' }
+}
+
+function Invoke-GwWslImageBuild {
+    <#
+    .SYNOPSIS
+    Builds the gateway image inside a WSL distribution, from a copy of the repository in the
+    distribution's own file system.
+    .DESCRIPTION
+    WSL shows a Windows folder under /mnt/c (drvfs) with mode 0777 on every file and folder, and
+    a build from there would hand those modes to the image's build context; it is also slow.
+    So the build's inputs are copied first, with no shell involved (every step is one
+    'wsl --exec', 120 s each): 'mktemp -d' makes a temporary directory, 'wslpath -a' names the
+    repository's Linux path, 'tar' packs a NAMED list of what scripts/build-image.sh reads
+    (Dockerfile, .dockerignore, versions.json, rootfs/, the build, resolve and fetch scripts,
+    scripts/build-helper/, tests/container/run.sh; about 0.3 MB) into source.tar, 'tar' unpacks
+    it into <temp>/source as the distribution's user, whose umask removes the write bits for
+    group and others, and the archive is removed at once. Never the whole tree: a checkout
+    where someone followed the quick start holds IBKR credentials in compose/secrets and
+    settings in .env files, and a closed window or a killed process skips the cleanup below.
+    Then 'bash scripts/build-image.sh --channel <channel>' runs from that copy on the console
+    (no deadline). The temporary directory is removed in every case once it exists. The installer cache is the distribution user's
+    ~/.cache/brokersre-ib-gateway, not %LOCALAPPDATA%. The Dockerfile sets the modes of what
+    it copies itself as well, so the image does not depend on this copy either.
+    .PARAMETER Distro
+    WSL distribution that runs Docker Engine.
+    .PARAMETER Channel
+    'stable' or 'latest'.
+    .PARAMETER RepositoryRoot
+    Windows path of the repository checkout.
+    .OUTPUTS
+    PSCustomObject: Ran (false when the copy could not be made; then nothing was built),
+    ExitCode (the build script's; -1 when it did not run) and Detail (why it did not run).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Distro,
+        [Parameter(Mandatory = $true)][ValidateSet('stable', 'latest')][string]$Channel,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+    )
+    $notRun = { param([string]$Why) [pscustomobject]@{ Ran = $false; ExitCode = -1; Detail = $Why } }
+    $made = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'mktemp', '-d')
+    $temp = [string]($made.Output | Select-Object -First 1)
+    if ($made.ExitCode -ne 0 -or $temp -notmatch '\A/[A-Za-z0-9._/-]+\z') {
+        return (& $notRun ('the distribution {0} gave no temporary directory for a copy of the repository' -f $Distro))
+    }
+    try {
+        $mapped = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'wslpath', '-a', $RepositoryRoot)
+        $source = [string]($mapped.Output | Select-Object -First 1)
+        if ($mapped.ExitCode -ne 0 -or $source -eq '') {
+            return (& $notRun ('the copy of the repository into {0} failed: wslpath did not translate {1}' -f $Distro, $RepositoryRoot))
+        }
+        # What scripts/build-image.sh reads, and nothing else: the Dockerfile and its context
+        # (.dockerignore admits Dockerfile, rootfs/, scripts/fetch-installer.sh and downloads/,
+        # which the script creates), the pins, the helper image and its script, and the smoke
+        # test. A named list instead of the whole tree, so that compose/secrets, .env files,
+        # downloads/ and local tool folders never reach the distribution's /tmp.
+        $buildInputs = @(
+            'Dockerfile', '.dockerignore', 'versions.json', 'rootfs',
+            'scripts/build-image.sh', 'scripts/resolve-installer.sh', 'scripts/fetch-installer.sh', 'scripts/build-helper',
+            'tests/container/run.sh'
+        )
+        $archive = '{0}/source.tar' -f $temp
+        $steps = New-Object System.Collections.Generic.List[object]
+        $steps.Add([string[]](@('-d', $Distro, '--exec', 'tar', '-C', $source, '-cf', $archive) + $buildInputs))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'mkdir', ('{0}/source' -f $temp)))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'tar', '-C', ('{0}/source' -f $temp), '-xf', $archive))
+        $steps.Add([string[]]@('-d', $Distro, '--exec', 'rm', '-f', $archive))
+        foreach ($step in $steps) {
+            # About 0.3 MB in some 30 files: seconds even from /mnt/c, so 120 s is a wide margin.
+            $done = Invoke-GwWsl -ArgumentList $step -TimeoutSeconds 120
+            if ($done.ExitCode -ne 0) {
+                return (& $notRun ('the copy of the repository into {0} failed ({1}: {2})' -f $Distro, $step[3], (($done.Output | Select-Object -First 1) -join '')))
+            }
+        }
+        $build = Invoke-GwWsl -ArgumentList @('-d', $Distro, '--cd', ('{0}/source' -f $temp), '--exec', 'bash', 'scripts/build-image.sh', '--channel', $Channel) -Interactive
+        return [pscustomobject]@{ Ran = $true; ExitCode = [int]$build.ExitCode; Detail = '' }
+    }
+    finally {
+        Invoke-GwWsl -ArgumentList @('-d', $Distro, '--exec', 'rm', '-rf', $temp) -TimeoutSeconds 120 | Out-Null
+    }
 }
 
 function Wait-GwContainerEngine {

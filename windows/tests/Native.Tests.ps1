@@ -105,6 +105,24 @@ Describe 'Invoke-GwNative' {
     }
 }
 
+Describe 'Invoke-GwPowerShellFile' {
+    It 'runs a script file with the PowerShell of this edition and returns its exit code' {
+        $probe = Join-Path $TestDrive 'edition.ps1'
+        [System.IO.File]::WriteAllText($probe, "[Console]::Out.WriteLine(`$PSVersionTable.PSEdition)`nexit 7`n")
+        $result = Invoke-GwPowerShellFile -Path $probe
+        $result.ExitCode | Should -Be 7
+        $result.Output | Should -Be @([string]$PSVersionTable.PSEdition)
+    }
+
+    It 'passes the arguments to the script exactly' {
+        $helper = Join-Path (Join-Path $PSScriptRoot 'helpers') 'Show-Argument.ps1'
+        $sent = @('-Channel', 'stable', 'two words')
+        $result = Invoke-GwPowerShellFile -Path $helper -ArgumentList $sent
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Be @($sent | ForEach-Object { (([string]$_).ToCharArray() | ForEach-Object { ([int]$_).ToString('X4') }) -join ' ' })
+    }
+}
+
 Describe 'ConvertTo-GwNativeArgument' {
     It 'quotes <text> as <expected>' -ForEach @(
         @{ text = 'plain'; expected = 'plain' }

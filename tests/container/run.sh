@@ -3,7 +3,7 @@
 # Container-level tests: run against a built image with the Docker CLI, no IBKR credentials,
 # never contacting IBKR's login servers (the IBC smoke test runs with --network none).
 #
-# Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh [--only ibc-smoke]
+# Usage: IMAGE=brokersre-ib-gateway:stable tests/container/run.sh [--only ibc-smoke]   (the image scripts/build-image.sh built)
 #   --only ibc-smoke   run the IBC smoke test alone (no network, IBC starts, the command server
 #                      answers, STOP ends the Gateway tidily): the check scripts/build-image.sh
 #                      and .ps1 run after a build. It needs only the Docker CLI and no host path
@@ -198,6 +198,21 @@ if [[ "${label_source}" =~ ^(ibkr|installer|override)$ ]]; then
   pass "installer source label: ${label_source}"
 else
   fail "installer source label" "com.rocketedge.brokersre.installer.source is '${label_source}'"
+fi
+# What the image takes from rootfs/ has the same owner and mode from every build host: a
+# Windows build context arrives with 0755 on every file, a WSL checkout under /mnt/c reports
+# 0777 (drvfs), and a template the gateway reads must never be writable by anyone but root.
+# Directories and scripts 0755, every other file 0644, all root:root.
+rootfs_modes="$(docker run --rm --entrypoint bash "${IMAGE}" -c 'stat -c "%a %U:%G %n" /etc /etc/brokersre /etc/brokersre/* /usr /usr/local /usr/local/bin /usr/local/lib /usr/local/lib/brokersre /usr/local/bin/*.sh /usr/local/lib/brokersre/*.sh' 2>&1)"
+rootfs_bad="$(printf '%s\n' "${rootfs_modes}" | awk '
+  NF < 3 { print; next }
+  $3 ~ /\.sh$/ { if ($1 != "755" || $2 != "root:root") print; next }
+  $3 ~ /^\/etc\/brokersre\/./ { if ($1 != "644" || $2 != "root:root") print; next }
+  { if ($1 != "755" || $2 != "root:root") print }')"
+if [ "$(printf '%s\n' "${rootfs_modes}" | grep -c .)" -ge 12 ] && [ -z "${rootfs_bad}" ]; then
+  pass "files from rootfs/ have fixed modes: directories and scripts 0755, templates and tables 0644, owned by root"
+else
+  fail "rootfs modes" "$(printf '%s' "${rootfs_bad}" | tr '\n' ';' | cut -c1-300)"
 fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="

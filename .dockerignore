@@ -7,3 +7,8 @@
 downloads/*
 !downloads/.gitkeep
 !downloads/*.sh
+# Never a credential or a settings file, even inside an admitted folder: the quick start keeps
+# IBKR credentials in secrets/ folders and settings in .env files (tests/bats/ci/build-context.bats).
+**/secrets
+**/.env
+**/*.env

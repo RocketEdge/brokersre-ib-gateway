@@ -263,8 +263,8 @@ function Write-GwGatewayFolder {
         Write-GwConsole -Message 'compose.yaml is already up to date.'
     }
     if ($ImageRef -notmatch '@sha256:') {
-        Write-GwConsole -Message ('Recommendation: pin the image by digest, a tag can move. Take the digest from the release notes and run setup.ps1 -ImageRef ' +
-            'ghcr.io/rocketedge/brokersre-ib-gateway@sha256:<digest> -Force')
+        Write-GwConsole -Message ('Recommendation: in production name an image that cannot move; a tag moves with every build. Push the image you built to your own ' +
+            'private registry and run setup.ps1 -ImageRef <registry>/brokersre-ib-gateway@sha256:<digest> -Force (README of the repository, "Build the image").')
     }
     if ($AllowApiOrders) {
         Write-GwConsole -Message 'API clients may place orders (READ_ONLY_API=no). The kit itself never places, changes or cancels an order.' -Status 'WARN'
@@ -329,6 +329,73 @@ function Invoke-GwRejectedLoginStop {
     return $stopped
 }
 
+function Initialize-GwGatewayImage {
+    <#
+    .SYNOPSIS
+    Makes sure the gateway image is on this computer before setup starts the stack.
+    .DESCRIPTION
+    RocketEdge no longer distributes a public image of the gateway: it holds IBKR's installed
+    software (ADR 0018; the former public package is being withdrawn), so each operator builds
+    it from the repository.
+    Decision, in this order:
+    - the image is on this computer (Test-GwImagePresent, read-only): nothing to do;
+    - it is brokersre-ib-gateway:stable or :latest (Get-GwImageBuildChannel): build it with the
+      repository's build script (Invoke-GwImageBuild, after one ShouldProcess question; nothing
+      is built under -WhatIf). A failed build stops setup before anything starts, with the
+      script's exit code explained;
+    - it has a registry path (a '/'): compose pulls it when the stack starts (the template
+      renders pull_policy missing for such a name); the operator is told to log in first;
+    - any other local name: setup stops and says how to build it, because guessing which
+      Gateway build a version tag means could start a different one.
+    .PARAMETER Runtime
+    Object from Get-GwRuntime.
+    .PARAMETER ImageRef
+    Image reference from setup's -ImageRef.
+    .OUTPUTS
+    System.String: '' when setup may start the stack, 'ImageBuildFailed' or 'ImageMissing'.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Runtime,
+        [Parameter(Mandatory = $true)][string]$ImageRef
+    )
+    if (Test-GwImagePresent -Runtime $Runtime -ImageRef $ImageRef) {
+        Write-GwConsole -Message ('The image {0} is on this computer.' -f $ImageRef) -Status 'PASS'
+        return ''
+    }
+    $channel = Get-GwImageBuildChannel -ImageRef $ImageRef
+    if ($channel -ne '') {
+        $action = 'Build the image, which is not on this computer, with scripts\build-image.ps1 -Channel {0} (downloads IB Gateway from IBKR)' -f $channel
+        if (-not $PSCmdlet.ShouldProcess($ImageRef, $action)) { return '' }
+        $building = ('The image {0} is not on this computer. Building it from this repository with scripts\build-image.ps1 -Channel {1}: ' +
+            'it downloads IB Gateway from IBKR (about 350 MB) and takes several minutes the first time; its progress follows.') -f $ImageRef, $channel
+        Write-GwConsole -Message $building
+        $build = Invoke-GwImageBuild -Runtime $Runtime -Channel $channel -Confirm:$false
+        if ($build.Ran -and $build.ExitCode -eq 0) {
+            Write-GwConsole -Message ('Built {0}.' -f $ImageRef) -Status 'PASS'
+            return ''
+        }
+        $reason = 'see the lines above'
+        if (-not $build.Ran) { $reason = $build.Detail }
+        elseif ($build.ExitCode -eq 3) { $reason = 'IBKR could not be reached and no installer of this channel is cached; check the internet connection or the proxy, then run setup.ps1 again' }
+        elseif ($build.ExitCode -eq 1) { $reason = 'the download, a check, the build or the smoke test failed; see the lines above' }
+        Write-GwConsole -Status 'FAIL' -Message ('The image build failed (exit code {0}): {1}. Nothing was started.' -f $build.ExitCode, $reason)
+        return 'ImageBuildFailed'
+    }
+    $slash = $ImageRef.IndexOf('/')
+    if ($slash -gt 0) {
+        $registry = $ImageRef.Substring(0, $slash)
+        if ($registry -notmatch '[.:]' -and $registry -ne 'localhost') { $registry = 'docker.io' }
+        Write-GwConsole -Message ('The image {0} is not on this computer; docker compose pulls it when the gateway starts. If {1} is private, log in first: docker login {1}' -f $ImageRef, $registry)
+        return ''
+    }
+    $missing = ('The image {0} is not on this computer, and setup builds only brokersre-ib-gateway:stable and brokersre-ib-gateway:latest. ' +
+        'Build it first with ..\scripts\build-image.ps1 (README of the repository, "Build the image"), or run setup.ps1 without -ImageRef. Nothing was started.') -f $ImageRef
+    Write-GwConsole -Status 'FAIL' -Message $missing
+    return 'ImageMissing'
+}
+
 function Invoke-GwSetup {
     <#
     .SYNOPSIS
@@ -347,10 +414,16 @@ function Invoke-GwSetup {
     5. Renders compose.yaml from the template. An existing, different compose.yaml is never
        replaced unless -Force is given (a backup is kept), so a re-run cannot silently switch
        paper to live or recreate a running gateway.
-    6. 'docker compose up -d' (skipped with -NoStart). When the credentials were written in
-       this run the container is replaced ('--force-recreate'): compose does not recreate a
-       container when only the content of a secret file changed, so the gateway would keep
-       running with the old credentials and the new ones would never be tried.
+    6. The image, then 'docker compose up -d' (both skipped with -NoStart). RocketEdge no longer
+       distributes a public image (ADR 0018): when the image is not on this computer and it is one the repository's
+       build script makes (brokersre-ib-gateway:stable or :latest), setup builds it with
+       scripts\build-image.ps1 (Invoke-GwImageBuild) and starts nothing when the build fails;
+       another local name that is missing stops setup with the command to build it; a name
+       with a registry path is left to compose, which pulls it (pull_policy missing). Then
+       'docker compose up -d'. When the credentials were written in this run the container is
+       replaced ('--force-recreate'): compose does not recreate a container when only the
+       content of a secret file changed, so the gateway would keep running with the old
+       credentials and the new ones would never be tried.
     7. Follows the login through the phase file and tells the operator when to approve 2FA.
        The window for "login rejected" events starts when the container's current run
        started, so a rejection that happened before this run (the restart policy or a start
@@ -365,7 +438,9 @@ function Invoke-GwSetup {
     .PARAMETER Path
     Gateway folder.
     .PARAMETER ImageRef
-    Image reference; a tag by default, a digest is recommended.
+    Image reference; by default brokersre-ib-gateway:stable, the tag the repository's build
+    script makes (setup builds it when it is missing). In production a digest in the
+    operator's own private registry is recommended.
     .PARAMETER Live
     Live trading mode (API on 127.0.0.1:4001). Without it: paper (127.0.0.1:4002).
     .PARAMETER AllowApiOrders
@@ -398,7 +473,7 @@ function Invoke-GwSetup {
     [OutputType([pscustomobject])]
     param(
         [string]$Path = 'C:\BrokerSRE\gateway',
-        [string]$ImageRef = 'ghcr.io/rocketedge/brokersre-ib-gateway:stable',
+        [string]$ImageRef = 'brokersre-ib-gateway:stable',
         [switch]$Live,
         [switch]$AllowApiOrders,
         [string]$TimeZone = 'America/New_York',
@@ -481,7 +556,9 @@ function Invoke-GwSetup {
     }
 
     Write-GwConsole -Message ''
-    Write-GwConsole -Message 'Step 6 of 8: starting the gateway (the first start downloads the image, about 1 GB)'
+    Write-GwConsole -Message 'Step 6 of 8: the gateway image, then the start'
+    $imageOutcome = Initialize-GwGatewayImage -Runtime $detected -ImageRef $ImageRef
+    if ($imageOutcome -ne '') { return (& $done 1 $imageOutcome) }
     # Fallback start of the window for "login rejected" events, taken before the start: the
     # engine's clock (docker filters its logs by the VM clock, which can lag the Windows clock
     # after a resume from sleep), then the Windows clock.

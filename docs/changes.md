@@ -5,6 +5,134 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #41: no credentials in the WSL copy or the build context
+
+- **What changed:** the Windows kit's WSL build packs a named list of what
+  `scripts/build-image.sh` reads (Dockerfile, `.dockerignore`, `versions.json`, `rootfs/`, the
+  build, resolve and fetch scripts, `scripts/build-helper/`, `tests/container/run.sh`) instead
+  of the whole checkout, removes the archive right after unpacking and gives each copy step an
+  explicit 120 s deadline. `.dockerignore` also excludes `**/secrets`, `**/.env` and
+  `**/*.env` after its re-includes. The leftover advice quotes the host path for its shell
+  (bash `'\''`; PowerShell doubles `'` and the typographic quotes it treats as `'`). The README
+  says the paper-qualified digests came from the former public package (not "before the image
+  became private") and lists the kit's WSL installer cache. Merged `origin/main` after #40.
+- **Result:** red first, then green: four Pester tests of the copy failed on the old code (it
+  packed `.` and kept the archive; 11 of 11 in the context pass under PowerShell 7 and 5.1); a
+  copy holding only the list (348,160 bytes, 32 files; planted credentials, `.env` files,
+  `.venv` and `downloads/` absent from the archive) built with `scripts/build-image.sh` (exit 0,
+  IBC smoke test passed); `build-context.bats` exported what BuildKit received: a top-level
+  `compose/secrets` and `.env` never left the checkout (held before), but `rootfs/secrets/`,
+  `rootfs/.env` and `rootfs/etc/*.env` did until the new rules; the two quoting tests failed
+  on the old advice (the printed `rm` did not parse) and pass, and the PowerShell command
+  removed the file in a folder named with all five quote characters (PowerShell 7).
+- **What did NOT work / root cause:** the first WSL copy excluded what it knew to be large
+  (`.git`, `downloads/`, the bats checkout) instead of naming what the build needs, so every
+  untracked file of a used checkout went along, credentials included, and a killed setup left
+  them in the distribution's `/tmp`. Excluding is open-ended; naming the inputs is closed. A
+  `docker run -v <missing file>:...` for gitleaks created an empty directory `.gitleaks.toml`
+  in the worktree, which then failed the gitleaks pre-commit hook ("Config File .gitleaks Not
+  Found"); removed. The merge was pushed before the local PSScriptAnalyzer run had finished;
+  CI's analyzer failed on a line of the new WSL test longer than 200 characters
+  (PSAvoidLongLines), fixed in the next commit: wait for the analyzer before a push.
+- **Next step:** CI on the merge; a real WSL distribution for the kit's copy-and-build path
+  (still mocked).
+
+### 2026-11-17 — Review of #41: image modes, the kit's WSL build, wording that stays true
+
+- **What changed:** the Dockerfile sets owner (root) and mode of everything `rootfs/` brings in
+  and of the directories COPY passes through (directories and scripts 0755, other files 0644);
+  the container suite checks them. The Windows kit builds with Docker Engine in WSL from a copy
+  of the tree in the distribution's own file system, never from `/mnt/c`. The helper's refusal
+  of a leftover in `downloads/` names the caller's removal command, the host path and the
+  caller's option (`--installer` or `-Installer`), told by the wrappers. The docs say that
+  RocketEdge no longer distributes a public image and that the former package is being
+  withdrawn (true before and after the deletion; a follow-up switches to the past tense),
+  define `qualified_by_project: yes` as "the version and installer equal the pin, which passed
+  the project's offline CI" (a paper login is separate; the Going-live checklist now asks for
+  one), give the migration steps for users of the former public default (compose and the
+  kit), Compose 2.22.0 for `pull --policy` with `docker pull` as the alternative, the arm64
+  installer size, the current cache line, `MSYS_NO_PATHCONV=1` for the syft command, and a CI
+  example with job-level `packages: write` and `persist-credentials: false`.
+- **Result:** red first, then green: the rootfs check failed on the image built from Windows
+  (templates 0755) and passed after the change on a helper build and on a build from a 0777
+  context (both full container suites, 88 checks); five Pester tests of the WSL path failed on
+  the old code and pass (650 under PowerShell 7 and 5.1); three bats tests and one Pester test
+  of the advice failed on the old message and pass (bats 61, Pester 31 under both editions).
+- **What did NOT work / root cause:** a build context with mode 0777 (what drvfs shows for a
+  WSL checkout under `/mnt/c`) did not only make the templates writable: COPY into `/` gave
+  `/etc`, `/usr`, `/usr/local` and `/usr/local/lib` mode 0777 and the host's uid, because COPY
+  updates the metadata of existing directories on its path. The first wording of phase 2 said
+  the image "is private" and "RocketEdge publishes no image", which is not true while the
+  public package can still be pulled; and it called `qualified_by_project: yes` a build "the
+  project has logged in with", which a stable pin that merged itself after CI is not.
+- **Next step:** merge after CI; delete the public package (Phase 4); then the past-tense
+  follow-up with the proof; a real WSL distribution for the kit's build path.
+
+### 2026-11-17 — The build recipe and local defaults (ADR 0018, phase 2)
+
+- **What changed:** the README starts with "Build the image", a recipe for every host (what
+  you need, measured time and disk, one command per shell and what it prints, the seven
+  result lines and `qualified_by_project: no`, the latest channel, arm64, proxies, the
+  installer cache and `--installer`, pinning, private registries, a GitHub Actions example,
+  upgrade and rollback, troubleshooting); the quick start starts with the build, and the
+  verifying, notification and upgrade-check sections describe a self-built image. The
+  reference compose, the multi-gateway file and the client example default to
+  `brokersre-ib-gateway:stable` with a literal `pull_policy: never`; the Azure VM overlay pulls
+  the digest its userData names (`pull_policy: missing`). The Windows kit's `setup.ps1`
+  defaults to the same tag and builds a missing `stable` or `latest` image with
+  `scripts/build-image.ps1` (Docker Engine in WSL: `bash scripts/build-image.sh`) before it
+  starts anything. `docs/evidence.md`, `docs/upgrade-check.md`, `docs/upgrade-policy.md`,
+  `SECURITY.md`, `NOTICE.md`, the gnzsnz table, `azure/README.md` and the `gatewayImage`
+  descriptions no longer send a reader to a public image. L37, L38. After #39 was merged
+  with the review's cache layout (`installers/<version>/<arch>/<sha256>/`, `source`), the
+  README shows where the installer cache lives per host and script, how to list it and how to
+  delete entries safely (nothing prunes it), and `resolve-installer.sh`'s refusal of other
+  bytes at the installer's place in `downloads/` names the likely leftover of an interrupted
+  or parallel build and its removal in bash and PowerShell (test first).
+- **Result:** every documented command ran on Windows 11 with Docker Desktop 29.9.3 (Git Bash,
+  PowerShell 7.6, Windows PowerShell 5.1), from a clone of the pushed branch where it says so
+  in the pull request. A first build with nothing cached (a new buildx builder, an empty
+  installer cache) took 9 min 1 s, about 3 min of it downloading IBKR's 360,312,436-byte
+  installer; a rebuild with both caches warm 1 min 14 s; the image is 1,622,526,158 bytes,
+  the build cache 3.55 GB, an installer 344 MiB. IBKR's `stable` served 10.50.1h against the
+  pin 10.50.1g (`qualified_by_project: no`), `latest` served the pinned 10.52.1d (`yes`).
+  arm64 under emulation built and passed the IBC test in 8 min 53 s. A local Squid proxy
+  showed that the Docker CLI's `config.json` proxies reach the helper's download and the
+  build's `RUN` steps, and that `HTTPS_PROXY` in the shell reaches neither. Tests: the compose
+  suite 76 checks (8 new: defaults, `--no-interpolate`, a missing image fails without a
+  pull), the Azure pack's bicep, lint, compose and secrets groups 120 (2 new), Pester 646
+  under both editions (33 new cases), PSScriptAnalyzer 0 findings, sidecar `test_docs.py`
+  238, markdownlint clean, actionlint 1.7.12 on the CI example, a local registry (`registry:2`)
+  for the push, `pull --policy missing` and `up --pull missing`.
+- **What did NOT work / root cause:** `pull_policy: ${IBGW_PULL_POLICY:-never}` (a variable,
+  so RocketEdge's digest deployments could pull) fails `docker compose config
+  --no-interpolate`, which `sidecar/tests/test_docs.py` runs on every shipped file: compose
+  validates the key's pattern before interpolation. The policy is a literal, and a pull is an
+  explicit `pull --policy missing` / `up --pull missing`, which override it (compose 5.7.0).
+  The Windows template's first form, a `__PULL_POLICY__` placeholder, failed the same test
+  for the same reason; the template keeps the literal line and the renderer replaces it.
+  Before the change `up` with a missing local name tried to pull it (`Pulling`, then a Docker
+  Hub error), which the new compose test caught red. In Windows PowerShell 5.1,
+  `--format '{{index .Config.Labels "x"}}'` reaches docker without its inner quotes
+  (`function "com" not defined`); the PowerShell commands read the labels as JSON. The first
+  registry recipe read the digest to pin as `{{index .RepoDigests 0}}`, which printed the
+  local name's digest on Docker Desktop (its containerd image store lists one repo digest per
+  repository name); it is taken from the push output now. Removing a digest reference of the
+  local repository in the test (`docker rmi brokersre-ib-gateway@sha256:...`) took the
+  `stable` tag with it on that store; the test removes only registry names now. The cache
+  written before the review's layout change (files directly in `installers/<v>/<arch>/`) is
+  not read by the merged helper: the first build after the merge downloaded again, and the
+  README says to delete such files. Found
+  while documenting, not fixed here (scope of #39): the PowerShell wrapper reports "the Docker
+  host's architecture '' is not supported; pass -Platform" when Docker is not running; neither
+  wrapper forwards `HTTPS_PROXY`; a helper build carries the Ubuntu base image's
+  `org.opencontainers.image.created` and no revision label; messages name the helper's
+  `/cache` path. The optional Azure VM cannot log in to a private registry (L37), and a
+  TLS-inspecting proxy cannot be given a CA certificate (L38).
+- **Next step:** phase 3 (private publishing, hourly detection, CI without anonymous pulls,
+  workflows re-enabled), phase 4 (delete the public package); L37 before anyone deploys the VM
+  with a private image; a paper login with a self-built 10.50.1h image (L35).
+
 ### 2026-11-17 — Workflows ready for a private gateway package (ADR 0018, phase 3)
 
 - **What changed:** CI's `build-test` and the sidecar's end-to-end job test the image they

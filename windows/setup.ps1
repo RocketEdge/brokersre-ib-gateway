@@ -4,9 +4,10 @@ Guided install of IB Gateway (brokersre-ib-gateway) on this Windows computer.
 .DESCRIPTION
 Checks the computer, creates the gateway folder, asks for the IBKR username and password with a
 hidden prompt, writes them as two secret files (UTF-8, no byte-order mark, no newline), restricts
-that folder to your Windows account, writes compose.yaml (API on 127.0.0.1 only), starts the
-gateway and tells you in plain words what it is doing, including when to approve the 2FA prompt
-on your phone. Safe to run again: existing secrets are kept unless you pass -ResetSecrets, and a
+that folder to your Windows account, writes compose.yaml (API on 127.0.0.1 only), builds the
+gateway image from this repository when it is not on this computer, starts the gateway and
+tells you in plain words what it is doing, including when to approve the 2FA prompt on your
+phone. Safe to run again: existing secrets are kept unless you pass -ResetSecrets, and a
 differing compose.yaml is never replaced unless you pass -Force. With -WhatIf nothing is created,
 changed, asked or started.
 
@@ -17,7 +18,10 @@ scripts for this window only:  Set-ExecutionPolicy -Scope Process -ExecutionPoli
 .PARAMETER Path
 Gateway folder. Default C:\BrokerSRE\gateway.
 .PARAMETER ImageRef
-Image to run. Default is the 'stable' tag; in production pin a digest (name@sha256:...).
+Image to run. Default brokersre-ib-gateway:stable, which setup builds from this repository
+(..\scripts\build-image.ps1) when it is not on this computer; RocketEdge no longer distributes
+a public image. In
+production name a digest in your own private registry (<registry>/...@sha256:...).
 .PARAMETER Live
 Live trading (API on 127.0.0.1:4001). Without it: paper trading (127.0.0.1:4002).
 .PARAMETER AllowApiOrders
@@ -55,7 +59,7 @@ Shows what would happen without changing anything.
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$Path = 'C:\BrokerSRE\gateway',
-    [string]$ImageRef = 'ghcr.io/rocketedge/brokersre-ib-gateway:stable',
+    [string]$ImageRef = 'brokersre-ib-gateway:stable',
     [switch]$Live,
     [switch]$AllowApiOrders,
     [string]$TimeZone = 'America/New_York',

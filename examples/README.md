@@ -75,7 +75,10 @@ environment variables (`IBGW_HOST`, `IBGW_PORT`, `IBGW_WAIT_TIMEOUT`).
 
 ## Run: gateway and strategy in one compose file
 
-Uses the two secret files of the repository's Quick start (`compose/secrets/`):
+Uses the two secret files of the repository's Quick start (`compose/secrets/`) and the image
+you built ([README, "Build the image"](../README.md#build-the-image)): both services run
+`IBGW_IMAGE`, by default `brokersre-ib-gateway:stable`, and neither is ever pulled
+(`pull_policy: never`); the strategy runs `STRATEGY_IMAGE` when you set it.
 
 ```bash
 docker compose -f examples/compose-with-client.yml up -d
@@ -83,7 +86,8 @@ docker compose -f examples/compose-with-client.yml logs -f strategy
 ```
 
 You should see `wait-for-gateway: ready: ib-gateway:4004 answered the API handshake` and then
-the placeholder's line. Replace the `strategy` service with your own image and command. If
+the placeholder's line. Replace the `strategy` service with your own image and command (and
+its `pull_policy` with what your image needs: `missing` for one in a registry). If
 `up` stops with "dependency failed to start", the gateway was not healthy in time (usually a
 second factor waiting for approval): approve it and run `up -d` again.
 

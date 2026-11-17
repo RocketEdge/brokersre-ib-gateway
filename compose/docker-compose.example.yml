@@ -1,11 +1,19 @@
-# Reference compose for brokersre-ib-gateway. Pin the image by DIGEST in production (the
-# publish workflow prints it): IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...
-# The tag below is for local evaluation only.
+# Reference compose for brokersre-ib-gateway. RocketEdge no longer distributes a public image:
+# build it with scripts/build-image.sh (README, "Build the image"), which tags it
+# brokersre-ib-gateway:stable.
+# In production name an image that cannot move: the version tag the build printed
+# (IBGW_IMAGE=brokersre-ib-gateway:<version>) or a digest in your own private registry
+# (IBGW_IMAGE=<registry>/brokersre-ib-gateway@sha256:...).
 # Secrets come from files (Docker secrets); never put TWS_USERID/TWS_PASSWORD in this file.
 # This file is started as shipped by tests/container/run.sh, so every setting here is tested.
 services:
   ib-gateway:
-    image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+    image: ${IBGW_IMAGE:-brokersre-ib-gateway:stable}
+    # Never fetch an image: a name this host does not have fails at once ("No such image")
+    # instead of being looked up in a registry. To run an image from your own registry, pull
+    # it on purpose: `docker pull <image>`, or (Compose 2.22.0 and later)
+    # `docker compose ... pull --policy missing` or `up -d --pull missing`.
+    pull_policy: never
     restart: unless-stopped
     read_only: true
     tmpfs:

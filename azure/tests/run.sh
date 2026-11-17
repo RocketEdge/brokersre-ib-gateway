@@ -1184,6 +1184,16 @@ group_compose() {
     '-n "${compose_vector}" && "${vm_vector}" == "${compose_vector}"'
   expect "the override leaves the gateway service exactly as the reference file defines it" \
     '"$(printf "%s" "${base}" | jq_cli -cS ".services[\"ib-gateway\"]")" == "$(printf "%s" "${both}" | jq_cli -cS ".services[\"ib-gateway\"]")" && "${base}" == *"ib-gateway"*'
+  # The reference compose never pulls the gateway image (a tag built on the host, ADR 0018).
+  # The VM overlay that apply-config.sh renders names a digest and pull_policy missing; merged
+  # over the reference compose it must win, or a VM never fetches its image.
+  local vm_digest vm
+  vm_digest="registry.example/team/brokersre-ib-gateway@sha256:$(printf '0%.0s' $(seq 1 64))"
+  printf '%s\n' 'services:' '  ib-gateway:' "    image: \"${vm_digest}\"" '    pull_policy: missing' >"${project}/docker-compose.vm.yml"
+  vm="$(compose_json -f docker-compose.example.yml -f docker-compose.azure.yml -f docker-compose.vm.yml --profile azure)"
+  # shellcheck disable=SC2016  # evaluated by expect
+  expect "the reference compose never pulls the gateway image; the VM overlay's digest and pull_policy missing win" \
+    '"$(printf "%s" "${base}" | jq_cli -r ".services[\"ib-gateway\"].pull_policy")" == "never" && "$(printf "%s" "${vm}" | jq_cli -r ".services[\"ib-gateway\"] | .pull_policy + \" \" + .image")" == "missing ${vm_digest}"'
   for service in vector vector-cert; do
     if [[ "${service}" == vector ]]; then out="${both}"; else out="${cert}"; fi
     # shellcheck disable=SC2034  # read by expect through eval

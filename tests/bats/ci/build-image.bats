@@ -844,9 +844,76 @@ cached_meta() {
   build --no-smoke
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
+  # The likely cause and the safe way out are named: a leftover of an interrupted or parallel
+  # build, removed only when no other build runs, with the command of the caller's shell and
+  # the file's path on the host (the helper sees only its own mount, /downloads).
+  [[ "$stderr" == *"leftover of an interrupted build or of a build running in parallel"* ]]
+  [[ "$stderr" == *"no other build is running"* ]]
+  [[ "$stderr" == *"rm '${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh'"* ]]
+  [[ "$stderr" == *"build from it with --installer"* ]]
+  [[ "$stderr" != *"Remove-Item"* ]]
   cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
   [ ! -e "${WORK}/stub/buildx-args" ]
   no_runs_left
+}
+
+@test "for the PowerShell wrapper the refusal names Remove-Item, the Windows path and -Installer" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  local windows_downloads='C:\src\brokersre-ib-gateway\downloads'
+  run --separate-stderr env BROKERSRE_HOST_SHELL=powershell BROKERSRE_HOST_DOWNLOADS="${windows_downloads}" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"Remove-Item -LiteralPath '${windows_downloads}\ibgateway-10.50.1g-standalone-linux-x64.sh'"* ]]
+  [[ "$stderr" == *"build from it with -Installer"* ]]
+  [[ "$stderr" != *"--installer"* ]]
+  [[ "$stderr" != *"rm '"* ]]
+}
+
+@test "the bash advice quotes a path with a single quote safely: the command removes exactly that file" {
+  local downloads="${WORK}/it's a \"repo\" \$HOME/downloads"
+  mkdir -p "${downloads}"
+  printf 'an archived copy of something else\n' >"${downloads}/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  run --separate-stderr env BROKERSRE_HOST_SHELL=bash BROKERSRE_HOST_DOWNLOADS="${downloads}" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${downloads}"
+  [ "$status" -eq 1 ]
+  local command
+  command="$(printf '%s\n' "$stderr" | sed -n 's/^    \(rm .*\)$/\1/p')"
+  [ -n "${command}" ]
+  bash -c "${command}"
+  [ ! -e "${downloads}/ibgateway-10.50.1g-standalone-linux-x64.sh" ]
+  [ -d "${downloads}" ]
+}
+
+@test "the PowerShell advice doubles every single quote in the path, typographic ones too" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  # PowerShell ends a single-quoted string at ' and at the typographic quotes U+2018/U+2019.
+  run --separate-stderr env BROKERSRE_HOST_SHELL=powershell \
+    BROKERSRE_HOST_DOWNLOADS="C:\\Users\\o'brien\\Ann$(printf '\342\200\231')s repo\\downloads" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  local expected
+  expected="Remove-Item -LiteralPath 'C:\\Users\\o''brien\\Ann$(printf '\342\200\231\342\200\231')s repo\\downloads\\ibgateway-10.50.1g-standalone-linux-x64.sh'"
+  [[ "$stderr" == *"${expected}"* ]]
+}
+
+@test "without a hint from a wrapper the refusal names the file relative to the repository" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  run --separate-stderr bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 \
+    --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
+  [[ "$stderr" == *"remove downloads/ibgateway-10.50.1g-standalone-linux-x64.sh of the repository"* ]]
 }
 
 @test "a docker failure outside the contract's codes (125: daemon or mount error) exits 1" {

@@ -8,8 +8,15 @@ name: __PROJECT_NAME__
 
 services:
   ib-gateway:
-    # Pin the image by digest in production (image@sha256:...); a tag can move.
+    # The image setup.ps1 built with scripts\build-image.ps1 (brokersre-ib-gateway:stable), or the
+    # one you named with -ImageRef. In production name one that cannot move: the version tag the
+    # build printed, or a digest in your own private registry (image@sha256:...).
     image: __IMAGE_REF__
+    # never: a name without a registry path is an image built on this computer and is never
+    # looked up anywhere. For an image you named in a registry setup writes missing here, so
+    # compose pulls it when it is absent. (A literal value, not a placeholder: compose
+    # validates this key even where nothing is interpolated.)
+    pull_policy: never
     container_name: __CONTAINER_NAME__
     # unless-stopped: comes back after a Docker or Windows restart, stays down after an explicit
     # stop. Nothing restarts a running gateway: a restart forces a new login with 2FA.

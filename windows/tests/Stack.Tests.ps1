@@ -31,7 +31,7 @@ Describe 'Get-GwComposeSetting' {
 
 Describe 'ConvertTo-GwComposeText' {
     BeforeAll {
-        $script:rendered = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'ghcr.io/rocketedge/brokersre-ib-gateway:stable' `
+        $script:rendered = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'brokersre-ib-gateway:stable' `
             -TradingMode 'paper' -TimeZone 'America/New_York' -AutoRestartTime '11:45 PM'
     }
 
@@ -88,9 +88,26 @@ Describe 'ConvertTo-GwComposeText' {
     }
 
     It 'accepts an image pinned by digest' {
-        $digest = 'ghcr.io/rocketedge/brokersre-ib-gateway@sha256:' + ('ab' * 32)
+        $digest = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('ab' * 32)
         $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $digest -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
         $text | Should -Match ([regex]::Escape($digest))
+    }
+
+    It 'never pulls an image name without a repository path (<ref>): only the build makes it' -ForEach @(
+        @{ ref = 'brokersre-ib-gateway:stable' }
+        @{ ref = 'brokersre-ib-gateway:10.50.1h' }
+        @{ ref = 'brokersre-ib-gateway@sha256:' + ('ab' * 32) }
+    ) {
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $ref -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
+        $text | Should -Match '(?m)^    pull_policy: never$'
+    }
+
+    It 'lets compose pull an image the operator named in a registry (<ref>)' -ForEach @(
+        @{ ref = 'registry.example/team/brokersre-ib-gateway@sha256:' + ('ab' * 32) }
+        @{ ref = 'myregistry.azurecr.io/brokersre-ib-gateway:10.50.1h' }
+    ) {
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef $ref -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM'
+        $text | Should -Match '(?m)^    pull_policy: missing$'
     }
 
     It 'rejects an image reference that could inject YAML: <value>' -ForEach @(
@@ -108,6 +125,12 @@ Describe 'ConvertTo-GwComposeText' {
     It 'rejects a time zone or restart time that is not in the expected form' {
         { ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'New York' -AutoRestartTime '11:45 PM' } | Should -Throw
         { ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '23:45' } | Should -Throw
+    }
+
+    It 'fails loudly when the template does not carry the pull_policy line exactly once' {
+        $without = $script:templateText.Replace('    pull_policy: never', '')
+        { ConvertTo-GwComposeText -TemplateText $without -ImageRef 'a/b:c' -TradingMode 'paper' -TimeZone 'Etc/UTC' -AutoRestartTime '11:45 PM' } |
+            Should -Throw -ExpectedMessage '*pull_policy*'
     }
 
     It 'fails loudly when the template still contains an unknown placeholder' {
@@ -131,7 +154,7 @@ Describe 'Rendered compose file against the real docker compose (read-only)' {
         New-Item -ItemType Directory -Path (Join-Path $directory 'secrets') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $directory 'secrets\ib-username'), 'fake-user')
         [System.IO.File]::WriteAllText((Join-Path $directory 'secrets\ib-password'), 'fake-pass')
-        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'ghcr.io/rocketedge/brokersre-ib-gateway:stable' `
+        $text = ConvertTo-GwComposeText -TemplateText $script:templateText -ImageRef 'brokersre-ib-gateway:stable' `
             -TradingMode 'paper' -TimeZone 'America/New_York' -AutoRestartTime '11:45 PM'
         $file = Join-Path $directory 'compose.yaml'
         [System.IO.File]::WriteAllText($file, $text, (New-Object System.Text.UTF8Encoding($false)))
@@ -150,7 +173,184 @@ Describe 'Rendered compose file against the real docker compose (read-only)' {
         $service.restart | Should -Be 'unless-stopped'
         $service.ulimits.nofile.soft | Should -Be 65536
         $service.logging.options.'max-size' | Should -Be '10m'
+        $service.image | Should -Be 'brokersre-ib-gateway:stable'
+        $service.pull_policy | Should -Be 'never'
         $config.name | Should -Be 'brokersre-gateway-paper'
+    }
+}
+
+Describe 'The gateway image on this computer' {
+    BeforeAll {
+        $script:repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+
+    It 'knows which channel scripts/build-image.ps1 builds for <ref>: "<channel>"' -ForEach @(
+        @{ ref = 'brokersre-ib-gateway:stable'; channel = 'stable' }
+        @{ ref = 'brokersre-ib-gateway:latest'; channel = 'latest' }
+        @{ ref = 'brokersre-ib-gateway:10.50.1h'; channel = '' }
+        @{ ref = 'brokersre-ib-gateway@sha256:' + ('ab' * 32); channel = '' }
+        @{ ref = 'myregistry.azurecr.io/brokersre-ib-gateway:stable'; channel = '' }
+        @{ ref = 'other/brokersre-ib-gateway:stable'; channel = '' }
+    ) {
+        Get-GwImageBuildChannel -ImageRef $ref | Should -Be $channel
+    }
+
+    It 'looks for the image with a read-only docker image inspect' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -Output @('sha256:' + ('ab' * 32)) }
+        Test-GwImagePresent -Runtime $script:desktop -ImageRef 'brokersre-ib-gateway:stable' | Should -BeTrue
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwDocker -Times 1 -Exactly -ParameterFilter {
+            ($ArgumentList -join ' ') -eq 'image inspect --format {{.Id}} brokersre-ib-gateway:stable'
+        }
+    }
+
+    It 'reports an image that is not on this computer as missing' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwDocker { Get-TestNativeResult -ExitCode 1 -Output @('Error: No such image: brokersre-ib-gateway:stable') }
+        Test-GwImagePresent -Runtime $script:desktop -ImageRef 'brokersre-ib-gateway:stable' | Should -BeFalse
+    }
+
+    It 'builds with scripts\build-image.ps1 of this repository for Docker Desktop, on the console' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { Get-TestNativeResult }
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl { throw 'wsl must not be called' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -Confirm:$false
+        $result.Ran | Should -BeTrue
+        $result.ExitCode | Should -Be 0
+        Should -Invoke -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile -Times 1 -Exactly -ParameterFilter {
+            $Path -eq (Join-Path (Join-Path $script:repositoryRoot 'scripts') 'build-image.ps1') -and ($ArgumentList -join ' ') -eq '-Channel stable' -and $Interactive
+        }
+    }
+
+    Context 'Docker Engine in WSL: the build runs from a copy in the distribution''s own file system' {
+        BeforeEach {
+            # A mocked wsl.exe: mktemp and wslpath answer like Linux, the build's exit code and a
+            # failing step are set per test; every call is recorded as '<args joined by |> I=<interactive>'.
+            $script:wslCalls = New-Object System.Collections.Generic.List[string]
+            $script:wslDeadlines = New-Object System.Collections.Generic.List[string]
+            $script:wslBuildExit = 0
+            $script:wslFailStep = ''
+            Mock -ModuleName BrokerSre.Gateway Invoke-GwWsl {
+                $joined = $ArgumentList -join '|'
+                $interactiveCall = [bool](Get-Variable -Name Interactive -ValueOnly -ErrorAction SilentlyContinue)
+                $script:wslCalls.Add(('{0} I={1}' -f $joined, $interactiveCall))
+                $script:wslDeadlines.Add(('{0} T={1}' -f $joined, (Get-Variable -Name TimeoutSeconds -ValueOnly -ErrorAction SilentlyContinue)))
+                if ($script:wslFailStep -ne '' -and $joined -like $script:wslFailStep) { return (Get-TestNativeResult -ExitCode 2 -Output @('tar: failed')) }
+                if ($joined -eq '-d|Ubuntu-24.04|--exec|mktemp|-d') { return (Get-TestNativeResult -Output @('/tmp/tmp.k1T')) }
+                if ($joined -like '-d|Ubuntu-24.04|--exec|wslpath|-a|*') { return (Get-TestNativeResult -Output @('/mnt/c/src/brokersre-ib-gateway')) }
+                if ($joined -like '*|bash|scripts/build-image.sh|*') { return (Get-TestNativeResult -ExitCode $script:wslBuildExit) }
+                return (Get-TestNativeResult)
+            }
+            Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'PowerShell must not be called' }
+        }
+
+        It 'copies what the image build reads into a temporary directory of the distribution, builds there and removes the copy' {
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'latest' -Confirm:$false
+            $result.Ran | Should -BeTrue
+            $result.ExitCode | Should -Be 0
+            $inputs = @(
+                'Dockerfile', '.dockerignore', 'versions.json', 'rootfs', 'scripts/build-image.sh', 'scripts/resolve-installer.sh',
+                'scripts/fetch-installer.sh', 'scripts/build-helper', 'tests/container/run.sh'
+            ) -join '|'
+            @($script:wslCalls) | Should -Be @(
+                '-d|Ubuntu-24.04|--exec|mktemp|-d I=False'
+                ('-d|Ubuntu-24.04|--exec|wslpath|-a|{0} I=False' -f $script:repositoryRoot)
+                ('-d|Ubuntu-24.04|--exec|tar|-C|/mnt/c/src/brokersre-ib-gateway|-cf|/tmp/tmp.k1T/source.tar|{0} I=False' -f $inputs)
+                '-d|Ubuntu-24.04|--exec|mkdir|/tmp/tmp.k1T/source I=False'
+                '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False'
+                '-d|Ubuntu-24.04|--exec|rm|-f|/tmp/tmp.k1T/source.tar I=False'
+                '-d|Ubuntu-24.04|--cd|/tmp/tmp.k1T/source|--exec|bash|scripts/build-image.sh|--channel|latest I=True'
+                '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+            )
+        }
+
+        It 'packs only named build inputs: never compose/ (secrets, .env), downloads/, .git or a local tool folder' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $pack = @($script:wslCalls | Where-Object { $_ -like '*|tar|-C|/mnt/c/*' })
+            $pack.Count | Should -Be 1
+            $parts = @(($pack[0] -replace ' I=False\z', '').Split('|'))
+            $inputs = @($parts | Select-Object -Skip ([array]::IndexOf($parts, '-cf') + 2))
+            $inputs.Count | Should -BeGreaterThan 0
+            $inputs | Should -Not -Contain '.'
+            @($inputs | Where-Object { $_ -match '(\A|/)(compose|secrets|downloads|\.git|\.venv|node_modules|bin|obj)(/|\z)|\.env\z|\A\.|\*' -and $_ -ne '.dockerignore' }).Count | Should -Be 0
+        }
+
+        It 'every named input exists in this repository, so a clone builds' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $pack = @($script:wslCalls | Where-Object { $_ -like '*|tar|-C|/mnt/c/*' })
+            $parts = @(($pack[0] -replace ' I=False\z', '').Split('|'))
+            foreach ($name in @($parts | Select-Object -Skip ([array]::IndexOf($parts, '-cf') + 2))) {
+                Test-Path -LiteralPath (Join-Path $script:repositoryRoot $name) | Should -BeTrue -Because $name
+            }
+        }
+
+        It 'removes the archive right after unpacking it, before the build starts' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            $calls = @($script:wslCalls)
+            $unpacked = [array]::IndexOf($calls, '-d|Ubuntu-24.04|--exec|tar|-C|/tmp/tmp.k1T/source|-xf|/tmp/tmp.k1T/source.tar I=False')
+            $removed = [array]::IndexOf($calls, '-d|Ubuntu-24.04|--exec|rm|-f|/tmp/tmp.k1T/source.tar I=False')
+            $built = @(0..($calls.Count - 1) | Where-Object { $calls[$_] -like '*|bash|scripts/build-image.sh|*' })[0]
+            $unpacked | Should -BeGreaterThan -1
+            $removed | Should -Be ($unpacked + 1)
+            $built | Should -BeGreaterThan $removed
+        }
+
+        It 'gives each copy step a deadline of 120 s (the inputs are about 0.3 MB) and the build none' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            @($script:wslDeadlines | Where-Object { $_ -match '\|(tar|mkdir|rm)\|' -and $_ -notmatch ' T=120\z' }).Count | Should -Be 0
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -and $_ -notlike '* I=True' }).Count | Should -Be 0
+        }
+
+        It 'does not build and removes the copy when unpacking fails' {
+            $script:wslFailStep = '*|tar|-C|/tmp/tmp.k1T/source|-xf|*'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' }).Count | Should -Be 0
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
+        It 'never builds from the Windows folder, which WSL shows under /mnt/c with mode 0777' {
+            Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false | Out-Null
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -and $_ -notlike '*|--cd|/tmp/tmp.k1T/source|*' }).Count | Should -Be 0
+        }
+
+        It 'passes the build''s exit code through and still removes the copy' {
+            $script:wslBuildExit = 3
+            (Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false).ExitCode | Should -Be 3
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
+        It 'does not build and says why when the copy fails, and removes what it made' {
+            $script:wslFailStep = '*|tar|-C|/mnt/c/*'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            $result.Detail | Should -Match 'copy'
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' }).Count | Should -Be 0
+            $script:wslCalls[$script:wslCalls.Count - 1] | Should -Be '-d|Ubuntu-24.04|--exec|rm|-rf|/tmp/tmp.k1T I=False'
+        }
+
+        It 'does not build when the distribution gives no temporary directory' {
+            $script:wslFailStep = '*|mktemp|-d'
+            $result = Invoke-GwImageBuild -Runtime $script:engine -Channel 'stable' -Confirm:$false
+            $result.Ran | Should -BeFalse
+            @($script:wslCalls | Where-Object { $_ -like '*|bash|scripts/build-image.sh|*' -or $_ -like '*|rm|*' }).Count | Should -Be 0
+        }
+    }
+
+    It 'passes the exit code of the build through (<code>)' -ForEach @(@{ code = 1 }, @{ code = 3 }, @{ code = 4 }) {
+        $script:buildExitCode = $code
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { Get-TestNativeResult -ExitCode $script:buildExitCode }
+        (Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -Confirm:$false).ExitCode | Should -Be $code
+    }
+
+    It 'builds nothing under -WhatIf' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'nothing may be built under -WhatIf' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -WhatIf
+        $result.Ran | Should -BeFalse
+    }
+
+    It 'runs nothing and says why when the repository has no build script' {
+        Mock -ModuleName BrokerSre.Gateway Invoke-GwPowerShellFile { throw 'there is nothing to run' }
+        $result = Invoke-GwImageBuild -Runtime $script:desktop -Channel 'stable' -RepositoryRoot (Join-Path $TestDrive 'no-repository') -Confirm:$false
+        $result.Ran | Should -BeFalse
+        $result.Detail | Should -Match 'build-image\.ps1'
     }
 }
 

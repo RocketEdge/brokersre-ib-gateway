@@ -6,7 +6,7 @@
 # the reference compose). They run against a built image with the Docker CLI, need no IBKR
 # credentials and never contact IBKR: every container runs with IBC_LAUNCH=no.
 #
-# Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh
+# Usage: IMAGE=brokersre-ib-gateway:stable tests/compose/run.sh   (the image scripts/build-image.sh built)
 # Environment (optional):
 #   COMPOSE_TEST_PROJECT     compose project name prefix (default ibgw-compose-test); the
 #                            stacks are <prefix>-multi, <prefix>-client and <prefix>-console
@@ -126,7 +126,58 @@ project_leftovers() {
 }
 
 # The settings that make a gateway service hardened; they must be the same in every service.
-hardening='def hardening: {image, restart, read_only, tmpfs, security_opt, cap_drop, stop_grace_period, ulimits, pids_limit, mem_limit, logging, healthcheck};'
+# pull_policy belongs to them: a gateway that may fetch an image nobody built or named is not.
+hardening='def hardening: {image, pull_policy, restart, read_only, tmpfs, security_opt, cap_drop, stop_grace_period, ulimits, pids_limit, mem_limit, logging, healthcheck};'
+
+echo "== defaults: the image scripts/build-image.sh makes, and no image is ever pulled by surprise =="
+# The files as a reader starts them after the build: no IBGW_IMAGE and no STRATEGY_IMAGE, so
+# the default tag brokersre-ib-gateway:stable that scripts/build-image.sh gives the image.
+# pull_policy never: RocketEdge no longer distributes a public image (ADR 0018), so a name this
+# host does not have must fail at once instead of being looked up in a registry (Docker Hub,
+# for a bare name).
+# shipped_config FILE ARGS...: `docker compose config` of FILE with the shipped defaults; with
+# DEFAULTS_IMAGE set, IBGW_IMAGE is that and nothing else is set.
+shipped_config() {
+  local file="$1"
+  shift
+  env -u IBGW_IMAGE -u STRATEGY_IMAGE ${DEFAULTS_IMAGE:+"IBGW_IMAGE=${DEFAULTS_IMAGE}"} IBGW_SECRETS_DIR="${host_secrets}" \
+    docker compose -p "${PROJECT}-defaults" -f "${file}" "$@" config --format json 2>/dev/null
+}
+check "reference compose: the default image is the locally built brokersre-ib-gateway:stable, never pulled" \
+  "$(shipped_config "${reference_file}")" \
+  '.services["ib-gateway"] | .image == "brokersre-ib-gateway:stable" and .pull_policy == "never"'
+check "multi-gateway compose: both gateways default to the locally built tag, never pulled" \
+  "$(shipped_config "${multi_file}" --profile live --profile paper)" \
+  '[.services[] | .image == "brokersre-ib-gateway:stable" and .pull_policy == "never"] | length == 2 and all'
+check "client example: the gateway and the placeholder strategy default to the locally built tag, never pulled" \
+  "$(shipped_config "${client_file}")" \
+  '[.services[] | .image == "brokersre-ib-gateway:stable" and .pull_policy == "never"] | length == 2 and all'
+check "client example: without STRATEGY_IMAGE the placeholder strategy runs the gateway's IBGW_IMAGE" \
+  "$(DEFAULTS_IMAGE=brokersre-ib-gateway:10.50.1h shipped_config "${client_file}")" \
+  '.services.strategy.image == "brokersre-ib-gateway:10.50.1h" and .services["ib-gateway"].image == "brokersre-ib-gateway:10.50.1h"'
+# The files must also resolve without interpolation (sidecar/tests/test_docs.py reads them so):
+# an interpolated pull_policy such as ${IBGW_PULL_POLICY:-never} fails compose's schema there.
+for file in "${reference_file}" "${multi_file}" "${client_file}"; do
+  if IBGW_SECRETS_DIR="${host_secrets}" docker compose -p "${PROJECT}-defaults" -f "${file}" config --no-interpolate >/dev/null 2>&1; then
+    pass "$(basename "${file}") resolves with --no-interpolate"
+  else
+    fail "$(basename "${file}") --no-interpolate" "$(IBGW_SECRETS_DIR="${host_secrets}" docker compose -p "${PROJECT}-defaults" -f "${file}" config --no-interpolate 2>&1 | tail -2)"
+  fi
+done
+# A name this host does not have: `up` must fail, name the image and pull nothing.
+missing_project="${PROJECT}-missing"
+missing_tag="brokersre-ib-gateway:compose-test-missing-$$"
+missing_out="$(IBGW_IMAGE="${missing_tag}" IBGW_SECRETS_DIR="${host_secrets}" IBC_LAUNCH=no \
+  docker compose -p "${missing_project}" -f "${reference_file}" up -d 2>&1)"
+missing_rc=$?
+if [ "${missing_rc}" -ne 0 ] && [[ "${missing_out}" == *"No such image: ${missing_tag}"* ]] \
+  && [[ "${missing_out}" != *Pulling* ]] && [[ "${missing_out}" != *"pull access denied"* ]] \
+  && ! docker image inspect "${missing_tag}" >/dev/null 2>&1; then
+  pass "an image this host does not have: up fails with \"No such image\" and pulls nothing"
+else
+  fail "missing image" "exit ${missing_rc}: $(printf '%s' "${missing_out}" | tail -3)"
+fi
+IBGW_IMAGE="${missing_tag}" IBGW_SECRETS_DIR="${host_secrets}" docker compose -p "${missing_project}" -f "${reference_file}" down -v >/dev/null 2>&1 || true
 
 echo "== multi-gateway compose: rendering =="
 rendered_live="$(compose_multi --profile live config --format json 2>/dev/null)"
