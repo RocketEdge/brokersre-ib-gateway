@@ -52,3 +52,20 @@ it in a minute by doing what the README says.
 volumes, both containers created before either starts. An image never carries a directory at
 a path where another image's volume is mounted, and a reader of a shared volume mounts it with
 `nocopy`.
+
+## 2026-11-18 — A port the test picks can be taken; a readiness poll must survive errexit
+
+**Pattern:** two unit suites started socat on a random port from 40000-59999 and probed it for
+5 s. That range lies inside Linux's ephemeral range, and a client that closes first keeps its
+own port in TIME_WAIT for 60 s, so now and then the drawn port was an earlier client's: socat
+failed with "Address already in use" (reuseaddr does not help against a socket made without
+it), exited, and its error went to /dev/null. CI showed only "serve failed" after 5.4 s, twice.
+The first version of the fix then read socat's log with a bare `line="$(grep ...)"`: under
+bats' errexit the first poll that found nothing ended the test. It passed on an idle machine
+and failed 259 of 300 loop runs once socat started a little later (busy container, socat
+behind a logging wrapper). Only the loop showed it.
+
+**Rule:** a test listener takes port 0 and learns its port from the server (socat's
+`listening on` notice), and the helper prints the server's own log when it does not come up.
+Poll with `if x="$(...)"; then` in code that runs under errexit. Prove a flake fix with a loop
+under the failing condition (and under load) before and after, not with one green run.

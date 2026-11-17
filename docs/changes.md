@@ -5,6 +5,48 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — Unit-suite stand-in servers take their port from the kernel
+
+- **What changed:** `api-handshake.bats` and `vnc-client.bats` shared a byte-identical
+  `serve()`; it now lives once in `tests/bats/unit/socat-server.bash`. It starts socat on
+  `TCP-LISTEN:0,bind=127.0.0.1` and reads the port from socat's own `listening on` notice (a
+  connect made as soon as the line appeared was refused 0 times in 200) instead of drawing a
+  port from 40000-59999 and probing it for 5 s. When socat exits or does not listen within
+  5 s, `serve` prints socat's log. `stop_servers` ends a test's servers by its private `WORK`
+  path.
+  `socat-server.bats` pins three cases. Test-only: nothing under `rootfs/` changed, the image
+  is the same.
+- **Result:** root cause of the intermittent "a full session" failure (CI: `build-test` on
+  #43, attempt 1, test 504; `main` at `f999345`, test 505; both `serve` line 40 after 5.4 s,
+  2 of about 95 complete unit-suite runs since 2026-11-12). The drawn port lies inside Linux's
+  ephemeral range (32768-60999). A client that closes first keeps its own port in TIME_WAIT for
+  60 s, and that socket was made without SO_REUSEADDR, so socat's bind fails with "Address
+  already in use" despite `reuseaddr`; socat exits, its stderr went to `/dev/null`, and the
+  probe polled a dead port. Red first: with `PORT` set to a client port in TIME_WAIT the old
+  `serve` failed after 5382 ms and socat logged `E bind(6, {AF=2 0.0.0.0:35136}, 16): Address
+  already in use`; a socat that cannot listen was waited out for 5.3 s without a word. Loops of
+  `vnc-client.bats` inside the image, serial as in CI: under client churn (about 1,100 client
+  ports in TIME_WAIT, 490-690 of them in the draw range) 26 of 300 runs failed before (29
+  tests; each one a socat EADDRINUSE on a port that a client TIME_WAIT socket held, 29 of 29)
+  and 0 of 300 after; under CPU stress alone (2-CPU cap, 40 busy loops on 20 vCPUs, about 7 s
+  per run) no bind failure before (1 of 200 runs failed differently, see below) and 0 of 200
+  after; idle, 0 of 400 before and 0 of 400 after. In a sampled run of the whole suite, 12 client ports sat in
+  the draw range while `vnc-client.bats` ran (19-21 with 2 CPUs), about 0.06-0.1 % per
+  `serve` and 0.25-0.45 % per CI run for its nine `serve` calls, below the observed rate
+  (2 of about 95; 95 % interval 0.26-7.4 %). No leftover process that kills socat was found.
+- **What did NOT work / root cause:** the first version of the fix read the log with a bare
+  `line="$(grep ...)"`. Bats runs tests under errexit, so the first poll that found nothing
+  ended the test: green on an idle machine, 259 of 300 loop runs failed once socat started
+  later (busy container, socat behind a logging wrapper). A test with a socat that starts 1 s
+  late failed in 28 ms; the poll is now the `if` condition. The loop's first socat wrapper
+  captured socat's stderr, which the new `serve` reads, and made every run fail: a harness
+  artefact, replaced by `tee`. A plain loop (0 of 400) could not show the flake at all.
+- **Next step:** under the CPU stress, one pre-fix run of "a full session" failed because the
+  stand-in server's last record (`after ...`) was not written within the test's 5 s wait (the
+  server pipeline was still running at teardown); not seen in CI, not changed here.
+  `wait-for-gateway.bats` (47001) and `doctor.bats` (47631) still listen on fixed ports inside
+  the ephemeral range: the same failure class, not seen in CI; a follow-up if it ever is.
+
 ### 2026-11-17 — Package access proven: outsiders refused, workflows still publish
 
 - **What changed:** documentation only: an ADR 0018 note and the owner checklist record two
