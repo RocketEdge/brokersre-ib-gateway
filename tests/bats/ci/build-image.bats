@@ -678,3 +678,82 @@ cached_installer() {
   ! grep -q '^GET /elsewhere/ibgateway.sh$' "${WORK}/requests.log" || false
   [ ! -e "${WORK}/stub/buildx-args" ]
 }
+
+# --- Provenance: a cached installer is reused only from the origin it came from (review of #39).
+
+# use_stub_ibkr: make IBKR's real base URL answer from ${WWW} through a stand-in curl, so that a
+# test can run the helper without the override (requests are logged like the fake server's).
+use_stub_ibkr() {
+  unset BROKERSRE_TEST_IBKR_BASE_URL
+  cat >"${WORK}/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in curl: https://download2.interactivebrokers.com/installers/ibgateway/<path> is ${WWW}/<path>.
+out=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2" && shift 2 ;;
+    --proto | --proto-redir | --connect-timeout | --max-time | --retry | --retry-delay) shift 2 ;;
+    https://*) url="$1" && shift ;;
+    *) shift ;;
+  esac
+done
+path="${url#https://download2.interactivebrokers.com/installers/ibgateway/}"
+[ "${path}" != "${url}" ] || exit 6
+printf 'GET /%s\n' "${path}" >>"${WORK}/requests.log"
+[ -f "${WWW}/${path}" ] || exit 22
+if [ -n "${out}" ]; then cp "${WWW}/${path}" "${out}"; else cat "${WWW}/${path}"; fi
+STUB
+  sed -i "s|\${WWW}|${WWW}|g; s|\${WORK}|${WORK}|g" "${WORK}/bin/curl"
+  chmod +x "${WORK}/bin/curl"
+}
+
+# cached_meta VERSION: the meta file of the newest cached entry of VERSION (x64).
+cached_meta() {
+  find "${CACHE}/installers/$1" -name meta | head -n 1
+}
+
+@test "bytes given once with --installer are never reused by a build that IBKR answers" {
+  make_fake_installer "${WORK}/thirdparty.sh" "IB Gateway 10.50" "(.1h) 20261116 16:02:08" ibgateway-stable-standalone-linux-x64 not-from-ibkr
+  build --installer "${WORK}/thirdparty.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  rm -f "${WORK}/stub/buildx-args"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(installer_requests stable x64)" -eq 1 ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${NEWER_X64}" ]
+}
+
+@test "a download through the test override is cached as source override, never ibkr" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx 'source: override' "$(cached_meta 10.50.1h)"
+}
+
+@test "an installer cached from the test override is not reused when the helper talks to IBKR" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  use_stub_ibkr
+  rm -f "${WORK}/stub/buildx-args"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+  [[ "$stderr" != *"TEST OVERRIDE"* ]]
+  grep -qx 'source: ibkr' "$(cached_meta 10.50.1h)"
+}
+
+@test "offline, only an installer that came from the same origin stands in for IBKR's current build" {
+  make_fake_installer "${WORK}/thirdparty.sh" "IB Gateway 10.50" "(.1h) 20261116 16:02:08" ibgateway-stable-standalone-linux-x64 not-from-ibkr
+  build --installer "${WORK}/thirdparty.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --no-smoke
+  [ "$status" -eq 3 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
