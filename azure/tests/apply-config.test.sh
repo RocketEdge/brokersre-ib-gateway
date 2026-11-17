@@ -91,6 +91,10 @@ expect "the env file carries the settings, no secret" \
   '"$(sort "${IBGW_ROOT}/.env" | grep -v "^#" | tr "\n" " ")" == "AUTO_RESTART_TIME=11:45 PM DCR_IMMUTABLE_ID=dcr-00000000000000000000000000000000 DCR_LOGS_ENDPOINT=https://ibgw-dcr-abcd.eastus-1.ingest.monitor.azure.com HOST_LABEL=ibgw-vm IBGW_INSTANCE=paper-1 IBGW_REDACT_USERNAME_FILE= READ_ONLY_API=yes SHIP_RAW_LOGS=no TIME_ZONE=America/New_York TRADING_MODE=paper "'
 expect "the overlay pins both images by digest and points the secrets at tmpfs" \
   '"$(grep -c "${gateway_one}" "${overlay}")" == 1 && "$(grep -c "${vector_one}" "${overlay}")" == 1 && "$(grep -c "/run/ibgateway-secrets/ib-" "${overlay}")" == 2'
+# The reference compose never pulls the gateway image (pull_policy never: a locally built tag,
+# ADR 0018); the VM must pull the digest its userData names, from the operator's registry.
+expect "the overlay lets the VM pull the gateway image its userData names (pull_policy missing)" \
+  '"$(grep -c "^    pull_policy: missing$" "${overlay}")" == 1 && "$(grep -A 2 "^  ib-gateway:$" "${overlay}" | grep -c "pull_policy: missing")" == 1'
 expect "the Key Vault name is kept for fetch-secrets.sh" '"$(jq -r .keyVaultName "${IBGW_ROOT}/config.json")" == "kv-ibgw-test"'
 expect "the scripts of the checked-out commit are installed" '"$(cat "${INSTALL_LOG}")" == "install ${commit_one} files"'
 

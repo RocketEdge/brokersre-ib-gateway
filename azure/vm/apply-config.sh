@@ -126,12 +126,16 @@ jq --raw-output '
   "IBGW_REDACT_USERNAME_FILE=\(if .shipRawLogs then "/run/secrets/ib-username" else "" end)",
   "SHIP_RAW_LOGS=no"
 ' "${staging}/config.json" >"${staging}/.env"
+# pull_policy missing: the reference compose never pulls the gateway image (it names a tag
+# built on the host, ADR 0018); this VM pulls the digest its userData names, from the
+# operator's own registry.
 jq --raw-output '
   "# Rendered by apply-config.sh from the VM userData; merged over the reference compose and",
   "# the Azure override of the pinned checkout (ibgw-compose.sh).",
   "services:",
   "  ib-gateway:",
   "    image: \"\(.gatewayImage)\"",
+  "    pull_policy: missing",
   "  vector:",
   "    image: \"\(.vectorImage)\"",
   "secrets:",
