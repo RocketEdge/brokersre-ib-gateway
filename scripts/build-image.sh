@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Build the IB Gateway image from this repository, robust against IBKR replacing its installers.
+#
+# Usage:
+#   scripts/build-image.sh [--channel stable|latest] [--strict] [--installer FILE]
+#                          [--platform linux/amd64|linux/arm64] [--tag NAME] [--no-smoke]
+#                          [--cache-dir DIR] [--print-plan] [--help]
+#
+#   --channel     IBKR channel to build (default stable; with --installer, the installer's own)
+#   --strict      build only the version pinned in versions.json; exit 4 when IBKR serves another
+#   --installer   build from this installer file instead of IBKR's download (its version is read
+#                 from its build stamp; its SHA-256 is recorded)
+#   --platform    image platform (default: the Docker host's architecture)
+#   --tag         image name; may be given more than once; replaces the default tags
+#                 brokersre-ib-gateway:<channel> and brokersre-ib-gateway:<version>
+#   --no-smoke    skip the offline IBC smoke test after the build
+#   --cache-dir   installer cache (default ${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway)
+#   --print-plan  resolve and print what would be built (version, pinned or not, cache hit);
+#                 download nothing, build nothing
+#
+# What it does: (1) builds the small helper image scripts/build-helper (Docker CLI image pinned
+# by digest, plus bash, curl, jq); (2) runs scripts/resolve-installer.sh in it, which decides
+# the installer (pinned version and SHA-256, or IBKR's newer build checked against IBKR's own
+# build stamp, or --installer), downloads or takes it from the cache, and puts it in the build
+# context's downloads/; (3) runs `docker buildx build --load` with the resolved build arguments
+# (the Dockerfile checks the installed stamp again); (4) runs the IBC smoke test
+# (tests/container/run.sh --only ibc-smoke, offline); (5) records the installer in the cache
+# and prints the summary. A build IBKR moved past the pin is labelled
+# com.rocketedge.brokersre.qualified=no and a warning says how to qualify it.
+#
+# Output: progress and warnings on stderr; on success the last seven lines of stdout are
+#   version, channel, qualified_by_project, installer_sha256, ibkr_build_stamp, image, image_id
+#   as `key: value` (with --print-plan: the plan's `key: value` lines).
+# Exit codes: 0 built (and smoke-tested unless --no-smoke); 1 download, verification, build or
+#   smoke test failed; 2 usage; 3 IBKR unreachable and no usable cached installer; 4 --strict
+#   and IBKR serves (or the installer is) a version other than the pin.
+# Host requirements: bash (3.2 or later) and Docker with buildx. Nothing else: resolving,
+#   downloading and verifying run in the helper container.
+# Environment: BROKERSRE_TEST_IBKR_BASE_URL (tests only) replaces IBKR's download server; it is
+#   passed to the helper, which announces it. SMOKE_TIMEOUT is passed to the smoke test.
+# Side effects: Docker images (helper, gateway), the installer cache, a file in downloads/ for
+#   the duration of the build.
+#
+# Interface contract: docs/specs/2026-11-17-private-image-public-recipe.md; decision: ADR 0018.
+set -euo pipefail
+# Git Bash rewrites arguments that look like POSIX paths; container paths stay literal and
+# host paths are converted explicitly (host_path).
+export MSYS_NO_PATHCONV=1
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+helper_image="brokersre-ib-gateway-build-helper:local"
+default_repository="brokersre-ib-gateway"
+
+# usage: print the command-line interface.
+usage() {
+  cat <<'EOF'
+usage: scripts/build-image.sh [--channel stable|latest] [--strict] [--installer FILE]
+                              [--platform linux/amd64|linux/arm64] [--tag NAME] [--no-smoke]
+                              [--cache-dir DIR] [--print-plan] [--help]
+
+  --channel     IBKR channel (default stable; with --installer, the installer's own)
+  --strict      build only the version pinned in versions.json (exit 4 otherwise)
+  --installer   build from this installer file; its version comes from its build stamp
+  --platform    image platform (default: the Docker host's architecture)
+  --tag         image name, repeatable; replaces brokersre-ib-gateway:<channel> and :<version>
+  --no-smoke    skip the offline IBC smoke test
+  --cache-dir   installer cache (default ${XDG_CACHE_HOME:-$HOME/.cache}/brokersre-ib-gateway)
+  --print-plan  print what would be built (version, pinned or not, cache hit); no download, no build
+
+Exit codes: 0 built, 1 download/verification/build/smoke test failed, 2 usage,
+3 IBKR unreachable and no usable cached installer, 4 --strict and IBKR serves another version.
+EOF
+}
+
+# die_usage MESSAGE: a usage error (exit 2).
+die_usage() {
+  printf 'build-image: %s\n' "$1" >&2
+  usage >&2
+  exit 2
+}
+
+# say MESSAGE...: one progress line on stderr.
+say() { printf 'build-image: %s\n' "$*" >&2; }
+
+# host_path PATH: PATH as the Docker CLI on this host understands it (C:/... under Git Bash).
+host_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+channel=""
+strict=no
+installer=""
+platform=""
+tags=()
+smoke=yes
+cache_dir=""
+print_plan=no
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --channel | --installer | --platform | --tag | --cache-dir)
+      [ $# -ge 2 ] && [ -n "$2" ] || die_usage "$1 needs a value"
+      case "$1" in
+        --channel) channel="$2" ;;
+        --installer) installer="$2" ;;
+        --platform) platform="$2" ;;
+        --tag) tags+=("$2") ;;
+        --cache-dir) cache_dir="$2" ;;
+      esac
+      shift 2
+      ;;
+    --strict) strict=yes && shift ;;
+    --no-smoke) smoke=no && shift ;;
+    --print-plan) print_plan=yes && shift ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option '$1'" ;;
+  esac
+done
+case "${channel}" in "" | stable | latest) ;; *) die_usage "--channel must be stable or latest" ;; esac
+case "${platform}" in "" | linux/amd64 | linux/arm64) ;; *) die_usage "--platform must be linux/amd64 or linux/arm64" ;; esac
+if [ -n "${installer}" ]; then
+  [ -f "${installer}" ] && [ -r "${installer}" ] || die_usage "--installer: cannot read '${installer}'"
+  installer_dir="$(cd "$(dirname "${installer}")" && pwd)"
+  installer_name="$(basename "${installer}")"
+fi
+
+command -v docker >/dev/null 2>&1 || {
+  say "Docker is required (Docker Desktop, or Docker Engine 23 or later with buildx)"
+  exit 1
+}
+docker buildx version >/dev/null 2>&1 || {
+  say "docker buildx is required (Docker Desktop, or Docker Engine 23 or later with the buildx plugin)"
+  exit 1
+}
+if [ -z "${platform}" ]; then
+  host_arch="$(docker info --format '{{.Architecture}}')"
+  case "${host_arch}" in
+    x86_64 | amd64) platform=linux/amd64 ;;
+    aarch64 | arm64) platform=linux/arm64 ;;
+    *)
+      say "the Docker host's architecture '${host_arch}' is not supported; pass --platform"
+      exit 1
+      ;;
+  esac
+fi
+arch=x64
+if [ "${platform}" = linux/arm64 ]; then arch=arm; fi
+if [ -z "${cache_dir}" ]; then cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/brokersre-ib-gateway"; fi
+# Created here, so that Docker does not create it (as root, on Linux) for the bind mount.
+mkdir -p "${cache_dir}" "${repo_root}/downloads"
+
+# `buildx build --load`, not `docker build`: with a docker-container default builder (what
+# docker/setup-buildx-action installs) a plain build leaves the image in the build cache only.
+if ! docker buildx build --load -q -t "${helper_image}" "$(host_path "${repo_root}/scripts/build-helper")" >/dev/null; then
+  say "could not build the helper image from scripts/build-helper"
+  exit 1
+fi
+
+# helper ARGS...: run scripts/resolve-installer.sh ARGS in the helper container, with the cache,
+# the repository (read-only), downloads/ and the --installer directory mounted. On Linux it
+# runs as the calling user, so that the cache and downloads/ stay the user's.
+helper() {
+  set -- -v "$(host_path "${cache_dir}"):/cache" -v "$(host_path "${repo_root}"):/repo:ro" \
+    -v "$(host_path "${repo_root}/downloads"):/downloads" -e BROKERSRE_TEST_IBKR_BASE_URL \
+    "${helper_image}" bash /repo/scripts/resolve-installer.sh "$@"
+  if [ -n "${installer}" ]; then set -- -v "$(host_path "${installer_dir}"):/installer:ro" "$@"; fi
+  if [ "$(uname -s)" = Linux ]; then set -- --user "$(id -u):$(id -g)" "$@"; fi
+  docker run --rm "$@"
+}
+
+set -- resolve --arch "${arch}" --versions /repo/versions.json --cache /cache --downloads /downloads
+if [ -n "${channel}" ]; then set -- "$@" --channel "${channel}"; fi
+if [ "${strict}" = yes ]; then set -- "$@" --strict; fi
+if [ -n "${installer}" ]; then set -- "$@" --installer "/installer/${installer_name}"; fi
+if [ "${print_plan}" = yes ]; then set -- "$@" --print-plan; fi
+rc=0
+plan="$(helper "$@")" || rc=$?
+if [ "${rc}" -ne 0 ]; then
+  exit "${rc}" # the helper said why on stderr
+fi
+
+# value KEY: the value of the plan line `KEY: value`.
+value() { printf '%s\n' "${plan}" | sed -n "s/^$1: //p" | sed -n 1p; }
+version="$(value version)"
+channel="$(value channel)"
+run_id="$(value run)"
+context_file="$(value context_file)"
+if [ "${#tags[@]}" -eq 0 ]; then tags=("${default_repository}:${channel}" "${default_repository}:${version}"); fi
+image="${tags[0]}"
+
+if [ "${print_plan}" = yes ]; then
+  printf '%s\n' "${plan}"
+  printf 'platform: %s\nimage: %s\n' "${platform}" "${image}"
+  exit 0
+fi
+
+# discard: forget the run (nothing is cached) after a failed build or smoke test.
+discard() {
+  helper discard --cache /cache --run "${run_id}" >/dev/null 2>&1 || true
+}
+context_path="${repo_root}/${context_file}"
+# shellcheck disable=SC2329  # invoked through the EXIT trap
+remove_context_installer() { rm -f "${context_path}"; }
+trap remove_context_installer EXIT
+
+set -- buildx build --platform "${platform}" --load
+for tag in "${tags[@]}"; do set -- "$@" -t "${tag}"; done
+while IFS= read -r line; do
+  case "${line}" in "build_arg: "*) set -- "$@" --build-arg "${line#build_arg: }" ;; esac
+done <<EOF
+${plan}
+EOF
+set -- "$@" -f "$(host_path "${repo_root}/Dockerfile")" "$(host_path "${repo_root}")"
+say "building ${image}: IB Gateway ${version} (${channel}) for ${platform}"
+if ! docker "$@" >&2; then
+  discard
+  say "the image build failed; nothing was cached"
+  exit 1
+fi
+remove_context_installer
+
+if [ "${smoke}" = yes ]; then
+  say "smoke test: IMAGE=${image} tests/container/run.sh --only ibc-smoke (offline)"
+  if ! IMAGE="${image}" "${repo_root}/tests/container/run.sh" --only ibc-smoke >&2; then
+    discard
+    say "the IBC smoke test failed for ${image}; nothing was cached"
+    exit 1
+  fi
+fi
+
+rc=0
+summary="$(helper accept --cache /cache --run "${run_id}" --image "${image}")" || rc=$?
+if [ "${rc}" -ne 0 ]; then
+  say "the image was built, but the helper could not record it (exit ${rc})"
+  exit 1
+fi
+image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+printf '%s\n' "${summary}"
+printf 'image: %s\nimage_id: %s\n' "${image}" "${image_id}"

@@ -1,0 +1,547 @@
+#!/usr/bin/env bats
+# scripts/build-image.sh and its helper scripts/resolve-installer.sh against a fake IBKR server
+# (fake-ibkr.py) and fake installers (fake-installer.bash). Nothing contacts IBKR: the helper is
+# pointed at the fake server through BROKERSRE_TEST_IBKR_BASE_URL, the test-only override.
+# Needs bash, curl, jq, python3, coreutils, tar and gzip (the GitHub runner has them):
+#   tests/.bats-core/bin/bats tests/bats/ci/build-image.bats
+#
+# How it runs without Docker: a stub `docker` on PATH records every call; for `docker run` of
+# the build helper image it runs the helper's command on this host with the `-v` mounts mapped
+# back to host paths (so the real resolve-installer.sh does the work), `docker buildx build`
+# only records its arguments, and the IBC smoke test meets a stub that makes it fail. The
+# repository is copied to a temporary directory whose versions.json pins two fake installers
+# (stable 10.50.1g, x64 and arm), so a "pinned" build is possible with fake bytes.
+#
+# The contract under test is the interface section of
+# docs/specs/2026-11-17-private-image-public-recipe.md: options, exit codes (0 built, 1 failed,
+# 2 usage, 3 IBKR unreachable and nothing usable cached, 4 --strict and IBKR serves another
+# version), the seven last lines, the labels passed as build arguments, the cache, --print-plan.
+# Outside GitHub Actions a missing tool skips these tests; on the runner it fails them.
+
+bats_require_minimum_version 1.5.0 # `run --separate-stderr`
+
+# require_command NAME: succeed when NAME is installed; otherwise skip the test, except on
+# GitHub Actions, where a missing tool fails it.
+require_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    echo "$1 is not installed on the runner"
+    return 1
+  fi
+  skip "$1 is not installed here; the lint job of ci.yml runs this test"
+}
+
+setup() {
+  load fake-installer
+  for tool in curl jq python3 tar gzip; do require_command "${tool}"; done
+  SRC="$(cd "${BATS_TEST_DIRNAME}/../../.." && pwd)"
+  WORK="$(mktemp -d)"
+  REPO="${WORK}/repo"
+  mkdir -p "${REPO}/scripts" "${REPO}/tests/container" "${REPO}/downloads" "${WORK}/bin" "${WORK}/stub"
+  cp "${SRC}/scripts/build-image.sh" "${SRC}/scripts/resolve-installer.sh" "${SRC}/scripts/fetch-installer.sh" "${REPO}/scripts/"
+  cp -R "${SRC}/scripts/build-helper" "${REPO}/scripts/build-helper"
+  cp "${SRC}/tests/container/run.sh" "${REPO}/tests/container/run.sh"
+  cp "${SRC}/Dockerfile" "${REPO}/Dockerfile"
+  CACHE="${WORK}/cache"
+  WWW="${WORK}/www"
+  mkdir -p "${WWW}/stable-standalone" "${WWW}/latest-standalone"
+  make_fake_installer "${WORK}/pinned-x64.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-x64
+  make_fake_installer "${WORK}/pinned-arm.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-arm
+  make_fake_installer "${WORK}/newer-x64.sh" "IB Gateway 10.50" "(.1h) 20261116 16:02:08" ibgateway-stable-standalone-linux-x64
+  PIN_X64="$(sha256_of "${WORK}/pinned-x64.sh")"
+  PIN_ARM="$(sha256_of "${WORK}/pinned-arm.sh")"
+  NEWER_X64="$(sha256_of "${WORK}/newer-x64.sh")"
+  jq --arg x "${PIN_X64}" --arg a "${PIN_ARM}" '.channels.stable.version = "10.50.1g"
+      | .channels.stable.build_datetime = "20261109 16:10:13" | .channels.stable.sha256 = {x64: $x, arm: $a}' \
+    "${SRC}/versions.json" >"${REPO}/versions.json"
+  write_stub_docker
+  export PATH="${WORK}/bin:${PATH}"
+  export STUB_DIR="${WORK}/stub"
+  unset XDG_CACHE_HOME STUB_ARCH STUB_BUILD_RC STUB_EXEC_RC
+  start_server
+  export BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:${PORT}"
+}
+
+teardown() {
+  if [ -n "${SERVER_PID:-}" ]; then kill "${SERVER_PID}" 2>/dev/null || true; fi
+  rm -rf "${WORK}"
+}
+
+# start_server: start fake-ibkr.py on a free port (PORT), serving ${WWW}, logging to
+# ${WORK}/requests.log.
+start_server() {
+  : >"${WORK}/requests.log"
+  python3 "${BATS_TEST_DIRNAME}/fake-ibkr.py" "${WWW}" "${WORK}/port" "${WORK}/requests.log" >/dev/null 2>&1 3>&- &
+  SERVER_PID=$!
+  for _ in $(seq 1 100); do
+    [ -s "${WORK}/port" ] && break
+    sleep 0.1
+  done
+  PORT="$(cat "${WORK}/port")"
+}
+
+# write_stub_docker: the stub described in the header, at ${WORK}/bin/docker.
+write_stub_docker() {
+  cat >"${WORK}/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+# Stub docker for build-image.bats: records each call in ${STUB_DIR}/calls.
+printf '%s\n' "$*" >>"${STUB_DIR}/calls"
+case "$1" in
+  info) echo "${STUB_ARCH:-x86_64}" ;;
+  build) echo "sha256:helper" ;;
+  buildx)
+    case "$2" in
+      version) echo "github.com/docker/buildx v0.38.1 stub" ;;
+      build)
+        case " $* " in *" brokersre-ib-gateway-build-helper:local "*) echo "sha256:helper" && exit 0 ;; esac
+        shift 2
+        printf '%s\n' "$@" >"${STUB_DIR}/buildx-args"
+        ls "${*: -1}/downloads" >"${STUB_DIR}/context-downloads" 2>&1
+        exit "${STUB_BUILD_RC:-0}"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  image) echo "sha256:$(printf '%s' "${*: -1}" | sha256sum | cut -c1-64)" ;;
+  exec) exit "${STUB_EXEC_RC:-0}" ;;
+  run)
+    shift
+    case " $* " in *" brokersre-ib-gateway-build-helper:local "*) ;; *) exit 0 ;; esac
+    mounts=()
+    envs=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --rm | -i | -t) shift ;;
+        -v | --volume)
+          spec="${2%:ro}"
+          mounts+=("${spec##*:}=${spec%:*}")
+          shift 2
+          ;;
+        -e | --env)
+          if [[ "$2" == *=* ]]; then envs+=("$2"); elif [ -n "${!2+x}" ]; then envs+=("$2=${!2}"); fi
+          shift 2
+          ;;
+        -u | --user | -w | --workdir | --entrypoint | --network) shift 2 ;;
+        *)
+          shift
+          break
+          ;;
+      esac
+    done
+    args=()
+    for a in "$@"; do
+      for m in "${mounts[@]}"; do
+        dst="${m%%=*}"
+        src="${m#*=}"
+        if [ "$a" = "$dst" ] || [[ "$a" == "$dst"/* ]]; then
+          a="${src}${a#"$dst"}"
+          break
+        fi
+      done
+      args+=("$a")
+    done
+    exec env -u BROKERSRE_TEST_IBKR_BASE_URL "${envs[@]}" "${args[@]}"
+    ;;
+  *) exit 0 ;;
+esac
+STUB
+  chmod +x "${WORK}/bin/docker"
+}
+
+# serve_version CHANNEL VERSION DATETIME [N]: IBKR's version.json (JSONP) for CHANNEL, as the
+# N-th answer when N is given.
+serve_version() {
+  printf 'ibgateway%s_callback({"buildVersion":"%s","buildDateTime":"%s"});' "$1" "$2" "$3" \
+    >"${WWW}/$1-standalone/version.json${4:+.$4}"
+}
+
+# serve_installer CHANNEL ARCH FILE [N]: IBKR's unversioned installer URL for CHANNEL/ARCH
+# answers with FILE (as the N-th answer when N is given).
+serve_installer() {
+  cp "$3" "${WWW}/$1-standalone/ibgateway-$1-standalone-linux-$2.sh${4:+.$4}"
+}
+
+# build ARGS...: run the build helper with the test cache; stdout in $output, stderr in $stderr.
+build() {
+  run --separate-stderr "${REPO}/scripts/build-image.sh" --cache-dir "${CACHE}" "$@"
+}
+
+# buildx_arg NAME: the value of `--build-arg NAME=...` of the recorded `docker buildx build`.
+buildx_arg() {
+  sed -n "s/^$1=//p" "${WORK}/stub/buildx-args"
+}
+
+# buildx_option OPTION: the values following OPTION in the recorded `docker buildx build`.
+buildx_option() {
+  awk -v o="$1" 'prev == o { print } { prev = $0 }' "${WORK}/stub/buildx-args"
+}
+
+# installer_requests CHANNEL ARCH: how many times the fake server served that installer.
+installer_requests() {
+  grep -c "^GET /$1-standalone/ibgateway-$1-standalone-linux-$2.sh$" "${WORK}/requests.log" || true
+}
+
+# last_lines: the seven machine-readable lines the interface promises at the end of stdout.
+last_lines() {
+  printf '%s\n' "$output" | tail -n 7
+}
+
+@test "--help prints the interface and exits 0" {
+  run "${REPO}/scripts/build-image.sh" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--channel stable|latest"* ]]
+  [[ "$output" == *"--print-plan"* ]]
+  [[ "$output" == *"--installer FILE"* ]]
+}
+
+@test "usage errors exit 2: unknown option, bad channel, bad platform, installer file missing" {
+  build --bogus
+  [ "$status" -eq 2 ]
+  build --channel beta
+  [ "$status" -eq 2 ]
+  build --platform linux/386
+  [ "$status" -eq 2 ]
+  build --installer "${WORK}/no-such-installer.sh"
+  [ "$status" -eq 2 ]
+  build --tag
+  [ "$status" -eq 2 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "IBKR serves the pin: SHA-256 verified, built qualified, the seven last lines" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  echo "$stderr"
+  [ "$status" -eq 0 ]
+  last_lines >"${WORK}/last"
+  [ "$(sed -n 1p "${WORK}/last")" = "version: 10.50.1g" ]
+  [ "$(sed -n 2p "${WORK}/last")" = "channel: stable" ]
+  [ "$(sed -n 3p "${WORK}/last")" = "qualified_by_project: yes" ]
+  [ "$(sed -n 4p "${WORK}/last")" = "installer_sha256: ${PIN_X64}" ]
+  [ "$(sed -n 5p "${WORK}/last")" = "ibkr_build_stamp: (.1g) 20261109 16:10:13" ]
+  [ "$(sed -n 6p "${WORK}/last")" = "image: brokersre-ib-gateway:stable" ]
+  [[ "$(sed -n 7p "${WORK}/last")" =~ ^image_id:\ sha256:[0-9a-f]{64}$ ]]
+  [ "$(buildx_arg IB_GATEWAY_VERSION)" = 10.50.1g ]
+  [ "$(buildx_arg IB_GATEWAY_CHANNEL)" = stable ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${PIN_X64}" ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1g) 20261109 16:10:13" ]
+  [ "$(buildx_arg IB_GATEWAY_QUALIFIED)" = yes ]
+  [ "$(buildx_arg IBC_SHA256)" = "$(jq -r .ibc.sha256 "${REPO}/versions.json")" ]
+  [ "$(buildx_arg UBUNTU_DIGEST)" = "$(jq -r .base.digest "${REPO}/versions.json")" ]
+  [ "$(buildx_option --platform)" = linux/amd64 ]
+  [ "$(buildx_option -t | tr '\n' ' ')" = "brokersre-ib-gateway:stable brokersre-ib-gateway:10.50.1g " ]
+  grep -qx -- --load "${WORK}/stub/buildx-args"
+  # The helper image is built with buildx and loaded: a docker-container default builder would
+  # otherwise keep it in the build cache only.
+  grep -q "^buildx build --load -q -t brokersre-ib-gateway-build-helper:local " "${WORK}/stub/calls"
+  # The installer was in the build context during the build, and is gone afterwards.
+  grep -qx ibgateway-10.50.1g-standalone-linux-x64.sh "${WORK}/stub/context-downloads"
+  [ ! -e "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" ]
+  # Accepted into the cache by version, with its SHA-256.
+  cmp "${CACHE}/installers/10.50.1g/x64/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/pinned-x64.sh"
+  grep -qx "sha256: ${PIN_X64}" "${CACHE}/installers/10.50.1g/x64/meta"
+}
+
+@test "IBKR serves the pinned version with other bytes: SHA-256 mismatch, exit 1, nothing built or cached" {
+  make_fake_installer "${WORK}/reupload.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-x64 re-upload
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/reupload.sh"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"SHA-256 MISMATCH"* ]]
+  [[ "$stderr" == *"${PIN_X64}"* ]]
+  [[ "$stderr" == *"$(sha256_of "${WORK}/reupload.sh")"* ]]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+  [ ! -e "${CACHE}/installers/10.50.1g" ]
+}
+
+@test "IBKR moved past the pin: falls forward, checked against IBKR's stamp, built not qualified with a warning" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  echo "$stderr"
+  [ "$status" -eq 0 ]
+  last_lines >"${WORK}/last"
+  [ "$(sed -n 1p "${WORK}/last")" = "version: 10.50.1h" ]
+  [ "$(sed -n 3p "${WORK}/last")" = "qualified_by_project: no" ]
+  [ "$(sed -n 4p "${WORK}/last")" = "installer_sha256: ${NEWER_X64}" ]
+  [ "$(sed -n 5p "${WORK}/last")" = "ibkr_build_stamp: (.1h) 20261116 16:02:08" ]
+  [ "$(buildx_arg IB_GATEWAY_VERSION)" = 10.50.1h ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${NEWER_X64}" ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1h) 20261116 16:02:08" ]
+  [ "$(buildx_arg IB_GATEWAY_QUALIFIED)" = no ]
+  [ "$(buildx_option -t | tr '\n' ' ')" = "brokersre-ib-gateway:stable brokersre-ib-gateway:10.50.1h " ]
+  [[ "$stderr" == *"WARNING"*"not qualified by this project"* ]]
+  [[ "$stderr" == *"versions.json pins 10.50.1g"* ]]
+  [[ "$stderr" == *"scripts/qualify-paper.sh --image brokersre-ib-gateway:stable --secrets-dir"* ]]
+  # version.json was read before and after the download, the installer once.
+  [ "$(grep -c '^GET /stable-standalone/version.json$' "${WORK}/requests.log")" -eq 2 ]
+  [ "$(installer_requests stable x64)" -eq 1 ]
+  grep -qx "ibkr_build_stamp: (.1h) 20261116 16:02:08" "${CACHE}/installers/10.50.1h/x64/meta"
+}
+
+@test "IBKR moved past the pin and the installer's stamp is not what version.json says: exit 1, naming both" {
+  make_fake_installer "${WORK}/odd.sh" "IB Gateway 10.50" "(.1h) 20261116 16:02:07" ibgateway-stable-standalone-linux-x64
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/odd.sh"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"(.1h) 20261116 16:02:08"* ]]
+  [[ "$stderr" == *"(.1h) 20261116 16:02:07"* ]]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+  [ ! -e "${CACHE}/installers/10.50.1h" ]
+}
+
+@test "version.json changes during the download: one retry, and the build uses the second answer" {
+  make_fake_installer "${WORK}/next-x64.sh" "IB Gateway 10.50" "(.1i) 20261117 10:00:00" ibgateway-stable-standalone-linux-x64
+  serve_version stable 10.50.1h "20261116 16:02:08" 1
+  serve_version stable 10.50.1i "20261117 10:00:00" 2
+  serve_installer stable x64 "${WORK}/newer-x64.sh" 1
+  serve_installer stable x64 "${WORK}/next-x64.sh" 2
+  build --no-smoke
+  echo "$stderr"
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"changed during the download"* ]]
+  [ "$(last_lines | sed -n 1p)" = "version: 10.50.1i" ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "$(sha256_of "${WORK}/next-x64.sh")" ]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+}
+
+@test "version.json changes again during the retry: exit 1, nothing built" {
+  serve_version stable 10.50.1h "20261116 16:02:08" 1
+  serve_version stable 10.50.1i "20261117 10:00:00" 2
+  serve_version stable 10.50.1i "20261117 10:00:00" 3
+  serve_version stable 10.50.1j "20261117 11:00:00" 4
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"changed during the download"* ]]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "--strict and IBKR serves another version: exit 4 before any download" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --strict --no-smoke
+  [ "$status" -eq 4 ]
+  [[ "$stderr" == *"10.50.1h"*"10.50.1g"* ]]
+  [ "$(installer_requests stable x64)" -eq 0 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "--strict and IBKR serves the pin: built, qualified" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --strict --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: yes" ]
+}
+
+@test "--installer FILE: version, stamp and channel come from the installer, its SHA-256 is recorded, IBKR is not asked" {
+  make_fake_installer "${WORK}/mine.sh" "IB Gateway 10.53" "(.1a) 20261120 09:00:00" ibgateway-latest-standalone-linux-x64
+  build --installer "${WORK}/mine.sh" --no-smoke
+  echo "$stderr"
+  [ "$status" -eq 0 ]
+  last_lines >"${WORK}/last"
+  [ "$(sed -n 1p "${WORK}/last")" = "version: 10.53.1a" ]
+  [ "$(sed -n 2p "${WORK}/last")" = "channel: latest" ]
+  [ "$(sed -n 3p "${WORK}/last")" = "qualified_by_project: no" ]
+  [ "$(sed -n 4p "${WORK}/last")" = "installer_sha256: $(sha256_of "${WORK}/mine.sh")" ]
+  [ "$(sed -n 5p "${WORK}/last")" = "ibkr_build_stamp: (.1a) 20261120 09:00:00" ]
+  [ "$(sed -n 6p "${WORK}/last")" = "image: brokersre-ib-gateway:latest" ]
+  [ "$(buildx_arg IB_GATEWAY_CHANNEL)" = latest ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1a) 20261120 09:00:00" ]
+  [ ! -s "${WORK}/requests.log" ]
+  [ -f "${CACHE}/installers/10.53.1a/x64/meta" ]
+}
+
+@test "--installer with the pinned bytes builds the pin, qualified" {
+  build --installer "${WORK}/pinned-x64.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 1p)" = "version: 10.50.1g" ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: yes" ]
+}
+
+@test "--installer for another architecture or another channel than asked: exit 1" {
+  build --installer "${WORK}/pinned-arm.sh" --platform linux/amd64 --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"linux-arm"* ]]
+  build --installer "${WORK}/pinned-x64.sh" --channel latest --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"stable"* ]]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "--installer that carries no readable stamp: exit 1" {
+  printf '#!/bin/sh\nexit 0\n' >"${WORK}/plain.sh"
+  build --installer "${WORK}/plain.sh" --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"stamp"* ]]
+}
+
+@test "IBKR serves a version already in the cache: no download" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  rm -f "${WORK}/stub/buildx-args"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(installer_requests stable x64)" -eq 1 ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${NEWER_X64}" ]
+  [[ "$stderr" == *"cache"* ]]
+}
+
+@test "IBKR unreachable, a newer version cached: builds it from the cache, not qualified" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --no-smoke
+  echo "$stderr"
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"unreachable"* ]]
+  [ "$(last_lines | sed -n 1p)" = "version: 10.50.1h" ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: no" ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${NEWER_X64}" ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1h) 20261116 16:02:08" ]
+}
+
+@test "IBKR unreachable, the pin cached: builds the pin, qualified (also with --strict)" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --strict --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 1p)" = "version: 10.50.1g" ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: yes" ]
+}
+
+@test "IBKR unreachable and nothing cached: exit 3, nothing built" {
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --no-smoke
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"unreachable"* ]]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "--strict, IBKR unreachable and only a newer version cached: exit 3" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --strict --no-smoke
+  [ "$status" -eq 3 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "--print-plan resolves and prints the plan without downloading or building" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --print-plan
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"version: 10.50.1h"* ]]
+  [[ "$output" == *"pinned_version: 10.50.1g"* ]]
+  [[ "$output" == *"pinned: no"* ]]
+  [[ "$output" == *"cache_hit: no"* ]]
+  [[ "$output" == *"qualified_by_project: no"* ]]
+  [[ "$output" == *"image: brokersre-ib-gateway:stable"* ]]
+  [ "$(installer_requests stable x64)" -eq 0 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+  [ -z "$(ls -A "${REPO}/downloads")" ]
+  [ ! -e "${CACHE}/installers" ]
+}
+
+@test "--print-plan after a build of the same version reports the cache hit" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  build --print-plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pinned: yes"* ]]
+  [[ "$output" == *"cache_hit: yes"* ]]
+  [[ "$output" == *"installer_sha256: ${PIN_X64}"* ]]
+}
+
+@test "a failed image build exits 1, caches nothing and leaves no installer in downloads/" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  STUB_BUILD_RC=1 build --no-smoke
+  [ "$status" -eq 1 ]
+  [ ! -e "${CACHE}/installers/10.50.1h" ]
+  [ ! -e "${REPO}/downloads/ibgateway-10.50.1h-standalone-linux-x64.sh" ]
+}
+
+@test "a failed smoke test exits 1 and caches nothing" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  SMOKE_TIMEOUT=2 build
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"smoke test"* ]]
+  grep -q '^run -d --name ibgw-test' "${WORK}/stub/calls"
+  [ ! -e "${CACHE}/installers/10.50.1h" ]
+}
+
+@test "the smoke test's filter: tests/container/run.sh refuses an unknown --only section (exit 2)" {
+  IMAGE=example.test/none run "${REPO}/tests/container/run.sh" --only everything
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--only ibc-smoke"* ]]
+  [ ! -e "${WORK}/stub/calls" ]
+}
+
+@test "--no-smoke skips the smoke test" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ -e "${WORK}/stub/buildx-args" ]
+  [[ "$(last_lines | sed -n 7p)" == "image_id: sha256:"* ]]
+  ! grep -q '^run -d --name ibgw-test' "${WORK}/stub/calls" || false
+}
+
+@test "the default platform follows the host: an arm64 host builds linux/arm64 from IBKR's arm installer" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable arm "${WORK}/pinned-arm.sh"
+  STUB_ARCH=aarch64 build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option --platform)" = linux/arm64 ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_ARM)" = "${PIN_ARM}" ]
+  [ "$(installer_requests stable arm)" -eq 1 ]
+  [ -f "${CACHE}/installers/10.50.1g/arm/meta" ]
+}
+
+@test "--tag replaces the default tags; image names it" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --tag example.test/gw:ci --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_option -t | tr '\n' ' ')" = "example.test/gw:ci " ]
+  [ "$(last_lines | sed -n 6p)" = "image: example.test/gw:ci" ]
+}
+
+@test "the default cache is \${XDG_CACHE_HOME}/brokersre-ib-gateway" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  XDG_CACHE_HOME="${WORK}/xdg" run --separate-stderr "${REPO}/scripts/build-image.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ -f "${WORK}/xdg/brokersre-ib-gateway/installers/10.50.1g/x64/meta" ]
+}
+
+@test "without the test override the helper asks IBKR, over HTTPS only" {
+  unset BROKERSRE_TEST_IBKR_BASE_URL
+  # A stand-in curl records how it was called and fails like a closed network.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >>"${STUB_DIR}/curl-calls"' 'exit 7' >"${WORK}/bin/curl"
+  chmod +x "${WORK}/bin/curl"
+  build --no-smoke
+  [ "$status" -eq 3 ]
+  grep -q -- '--proto =https' "${WORK}/stub/curl-calls"
+  grep -q 'https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json' "${WORK}/stub/curl-calls"
+}
