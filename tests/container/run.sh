@@ -191,6 +191,14 @@ if [ "${label_version}" = "${installed%%|*}" ] && [ -n "${label_stamp}" ] && [ "
 else
   fail "build labels" "labels '${build_labels}', installed '${installed}'"
 fi
+# Where the installer's bytes came from: ibkr (IBKR's channel URL, now or for the cached copy),
+# installer (a file the user gave with --installer) or override (a test server).
+label_source="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "com.rocketedge.brokersre.installer.source"}}')"
+if [[ "${label_source}" =~ ^(ibkr|installer|override)$ ]]; then
+  pass "installer source label: ${label_source}"
+else
+  fail "installer source label" "com.rocketedge.brokersre.installer.source is '${label_source}'"
+fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="
 run_container -e IBC_LAUNCH=no -e SAMPLE_INTERVAL_S=2

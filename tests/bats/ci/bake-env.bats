@@ -53,7 +53,7 @@ require_command() {
   [[ "$output" == *"build_datetime"* ]]
 }
 
-@test "the bake targets pass the pinned build stamp and qualified=yes to the Dockerfile" {
+@test "the bake targets pass the pinned build stamp, qualified=yes and installer source ibkr to the Dockerfile" {
   require_command jq
   require_command docker
   eval "$("${REPO}/scripts/bake-env.sh")"
@@ -63,5 +63,6 @@ require_command() {
   latest_stamp="($(jq -r '.channels.latest.version | split(".") | ".\(.[2])"' "${REPO}/versions.json")) $(jq -r .channels.latest.build_datetime "${REPO}/versions.json")"
   printf '%s' "$output" | jq -e --arg s "${stable_stamp}" --arg l "${latest_stamp}" '
     .target.stable.args.IB_GATEWAY_BUILD_STAMP == $s and .target.latest.args.IB_GATEWAY_BUILD_STAMP == $l
-    and .target.stable.args.IB_GATEWAY_QUALIFIED == "yes" and .target.latest.args.IB_GATEWAY_QUALIFIED == "yes"'
+    and .target.stable.args.IB_GATEWAY_QUALIFIED == "yes" and .target.latest.args.IB_GATEWAY_QUALIFIED == "yes"
+    and .target.stable.args.IB_GATEWAY_INSTALLER_SOURCE == "ibkr" and .target.latest.args.IB_GATEWAY_INSTALLER_SOURCE == "ibkr"'
 }

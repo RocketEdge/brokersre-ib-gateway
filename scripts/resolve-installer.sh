@@ -401,7 +401,8 @@ emit_plan() {
         IB_GATEWAY_VERSION "${version}" \
         "${sha_arg}" "${installer_sha}" \
         IB_GATEWAY_BUILD_STAMP "${build_stamp}" \
-        IB_GATEWAY_QUALIFIED "${qualified}"
+        IB_GATEWAY_QUALIFIED "${qualified}" \
+        IB_GATEWAY_INSTALLER_SOURCE "${installer_source}"
     fi
   )"
   if [ -n "${run_dir}" ]; then printf '%s\n' "${plan}" >"${run_dir}/plan"; fi

@@ -40,6 +40,9 @@ target "common" {
     # A bake build is the pinned version with its pinned SHA-256 (fetch-installer.sh fails any
     # other bytes), which is what com.rocketedge.brokersre.qualified=yes means.
     IB_GATEWAY_QUALIFIED = "yes"
+    # The installer comes from IBKR's channel URL, or from the private archive of IBKR's own
+    # bytes; either way its SHA-256 is the pin's.
+    IB_GATEWAY_INSTALLER_SOURCE = "ibkr"
   }
   labels = {
     "org.opencontainers.image.revision" = SOURCE_REVISION

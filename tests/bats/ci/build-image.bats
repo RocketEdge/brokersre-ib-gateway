@@ -757,3 +757,19 @@ cached_meta() {
   [ "$status" -eq 3 ]
   [ ! -e "${WORK}/stub/buildx-args" ]
 }
+
+@test "the image is labelled with where its installer came from: override, installer or ibkr" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_arg IB_GATEWAY_INSTALLER_SOURCE)" = override ]
+  make_fake_installer "${WORK}/mine.sh" "IB Gateway 10.53" "(.1a) 20261120 09:00:00" ibgateway-latest-standalone-linux-x64
+  build --installer "${WORK}/mine.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_arg IB_GATEWAY_INSTALLER_SOURCE)" = installer ]
+  use_stub_ibkr
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(buildx_arg IB_GATEWAY_INSTALLER_SOURCE)" = ibkr ]
+}
