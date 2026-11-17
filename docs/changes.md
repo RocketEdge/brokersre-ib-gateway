@@ -31,7 +31,9 @@ Next step.
   them in the distribution's `/tmp`. Excluding is open-ended; naming the inputs is closed. A
   `docker run -v <missing file>:...` for gitleaks created an empty directory `.gitleaks.toml`
   in the worktree, which then failed the gitleaks pre-commit hook ("Config File .gitleaks Not
-  Found"); removed.
+  Found"); removed. The merge was pushed before the local PSScriptAnalyzer run had finished;
+  CI's analyzer failed on a line of the new WSL test longer than 200 characters
+  (PSAvoidLongLines), fixed in the next commit: wait for the analyzer before a push.
 - **Next step:** CI on the merge; a real WSL distribution for the kit's copy-and-build path
   (still mocked).
 
