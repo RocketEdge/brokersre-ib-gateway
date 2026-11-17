@@ -321,8 +321,11 @@ function Invoke-BuildImage {
         $installerPath = (Resolve-Path -LiteralPath $settings.Installer).ProviderPath
         $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)))
     }
+    # BROKERSRE_HOST_SHELL and BROKERSRE_HOST_DOWNLOADS let the helper's advice name PowerShell's
+    # command, -Installer and the Windows path of downloads\ (it sees only its mount /downloads).
     $helperPrefix += @('-v', ('{0}:/cache' -f $cacheDir), '-v', ('{0}:/repo:ro' -f $RepoRoot), '-v', ('{0}:/downloads' -f $downloads),
-        '-e', 'BROKERSRE_TEST_IBKR_BASE_URL', $script:HelperImage, 'bash', '/repo/scripts/resolve-installer.sh')
+        '-e', 'BROKERSRE_TEST_IBKR_BASE_URL', '-e', 'BROKERSRE_HOST_SHELL=powershell', '-e', ('BROKERSRE_HOST_DOWNLOADS={0}' -f $downloads),
+        $script:HelperImage, 'bash', '/repo/scripts/resolve-installer.sh')
 
     $resolve = @('resolve', '--arch', $arch, '--versions', '/repo/versions.json', '--cache', '/cache', '--downloads', '/downloads')
     if ($settings.Channel -ne '') { $resolve += @('--channel', $settings.Channel) }

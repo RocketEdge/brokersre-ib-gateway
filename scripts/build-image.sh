@@ -160,10 +160,13 @@ fi
 
 # helper ARGS...: run scripts/resolve-installer.sh ARGS in the helper container, with the cache,
 # the repository (read-only), downloads/ and the --installer directory mounted. On Linux it
-# runs as the calling user, so that the cache and downloads/ stay the user's.
+# runs as the calling user, so that the cache and downloads/ stay the user's. It is told that
+# the caller is bash and where downloads/ is on this host, so that its advice names the
+# caller's command and path (BROKERSRE_HOST_SHELL, BROKERSRE_HOST_DOWNLOADS).
 helper() {
   set -- -v "$(host_path "${cache_dir}"):/cache" -v "$(host_path "${repo_root}"):/repo:ro" \
     -v "$(host_path "${repo_root}/downloads"):/downloads" -e BROKERSRE_TEST_IBKR_BASE_URL \
+    -e BROKERSRE_HOST_SHELL=bash -e "BROKERSRE_HOST_DOWNLOADS=$(host_path "${repo_root}/downloads")" \
     "${helper_image}" bash /repo/scripts/resolve-installer.sh "$@"
   if [ -n "${installer}" ]; then set -- -v "$(host_path "${installer_dir}"):/installer:ro" "$@"; fi
   if [ "$(uname -s)" = Linux ]; then set -- --user "$(id -u):$(id -g)" "$@"; fi

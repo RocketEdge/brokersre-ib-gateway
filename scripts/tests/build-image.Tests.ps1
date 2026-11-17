@@ -112,7 +112,16 @@ Describe 'Invoke-BuildImage' {
         Test-Sequence -Actual $resolve -Expected @('resolve', '--arch', 'x64', '--versions', '/repo/versions.json', '--cache', '/cache', '--downloads', '/downloads') | Should -BeTrue
         Test-Sequence -Actual $resolve -Expected @('--channel', 'latest', '--strict', '--installer', '/installer/my-installer.sh', '--print-plan') | Should -BeTrue
         Test-Sequence -Actual $resolve -Expected @('-v', ('{0}:/installer:ro' -f $TestDrive)) | Should -BeTrue
-        Test-Sequence -Actual $resolve -Expected @('-e', 'BROKERSRE_TEST_IBKR_BASE_URL', 'brokersre-ib-gateway-build-helper:local', 'bash', '/repo/scripts/resolve-installer.sh') | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-e', 'BROKERSRE_TEST_IBKR_BASE_URL') | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('brokersre-ib-gateway-build-helper:local', 'bash', '/repo/scripts/resolve-installer.sh') | Should -BeTrue
+    }
+
+    It 'tells the helper that the caller is PowerShell and where downloads\ is on this host' {
+        $code = Invoke-BuildImage -ArgumentList @('-PrintPlan', '-CacheDir', $script:cache) -RepoRoot $script:repo
+        $code | Should -Be 0
+        $resolve = (Get-TestCall -Calls $script:calls -Marker 'resolve')[0]
+        Test-Sequence -Actual $resolve -Expected @('-e', 'BROKERSRE_HOST_SHELL=powershell') | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_DOWNLOADS={0}' -f (Join-Path $script:repo 'downloads'))) | Should -BeTrue
     }
 
     It '-PrintPlan prints the plan, the platform and the image, and builds nothing' {

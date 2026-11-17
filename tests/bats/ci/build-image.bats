@@ -835,14 +835,42 @@ cached_meta() {
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
   # The likely cause and the safe way out are named: a leftover of an interrupted or parallel
-  # build, removed only when no other build runs, in either shell.
+  # build, removed only when no other build runs, with the command of the caller's shell and
+  # the file's path on the host (the helper sees only its own mount, /downloads).
   [[ "$stderr" == *"leftover of an interrupted build or of a build running in parallel"* ]]
   [[ "$stderr" == *"no other build is running"* ]]
-  [[ "$stderr" == *"rm downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"* ]]
-  [[ "$stderr" == *"Remove-Item downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"* ]]
+  [[ "$stderr" == *"rm '${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh'"* ]]
+  [[ "$stderr" == *"build from it with --installer"* ]]
+  [[ "$stderr" != *"Remove-Item"* ]]
   cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
   [ ! -e "${WORK}/stub/buildx-args" ]
   no_runs_left
+}
+
+@test "for the PowerShell wrapper the refusal names Remove-Item, the Windows path and -Installer" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  local windows_downloads='C:\src\brokersre-ib-gateway\downloads'
+  run --separate-stderr env BROKERSRE_HOST_SHELL=powershell BROKERSRE_HOST_DOWNLOADS="${windows_downloads}" \
+    bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"Remove-Item -LiteralPath '${windows_downloads}\ibgateway-10.50.1g-standalone-linux-x64.sh'"* ]]
+  [[ "$stderr" == *"build from it with -Installer"* ]]
+  [[ "$stderr" != *"--installer"* ]]
+  [[ "$stderr" != *"rm '"* ]]
+}
+
+@test "without a hint from a wrapper the refusal names the file relative to the repository" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  run --separate-stderr bash "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 \
+    --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
+  [[ "$stderr" == *"remove downloads/ibgateway-10.50.1g-standalone-linux-x64.sh of the repository"* ]]
 }
 
 @test "a docker failure outside the contract's codes (125: daemon or mount error) exits 1" {

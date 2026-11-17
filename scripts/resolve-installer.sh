@@ -58,6 +58,8 @@
 #   (a fake server, or a closed port to simulate an unreachable IBKR); every use is announced
 #   on stderr, and what it serves is cached and labelled as source `override`. Without it the
 #   helper talks to IBKR only, over HTTPS only; redirects must lead to HTTPS in either case.
+#   BROKERSRE_HOST_SHELL (bash or powershell) and BROKERSRE_HOST_DOWNLOADS (downloads/ as the
+#   host names it) come from the wrappers and only shape advice in messages (leftover_advice).
 # Side effects: network (IBKR), files under --cache and --downloads; human messages on stderr.
 set -euo pipefail
 
@@ -244,6 +246,29 @@ new_run() {
 remove_failed_run() {
   local code=$?
   if [ "${code}" -ne 0 ] && [ -n "${run_dir:-}" ]; then rm -rf "${run_dir}"; fi
+}
+
+# leftover_advice NAME: how to remove downloads/NAME and how to build from it instead, in the
+# words of the caller. The wrappers say who they are and where downloads/ is on the host
+# (BROKERSRE_HOST_SHELL bash|powershell, BROKERSRE_HOST_DOWNLOADS), because this helper sees
+# only its own mount /downloads; without them the path is named relative to the repository.
+leftover_advice() {
+  local name="$1" dir="${BROKERSRE_HOST_DOWNLOADS:-}" sep=/
+  case "${dir}" in *\\*) sep="\\" ;; esac
+  case "${BROKERSRE_HOST_SHELL:-}:${dir}" in
+    powershell:?*)
+      printf "If no other build is running, remove it and build again:\n    Remove-Item -LiteralPath '%s%s%s'\n  If you put it there yourself, move it elsewhere, or build from it with -Installer." \
+        "${dir}" "${sep}" "${name}"
+      ;;
+    bash:?*)
+      printf "If no other build is running, remove it and build again:\n    rm '%s%s%s'\n  If you put it there yourself, move it elsewhere, or build from it with --installer." \
+        "${dir}" "${sep}" "${name}"
+      ;;
+    *)
+      printf 'If no other build is running, remove downloads/%s of the repository and build again.\n  If you put it there yourself, move it elsewhere, or build from it with --installer (-Installer).' \
+        "${name}"
+      ;;
+  esac
 }
 
 # resolve_installer_file: the --installer path: everything from the file itself.
@@ -497,10 +522,7 @@ cmd_resolve() {
         # (or a second build from the same folder, which shares downloads/) leaves its copy.
         die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched.
   It may be a leftover of an interrupted build or of a build running in parallel from this
-  folder. If no other build is running, remove it and build again:
-    rm downloads/${context_name}                 (bash)
-    Remove-Item downloads/${context_name}        (PowerShell)
-  If you put it there yourself, move it elsewhere, or build from it with --installer."
+  folder. $(leftover_advice "${context_name}")"
       fi
       context_owned=no
       say "downloads/${context_name} already holds this installer; it is used and left in place"
