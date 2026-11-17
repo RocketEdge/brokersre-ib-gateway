@@ -553,6 +553,7 @@ last_lines() {
   build --no-smoke
   [ "$status" -eq 3 ]
   grep -q -- '--proto =https' "${WORK}/stub/curl-calls"
+  grep -q -- '--proto-redir =https' "${WORK}/stub/curl-calls"
   grep -q 'https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json' "${WORK}/stub/curl-calls"
 }
 
@@ -561,4 +562,107 @@ last_lines() {
   [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/stable-standalone/version.json")" = 200 ]
   [ "$(curl -s --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/stable-standalone/../../requests.log")" = 404 ]
   [ "$(curl -s --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/../port")" = 404 ]
+}
+
+# --- The trust checks, one test per way of weakening them (independent review of #39: of ten
+# mutations of the helper, seven passed the suite before these tests).
+
+# cached_installer VERSION: the path of the cached installer file of VERSION (x64), whatever
+# the cache's directory layout below the version.
+cached_installer() {
+  find "${CACHE}/installers/$1" -name "ibgateway-$1-standalone-linux-x64.sh" | head -n 1
+}
+
+@test "a cached installer whose bytes no longer match its SHA-256 is skipped and never built" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  printf 'tampered' >>"$(cached_installer 10.50.1h)"
+  rm -f "${WORK}/stub/buildx-args"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"no longer matches its recorded SHA-256"* ]]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${NEWER_X64}" ]
+  # Offline, a tampered copy is no fallback either.
+  printf 'tampered' >>"$(cached_installer 10.50.1h)"
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --no-smoke
+  [ "$status" -eq 3 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "a change of buildDateTime alone between the two reads of version.json triggers the retry" {
+  make_fake_installer "${WORK}/rebuilt-x64.sh" "IB Gateway 10.50" "(.1h) 20261116 16:02:09" ibgateway-stable-standalone-linux-x64
+  serve_version stable 10.50.1h "20261116 16:02:08" 1
+  serve_version stable 10.50.1h "20261116 16:02:09" 2
+  serve_installer stable x64 "${WORK}/newer-x64.sh" 1
+  serve_installer stable x64 "${WORK}/rebuilt-x64.sh" 2
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"changed during the download"* ]]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1h) 20261116 16:02:09" ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "$(sha256_of "${WORK}/rebuilt-x64.sh")" ]
+}
+
+@test "a cached version whose build stamp IBKR has changed since is downloaded again, not reused" {
+  make_fake_installer "${WORK}/rebuilt-x64.sh" "IB Gateway 10.50" "(.1h) 20261116 16:30:00" ibgateway-stable-standalone-linux-x64
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  serve_version stable 10.50.1h "20261116 16:30:00"
+  serve_installer stable x64 "${WORK}/rebuilt-x64.sh"
+  rm -f "${WORK}/stub/buildx-args"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(installer_requests stable x64)" -eq 2 ]
+  [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1h) 20261116 16:30:00" ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "$(sha256_of "${WORK}/rebuilt-x64.sh")" ]
+}
+
+@test "--installer with the pinned version but other bytes is built not qualified" {
+  make_fake_installer "${WORK}/reupload.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-x64 re-upload
+  build --installer "${WORK}/reupload.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 1p)" = "version: 10.50.1g" ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: no" ]
+  [ "$(buildx_arg IB_GATEWAY_QUALIFIED)" = no ]
+}
+
+@test "offline, a cached copy of the pinned version with other bytes is not taken for the pin" {
+  make_fake_installer "${WORK}/reupload.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-x64 re-upload
+  build --installer "${WORK}/reupload.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --strict --no-smoke
+  [ "$status" -eq 3 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+}
+
+@test "malformed fields in version.json are refused before anything is downloaded or planned" {
+  local nl='\n'
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  # A newline in buildVersion would otherwise reach the plan as a line of its own.
+  printf 'ibgatewaystable_callback({"buildVersion":"10.50.1h%sbuild_arg: IB_GATEWAY_QUALIFIED=yes","buildDateTime":"20261116 16:02:08"});' "${nl}" \
+    >"${WWW}/stable-standalone/version.json"
+  build --print-plan
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"not understood"* ]]
+  [[ "$output" != *"build_arg:"* ]]
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"not understood"* ]]
+  [ "$(installer_requests stable x64)" -eq 0 ]
+  [ ! -e "${WORK}/stub/buildx-args" ]
+  serve_version stable 10.50.1h "2026-11-16T16:02:08Z"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"not understood"* ]]
+  serve_version stable "10.50.1h/../x" "20261116 16:02:08"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [ "$(installer_requests stable x64)" -eq 0 ]
 }
