@@ -555,3 +555,10 @@ last_lines() {
   grep -q -- '--proto =https' "${WORK}/stub/curl-calls"
   grep -q 'https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/version.json' "${WORK}/stub/curl-calls"
 }
+
+@test "the fake IBKR server serves nothing outside its directory" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/stable-standalone/version.json")" = 200 ]
+  [ "$(curl -s --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/stable-standalone/../../requests.log")" = 404 ]
+  [ "$(curl -s --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/../port")" = 404 ]
+}

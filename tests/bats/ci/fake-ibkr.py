@@ -15,7 +15,8 @@ Contract:
       the last one; otherwise ROOT/<path>; otherwise 404. Content is read at request time, so a
       test may rewrite a file between requests.
     - Every request is appended to REQUEST_LOG as one line, `GET /<path>`.
-    - Paths containing `..` are refused (404). No other method is served.
+    - Only files inside ROOT are served: the path is resolved (symbolic links and `..`
+      included) and anything outside ROOT is a 404. No other method is served.
 Side effects: one listening socket until the process is killed; writes PORT_FILE and REQUEST_LOG.
 """
 
@@ -25,13 +26,20 @@ import sys
 import threading
 
 ROOT, PORT_FILE, REQUEST_LOG = sys.argv[1], sys.argv[2], sys.argv[3]
+ROOT_REAL = os.path.realpath(ROOT)
 _counts: dict[str, int] = {}
 _lock = threading.Lock()
 
 
 def _pick(path: str, count: int) -> str | None:
-    """Return the file that answers the count-th request of path, or None for a 404."""
-    base = os.path.join(ROOT, path)
+    """Return the file that answers the count-th request of path, or None for a 404.
+
+    The request path is resolved and must stay inside ROOT, so a request can never read a
+    file elsewhere on the host (also the guard static analysis recognises).
+    """
+    base = os.path.realpath(os.path.join(ROOT_REAL, path))
+    if not base.startswith(ROOT_REAL + os.sep):
+        return None
     numbered = 0
     while os.path.isfile(f"{base}.{numbered + 1}"):
         numbered += 1
@@ -51,7 +59,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _counts[path] = count
             with open(REQUEST_LOG, "a", encoding="utf-8") as log:
                 log.write(f"GET /{path}\n")
-        chosen = None if ".." in path.split("/") else _pick(path, count)
+        chosen = _pick(path, count)
         if chosen is None:
             self.send_error(404)
             return
