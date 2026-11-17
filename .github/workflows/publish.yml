@@ -4,8 +4,9 @@
 # release carrying digests.json, one SBOM per platform and the VEX document for IBKR's bundled jars.
 #
 # The package is PRIVATE (ADR 0018): it holds IBKR's installed IB Gateway, which is not
-# redistributed. A package GitHub creates on the first push is private, and this file never
-# sets a visibility. Every registry read and write below (the push, Trivy's remote source, the
+# redistributed. The job private-package proves it before anything else is pushed (an
+# anonymous read of a placeholder must be refused), and this file never sets a visibility.
+# Every registry read and write below (the push, Trivy's remote source, the
 # SBOM tool, cosign, the provenance push, imagetools) uses the credential that
 # docker/login-action writes to the Docker CLI's config.json with the workflow's token
 # (packages: write). The release stays public: its notes name the digest for RocketEdge's
@@ -86,8 +87,61 @@ jobs:
           eval "$(scripts/bake-env.sh)"
           docker buildx bake --print stable latest | scripts/check-bake-tags.sh
 
+  # The gate before any IBKR byte leaves the runner. A package GitHub creates on a workflow's
+  # first push may come out public (GitHub: it "inherits the visibility and permissions model
+  # of the repository", and this repository is public; the organisation's "Package creation"
+  # setting can force public too). So a placeholder without IBKR content (FROM scratch, one
+  # text file) is pushed first, under its own tag; that push creates the package when it does
+  # not exist. Then an anonymous read of it must be refused (scripts/check-package-private.sh).
+  # If it is not, the job fails and `publish`, which needs it, never starts: nothing else is
+  # pushed. Tested by tests/bats/ci/private-package.bats.
+  private-package:
+    name: the package is private (before anything with IBKR software is pushed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push a placeholder without IBKR content, and read it back with the login
+        id: probe
+        run: |
+          set -euo pipefail
+          probe="$(mktemp -d)"
+          printf '%s\n' "Placeholder that proves ${IMAGE} is private before an image with IB Gateway is pushed (publish.yml). It holds no IBKR software." > "${probe}/README.txt"
+          printf '%s\n' 'FROM scratch' 'COPY README.txt /README.txt' > "${probe}/Dockerfile"
+          docker build --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.description=Visibility probe, no IBKR software" \
+            -t "$IMAGE:visibility-probe" "${probe}"
+          docker push "$IMAGE:visibility-probe"
+          # With the login the placeholder must be there; otherwise the anonymous refusal below
+          # would prove nothing.
+          docker buildx imagetools inspect "$IMAGE:visibility-probe" > /dev/null
+      - name: An anonymous read of the placeholder is refused (scripts/check-package-private.sh)
+        id: anonymous
+        run: |
+          set -euo pipefail
+          rc=0
+          scripts/check-package-private.sh "${IMAGE#ghcr.io/}" visibility-probe || rc=$?
+          case "$rc" in
+            0) ;;
+            1)
+              echo "::error title=The gateway package is public::An anonymous read of $IMAGE:visibility-probe succeeded. Nothing with IBKR software was pushed. Make the package private (Package settings, Danger zone) and check that the organisation's Package creation setting allows private packages, then run this workflow again."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Package visibility not established::scripts/check-package-private.sh exited $rc (see this step's log). Nothing with IBKR software was pushed; run the workflow again."
+              exit 1
+              ;;
+          esac
+
   publish:
-    needs: plan
+    needs: [plan, private-package]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

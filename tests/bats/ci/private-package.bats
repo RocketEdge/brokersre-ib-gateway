@@ -84,6 +84,42 @@ logs_in_before() {
   fi
 }
 
+# workflow_jobs FILE: the names of the jobs of a workflow, in order.
+workflow_jobs() {
+  awk '/^jobs:/ { inside = 1; next } /^[^ #]/ { inside = 0 } inside && /^  [A-Za-z0-9_-]+:[ \t]*$/ { name = $1; sub(/:$/, "", name); print name }' "$1"
+}
+
+# job_needs FILE JOB: the jobs JOB needs, one per line (`needs: x` or `needs: [x, y]`).
+job_needs() {
+  job "$1" "$2" | sed -n -E 's/^    needs: *//p' | tr -d '[]' | tr ',' '\n' | sed -E 's/^ +| +$//g' | sed '/^$/d'
+}
+
+# gate_problems FILE: print every job of FILE (a publish workflow) that may write packages but
+# does not wait for the job private-package, or that has a job condition (`if:`) under which it
+# could run after the gate failed; fail when there is one, or when no such job exists at all.
+gate_problems() {
+  local file="$1" name writers=0 bad=0
+  for name in $(workflow_jobs "${file}"); do
+    [ "${name}" = private-package ] && continue
+    if job "${file}" "${name}" | grep -q -E '^      packages: write'; then
+      writers=$((writers + 1))
+      if ! job_needs "${file}" "${name}" | grep -q -x private-package; then
+        echo "${name} does not wait for private-package"
+        bad=1
+      fi
+      if job "${file}" "${name}" | grep -q -E '^    if:'; then
+        echo "${name} has a job condition: it could run after the gate failed"
+        bad=1
+      fi
+    fi
+  done
+  if [ "${writers}" -eq 0 ]; then
+    echo "no job writes packages: the check found nothing to check"
+    bad=1
+  fi
+  return "${bad}"
+}
+
 # package_workflows: the workflows that name the gateway package (not the sidecar's).
 package_workflows() {
   grep -l -E 'ghcr\\?\.io/rocketedge/brokersre-ib-gateway([^-]|$)' "${WF}"/*.yml | sed 's|.*/||' | sort
@@ -182,13 +218,53 @@ package_workflows() {
   [[ "${notes}" == *'--expect-in-notes "$DIGEST"'* ]]
 }
 
+@test "publish.yml proves the package private before any job can push the gateway image" {
+  text="$(job "${WF}/publish.yml" private-package)"
+  [ -n "${text}" ]
+  run logs_in_before "${WF}/publish.yml" private-package id probe
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  probe="$(step_where "${WF}/publish.yml" private-package id probe)"
+  check="$(step_where "${WF}/publish.yml" private-package id anonymous)"
+  [ -n "${check}" ]
+  [ "${probe}" -lt "${check}" ]
+  facts="$(job_steps "${WF}/publish.yml" private-package)"
+  probe_script="$(printf '%s\n' "${facts}" | awk -F '\t' -v step="${probe}" '$1 == step && $2 == "run" { print $3 }')"
+  check_script="$(printf '%s\n' "${facts}" | awk -F '\t' -v step="${check}" '$1 == step && $2 == "run" { print $3 }')"
+  # The placeholder: FROM scratch and a text file, pushed under its own tag; nothing of IBKR's.
+  [[ "${probe_script}" == *"'FROM scratch'"* ]]
+  [[ "${probe_script}" == *'docker push "$IMAGE:visibility-probe"'* ]]
+  [[ "${probe_script}" != *"bake"* ]]
+  [[ "${probe_script}" != *"downloads"* ]]
+  [[ "${probe_script}" != *"installer"* ]]
+  [[ "${check_script}" == *'scripts/check-package-private.sh "${IMAGE#ghcr.io/}" visibility-probe'* ]]
+  run gate_problems "${WF}/publish.yml"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # No other workflow pushes to the gateway package.
+  run ! grep -l -E 'docker push|push=true|--push' "${WF}/rebuild.yml" "${WF}/qualify-paper.yml" "${WF}/detect-releases.yml" "${WF}/ci.yml"
+}
+
+@test "a publish job that does not wait for the gate, or runs after it failed, is caught" {
+  sed 's/^    needs: \[plan, private-package\]$/    needs: plan/' "${WF}/publish.yml" > "${WORK}/publish.yml"
+  run gate_problems "${WORK}/publish.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"publish does not wait for private-package"* ]]
+  awk '{ print } /^  publish:$/ { print "    if: always()" }' "${WF}/publish.yml" > "${WORK}/always.yml"
+  run gate_problems "${WORK}/always.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"publish has a job condition"* ]]
+}
+
 @test "no workflow step changes the visibility of a package" {
-  # Scripts and inputs of every step (comments are not steps): a package created by the first
-  # push is private, and nothing may make it public again.
+  # Scripts and inputs of every step (comments are not steps): nothing may make the package
+  # public. What sets a visibility: an API field (`-f visibility=public`, `"visibility":`), an
+  # option (`--visibility`); the tag `visibility-probe` and words in messages do not.
+  pattern='visibility["'"'"']?[[:space:]]*[:=]|--visibility'
   for file in "${WF}"/*.yml; do
-    run ! grep -q -i 'visibility' <<<"$(awk -f "${LISTER}" "${file}")"
+    run ! grep -q -i -E "${pattern}" <<<"$(awk -f "${LISTER}" "${file}")"
   done
   # The check reads scripts: a step that sets the visibility is caught.
   printf '%s\n' 'jobs:' '  x:' '    steps:' '      - run: gh api -X PATCH orgs/o/packages/container/p -f visibility=public' > "${WORK}/visible.yml"
-  grep -q -i 'visibility' <<<"$(awk -f "${LISTER}" "${WORK}/visible.yml")"
+  grep -q -i -E "${pattern}" <<<"$(awk -f "${LISTER}" "${WORK}/visible.yml")"
+  printf '%s\n' 'jobs:' '  x:' '    steps:' '      - run: echo '"'"'{"visibility": "public"}'"'"' | gh api -X PATCH p --input -' > "${WORK}/json.yml"
+  grep -q -i -E "${pattern}" <<<"$(awk -f "${LISTER}" "${WORK}/json.yml")"
 }
