@@ -399,8 +399,11 @@ function Invoke-BuildImage {
     $helperPrefix = @('run', '--rm') + @(Get-BiUserArgument)
     if ($settings.Installer -ne '') {
         $installerPath = (Resolve-Path -LiteralPath $settings.Installer).ProviderPath
-        $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)))
+        $helperPrefix += @('-v', ('{0}:/installer:ro' -f (Split-Path -Parent $installerPath)),
+            '-e', ('BROKERSRE_HOST_INSTALLER={0}' -f $settings.Installer))
     }
+    # The helper's messages name the cache as this host does, not by its mount /cache.
+    $helperPrefix += @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $cacheDir))
     # The shell's proxy variables, by name only (Get-BiProxyName); also passed to the build.
     $proxyNames = @(Get-BiProxyName)
     foreach ($name in $proxyNames) { $helperPrefix += @('-e', $name) }

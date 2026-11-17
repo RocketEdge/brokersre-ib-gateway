@@ -319,6 +319,15 @@ Describe 'Invoke-BuildImage' {
         }
     }
 
+    It 'passes the host''s cache directory and installer path, so the helper''s messages name them' {
+        $installer = Join-Path $TestDrive 'mine.sh'
+        Set-Content -LiteralPath $installer -Value 'x'
+        Invoke-BuildImage -ArgumentList @('-Installer', $installer, '-PrintPlan', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be 0
+        $resolve = (Get-TestCall -Calls $script:calls -Marker 'resolve')[0]
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_CACHE={0}' -f $script:cache)) | Should -BeTrue
+        Test-Sequence -Actual $resolve -Expected @('-e', ('BROKERSRE_HOST_INSTALLER={0}' -f $installer)) | Should -BeTrue
+    }
+
     It 'without Docker it returns 1' {
         Mock Test-BiDockerAvailable { return $false }
         Invoke-BuildImage -ArgumentList @() -RepoRoot $script:repo | Should -Be 1

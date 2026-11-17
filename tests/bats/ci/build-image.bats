@@ -1031,3 +1031,44 @@ cached_meta() {
   grep -q '^## Build the image$' "${SRC}/README.md"
   ! grep -q 'pkgs/container' "${SRC}/Dockerfile" || false
 }
+
+# --- Messages name the host's paths, not the helper container's mounts (/cache, /installer).
+
+@test "the helper names the cache and the installer by the host paths the wrapper passes" {
+  local host_cache='D:\Users\someone\cache dir'
+  # Offline, nothing cached: the message names the cache.
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" BROKERSRE_HOST_CACHE="${host_cache}" \
+    run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 --versions "${REPO}/versions.json" \
+    --cache "${WORK}/mnt-cache" --downloads "${REPO}/downloads" --strict
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"is not in the cache ${host_cache}"* ]]
+  [[ "$stderr" != *"${WORK}/mnt-cache"* ]]
+  # A cached file that no longer matches is named below the host's cache, in its path style.
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  printf 'tampered' >>"$(find "${CACHE}/installers/10.50.1h" -name '*.sh' | head -n 1)"
+  BROKERSRE_HOST_CACHE="${host_cache}" run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve --arch x64 \
+    --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads" --print-plan
+  local bs='\'
+  [[ "$stderr" == *"cached ${host_cache}${bs}installers${bs}10.50.1h${bs}x64${bs}${NEWER_X64}${bs}ibgateway-10.50.1h-standalone-linux-x64.sh no longer matches"* ]]
+  # An --installer file is named as the user gave it.
+  printf '#!/bin/sh\nexit 0\n' >"${WORK}/plain.sh"
+  BROKERSRE_HOST_INSTALLER='.\my installers\plain.sh' run --separate-stderr "${REPO}/scripts/resolve-installer.sh" resolve \
+    --arch x64 --versions "${REPO}/versions.json" --cache "${CACHE}" --downloads "${REPO}/downloads" --installer "${WORK}/plain.sh" --print-plan
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *'cannot read a build stamp from .\my installers\plain.sh'* ]]
+}
+
+@test "the wrapper passes the host's cache directory and installer path to the helper" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --installer "${WORK}/pinned-x64.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx "BROKERSRE_HOST_CACHE=${CACHE}" "${WORK}/stub/helper-env"
+  grep -qx "BROKERSRE_HOST_INSTALLER=${WORK}/pinned-x64.sh" "${WORK}/stub/helper-env"
+  XDG_CACHE_HOME="${WORK}/xdg" run --separate-stderr "${REPO}/scripts/build-image.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  grep -qx "BROKERSRE_HOST_CACHE=${WORK}/xdg/brokersre-ib-gateway" "${WORK}/stub/helper-env"
+}

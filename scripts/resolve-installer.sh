@@ -59,7 +59,9 @@
 #   on stderr, and what it serves is cached and labelled as source `override`. Without it the
 #   helper talks to IBKR only, over HTTPS only; redirects must lead to HTTPS in either case.
 #   BROKERSRE_HOST_SHELL (bash or powershell) and BROKERSRE_HOST_DOWNLOADS (downloads/ as the
-#   host names it) come from the wrappers and only shape advice in messages (leftover_advice).
+#   host names it) come from the wrappers and only shape advice in messages (leftover_advice);
+#   BROKERSRE_HOST_CACHE and BROKERSRE_HOST_INSTALLER (the cache directory and the --installer
+#   file as the host names them) only replace the mount paths in messages (shown).
 # Side effects: network (IBKR), files under --cache and --downloads; human messages on stderr.
 set -euo pipefail
 
@@ -176,7 +178,7 @@ cache_usable() {
   if [ -n "${want_stamp}" ] && [ "$(meta_get "${dir}/meta" ibkr_build_stamp)" != "${want_stamp}" ]; then return 1; fi
   if [ -n "${want_source}" ] && [ "$(meta_get "${dir}/meta" source)" != "${want_source}" ]; then return 1; fi
   if [ "$(sha256_of "${file}")" != "${sha}" ]; then
-    say "cached ${file} no longer matches its recorded SHA-256; ignoring it"
+    say "cached $(shown "${file}") no longer matches its recorded SHA-256; ignoring it"
     return 1
   fi
 }
@@ -248,6 +250,26 @@ remove_failed_run() {
   if [ "${code}" -ne 0 ] && [ -n "${run_dir:-}" ]; then rm -rf "${run_dir}"; fi
 }
 
+# shown PATH: PATH as the user knows it. The helper sees its mounts (the cache at --cache,
+# the --installer file under /installer); the wrappers pass the host's names for them
+# (BROKERSRE_HOST_CACHE, BROKERSRE_HOST_INSTALLER), and a path below the cache keeps the host's
+# separator (backslashes for a Windows path). Without them, PATH unchanged.
+shown() {
+  local path="$1" host="" rest=""
+  if [ -n "${BROKERSRE_HOST_CACHE:-}" ] && [ -n "${cache:-}" ] \
+    && { [ "${path}" = "${cache}" ] || [ "${path#"${cache}"/}" != "${path}" ]; }; then
+    host="${BROKERSRE_HOST_CACHE}"
+    rest="${path#"${cache}"}"
+  elif [ -n "${BROKERSRE_HOST_INSTALLER:-}" ] && [ -n "${installer:-}" ] && [ "${path}" = "${installer}" ]; then
+    host="${BROKERSRE_HOST_INSTALLER}"
+  else
+    printf '%s' "${path}"
+    return
+  fi
+  case "${host}" in *\\*) rest="${rest//\//\\}" ;; esac
+  printf '%s%s' "${host}" "${rest}"
+}
+
 # leftover_advice NAME: how to remove downloads/NAME and how to build from it instead, in the
 # words of the caller. The wrappers say who they are and where downloads/ is on the host
 # (BROKERSRE_HOST_SHELL bash|powershell, BROKERSRE_HOST_DOWNLOADS), because this helper sees
@@ -284,9 +306,9 @@ leftover_advice() {
 # resolve_installer_file: the --installer path: everything from the file itself.
 resolve_installer_file() {
   local media_channel="" media_arch=""
-  [ -r "${installer}" ] || die 2 "cannot read the installer ${installer}"
+  [ -r "${installer}" ] || die 2 "cannot read the installer $(shown "${installer}")"
   read_installer_stamp "${installer}" \
-    || die 1 "cannot read a build stamp from ${installer}: not an install4j IB Gateway installer, or a format this helper does not know"
+    || die 1 "cannot read a build stamp from $(shown "${installer}"): not an install4j IB Gateway installer, or a format this helper does not know"
   if [[ "${inst_media}" =~ ^ibgateway-(stable|latest)-standalone-linux-(x64|arm)$ ]]; then
     media_channel="${BASH_REMATCH[1]}"
     media_arch="${BASH_REMATCH[2]}"
@@ -294,10 +316,10 @@ resolve_installer_file() {
     say "the installer names no channel and architecture (mediaName '${inst_media}'); taking channel ${channel:-stable}"
   fi
   if [ -n "${media_arch}" ] && [ "${media_arch}" != "${arch}" ]; then
-    die 1 "${installer} is IBKR's linux-${media_arch} installer; this build is for linux-${arch}"
+    die 1 "$(shown "${installer}") is IBKR's linux-${media_arch} installer; this build is for linux-${arch}"
   fi
   if [ -n "${media_channel}" ] && [ -n "${channel}" ] && [ "${media_channel}" != "${channel}" ]; then
-    die 1 "${installer} is from IBKR's ${media_channel} channel; --channel asks for ${channel}"
+    die 1 "$(shown "${installer}") is from IBKR's ${media_channel} channel; --channel asks for ${channel}"
   fi
   channel="${channel:-${media_channel:-stable}}"
   read_pins
@@ -337,7 +359,7 @@ resolve_offline() {
     return
   fi
   if [ "${strict}" = yes ]; then
-    die "${code}" "${reason}, and the pinned ${pin_version} (${arch}) is not in the cache ${cache}"
+    die "${code}" "${reason}, and the pinned ${pin_version} (${arch}) is not in the cache $(shown "${cache}")"
   fi
   dir="$(cache_newest "" "" "${origin}")"
   if [ -n "${dir}" ]; then
@@ -345,7 +367,7 @@ resolve_offline() {
     use_cached "${dir}"
     return
   fi
-  die "${code}" "${reason}, and no installer of the ${channel} channel (${arch}) is in the cache ${cache}"
+  die "${code}" "${reason}, and no installer of the ${channel} channel (${arch}) is in the cache $(shown "${cache}")"
 }
 
 # resolve_from_ibkr ATTEMPT: one attempt to resolve from IBKR. Sets changed_during_download=yes
@@ -499,7 +521,7 @@ cmd_resolve() {
   if [ -n "${installer}" ]; then
     resolve_installer_file
     if [ "${strict}" = yes ] && { [ "${version}" != "${pin_version}" ] || [ "${installer_sha}" != "${pin_sha}" ]; }; then
-      die 4 "--strict: ${installer} is ${version} (${installer_sha}); versions.json pins ${pin_version} (${pin_sha})"
+      die 4 "--strict: $(shown "${installer}") is ${version} (${installer_sha}); versions.json pins ${pin_version} (${pin_sha})"
     fi
     if [ "${print_plan}" = no ]; then
       cp "${installer}" "${run_dir}/download-${arch}.sh"
@@ -563,7 +585,7 @@ cmd_accept() {
   [ -n "${cache}" ] && [ -n "${image}" ] && [[ "${run}" =~ ^run-[A-Za-z0-9]+$ ]] || usage
   run_dir="${cache}/runs/${run}"
   plan="${run_dir}/plan"
-  [ -f "${plan}" ] || die 1 "no plan for ${run} under ${cache}/runs"
+  [ -f "${plan}" ] || die 1 "no plan for ${run} under $(shown "${cache}/runs")"
   version="$(meta_get "${plan}" version)"
   channel="$(meta_get "${plan}" channel)"
   arch="$(meta_get "${plan}" arch)"
@@ -590,7 +612,7 @@ cmd_accept() {
       printf 'version: %s\nchannel: %s\narch: %s\nsha256: %s\nibkr_build_stamp: %s\nsource: %s\naccepted_at: %s\n' \
         "${version}" "${channel}" "${arch}" "${sha}" "${stamp}" "${source}" \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${dest}/meta"
-      say "cached ${version} (${arch}) in ${dest}"
+      say "cached ${version} (${arch}) in $(shown "${dest}")"
     fi
   fi
   rm -rf "${run_dir}"

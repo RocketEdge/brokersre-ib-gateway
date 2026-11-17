@@ -195,7 +195,12 @@ helper() {
     -v "$(host_path "${repo_root}/downloads"):/downloads" -e BROKERSRE_TEST_IBKR_BASE_URL \
     -e BROKERSRE_HOST_SHELL=bash -e "BROKERSRE_HOST_DOWNLOADS=$(host_path "${repo_root}/downloads")" \
     "${helper_image}" bash /repo/scripts/resolve-installer.sh "$@"
-  if [ -n "${installer}" ]; then set -- -v "$(host_path "${installer_dir}"):/installer:ro" "$@"; fi
+  # The helper's messages name the cache and the --installer file as the user knows them
+  # (BROKERSRE_HOST_CACHE, BROKERSRE_HOST_INSTALLER), not by its mounts /cache and /installer.
+  set -- -e "BROKERSRE_HOST_CACHE=${cache_dir}" "$@"
+  if [ -n "${installer}" ]; then
+    set -- -v "$(host_path "${installer_dir}"):/installer:ro" -e "BROKERSRE_HOST_INSTALLER=${installer}" "$@"
+  fi
   for proxy_name in ${proxy_names}; do set -- -e "${proxy_name}" "$@"; done
   if [ "$(uname -s)" = Linux ]; then set -- --user "$(id -u):$(id -g)" "$@"; fi
   docker run --rm "$@"
