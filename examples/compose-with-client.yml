@@ -14,8 +14,10 @@
 # If the gateway is not healthy in time (a second factor is still waiting for approval),
 # `up` stops with "dependency failed to start": approve the prompt, then run `up -d` again.
 #
-# Secrets are the two files of the README's Quick start (compose/secrets/). Pin the image by
-# DIGEST in production. This file is started as shipped by tests/compose/run.sh.
+# Secrets are the two files of the README's Quick start (compose/secrets/). The image is the one
+# scripts/build-image.sh built (brokersre-ib-gateway:stable; README, "Build the image"); in
+# production name one that cannot move (IBGW_IMAGE=brokersre-ib-gateway:<version>, or a digest
+# in your own private registry). This file is started as shipped by tests/compose/run.sh.
 
 # Its own project name, so it does not share a project with another compose file of this
 # repository.
@@ -25,7 +27,9 @@ services:
   ib-gateway:
     # The gateway service of compose/docker-compose.example.yml, setting for setting
     # (tests/compose/run.sh compares the two), minus `ports:` and plus `networks:`.
-    image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+    image: ${IBGW_IMAGE:-brokersre-ib-gateway:stable}
+    # Never fetch an image: a name this host does not have fails at once ("No such image").
+    pull_policy: never
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -82,8 +86,11 @@ services:
   # A placeholder: replace image and command with your strategy. The gateway image is used
   # here only because it is already on the host and has bash and coreutils, which
   # wait-for-gateway.sh needs; your own image needs them too, or its own readiness check.
+  # Without STRATEGY_IMAGE it is whatever IBGW_IMAGE names, and like the gateway it is never
+  # pulled; set pull_policy to what your own image needs when you replace it.
   strategy:
-    image: ${STRATEGY_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+    image: ${STRATEGY_IMAGE:-${IBGW_IMAGE:-brokersre-ib-gateway:stable}}
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       ib-gateway:

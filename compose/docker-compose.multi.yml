@@ -14,7 +14,9 @@
 # Host ports (relay of each gateway, bound to PRIVATE_IP, loopback by default):
 #   live 4001, paper 4002; one more username: uncomment the three blocks marked `# >>>`.
 #
-# Pin the image by DIGEST in production: IBGW_IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...
+# Image: the one scripts/build-image.sh built (brokersre-ib-gateway:stable; README, "Build the
+# image"). In production name one that cannot move: IBGW_IMAGE=brokersre-ib-gateway:<version>
+# or <registry>/brokersre-ib-gateway@sha256:... in your own private registry.
 # This file is started as shipped by tests/compose/run.sh, so every setting here is tested.
 
 # Its own project name: the single-gateway example in this directory would otherwise share
@@ -25,7 +27,10 @@ name: ibgw-multi
 # this block, so they cannot drift apart; it mirrors docker-compose.example.yml line by line
 # (tests/compose/run.sh compares the two).
 x-gateway: &gateway
-  image: ${IBGW_IMAGE:-ghcr.io/rocketedge/brokersre-ib-gateway:stable}
+  image: ${IBGW_IMAGE:-brokersre-ib-gateway:stable}
+  # Never fetch an image: a name this host does not have fails at once ("No such image").
+  # An image from your own registry is pulled on purpose: `pull --policy missing`.
+  pull_policy: never
   restart: unless-stopped
   read_only: true
   tmpfs:
