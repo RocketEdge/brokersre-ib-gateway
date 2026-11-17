@@ -232,10 +232,17 @@ Describe 'Invoke-BuildImage' {
 }
 
 Describe 'build-image.ps1 as a process' {
+    # Start-Process with files, not '& exe 2>$null': in a Windows PowerShell 5.1 host with
+    # $ErrorActionPreference = 'Stop' (as in CI) a redirected native standard error line is a
+    # terminating error, and the test would fail on the usage message it expects.
     It 'exits 2 on a usage error under <edition>' -ForEach $script:editions {
-        & $exe -NoProfile -ExecutionPolicy Bypass -File $script:scriptPath -Channel 2>$null | Out-Null
-        $LASTEXITCODE | Should -Be 2
-        & $exe -NoProfile -ExecutionPolicy Bypass -File $script:scriptPath -Bogus 2>$null | Out-Null
-        $LASTEXITCODE | Should -Be 2
+        foreach ($usage in @('-Channel', '-Bogus')) {
+            $out = Join-Path $TestDrive ('out-' + [guid]::NewGuid().ToString('N'))
+            $err = Join-Path $TestDrive ('err-' + [guid]::NewGuid().ToString('N'))
+            $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $script:scriptPath), $usage)
+            $process = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
+            $process.ExitCode | Should -Be 2 -Because $usage
+            (Get-Content -LiteralPath $err -Raw) | Should -Match 'build-image: '
+        }
     }
 }
