@@ -27,14 +27,15 @@ setup() {
   CALLS="${WORK}/gh.calls"
   mkdir -p "${STUB_BIN}"
   : > "${CALLS}"
-  # gh stub: every call is appended to ${CALLS}; `pr list` prints ${WORK}/pr-count (default 0)
-  # and fails when ${WORK}/fail-list exists.
+  # gh stub: every call is appended to ${CALLS}; `pr list` prints ${WORK}/pr-json (default `[]`,
+  # the JSON `gh pr list --json number,headRepositoryOwner` prints) and fails when
+  # ${WORK}/fail-list exists. It ignores --jq on purpose: the script must filter by itself.
   cat > "${STUB_BIN}/gh" <<EOF
 #!/usr/bin/env bash
 printf 'gh %s\n' "\$*" >> "${CALLS}"
 if [ "\$1 \$2" = "pr list" ]; then
   if [ -f "${WORK}/fail-list" ]; then echo "HTTP 502" >&2; exit 1; fi
-  if [ -f "${WORK}/pr-count" ]; then cat "${WORK}/pr-count"; else echo 0; fi
+  if [ -f "${WORK}/pr-json" ]; then cat "${WORK}/pr-json"; else echo '[]'; fi
 fi
 exit 0
 EOF
@@ -73,19 +74,34 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "scope=full" ]
   [[ "${lines[1]}" == "reason="*"10.50.1h"* ]]
-  # GitHub is asked about every pull request ever opened from the branch the workflow uses.
-  grep -q -F -- 'gh pr list -R example/repo --head update-stable-to-10.50.1h --state all --json number --jq length' "${CALLS}"
+  # GitHub is asked about every pull request ever opened from the branch the workflow uses,
+  # with the owner of the branch's repository.
+  grep -q -F -- 'gh pr list -R example/repo --head update-stable-to-10.50.1h --state all --limit 100 --json number,headRepositoryOwner' "${CALLS}"
 }
 
 @test "an hourly run skips a version that already has a pull request, open, closed or merged" {
-  echo 1 > "${WORK}/pr-count"
+  echo '[{"number":7,"headRepositoryOwner":{"login":"example"}}]' > "${WORK}/pr-json"
   run --separate-stderr "${SCRIPT}" hourly stable 10.50.1h 10.50.1g
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "scope=skip" ]
-  echo 3 > "${WORK}/pr-count"
+  # The owner's login is compared without regard to case (GitHub logins are case-insensitive).
+  echo '[{"number":8,"headRepositoryOwner":{"login":"Example"}},{"number":3,"headRepositoryOwner":{"login":"example"}}]' > "${WORK}/pr-json"
   run --separate-stderr "${SCRIPT}" hourly latest 10.53.1a 10.52.1d
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "scope=skip" ]
+}
+
+@test "a pull request from a fork's branch of the same name does not count" {
+  # Anyone can open a pull request from a fork branch named update-stable-to-<version>; it
+  # must not stop the first full check of that version.
+  echo '[{"number":9,"headRepositoryOwner":{"login":"someone-else"}}]' > "${WORK}/pr-json"
+  run --separate-stderr "${SCRIPT}" hourly stable 10.50.1h 10.50.1g
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "scope=full" ]
+  echo '[{"number":9,"headRepositoryOwner":{"login":"example-fork"}},{"number":10,"headRepositoryOwner":null}]' > "${WORK}/pr-json"
+  run --separate-stderr "${SCRIPT}" hourly stable 10.50.1h 10.50.1g
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "scope=full" ]
 }
 
 @test "an hourly run sees a lower version than the pin too (IBKR rolled the channel back)" {
@@ -102,11 +118,13 @@ teardown() {
   [[ "$stderr" == *"update-stable-to-10.50.1h"* ]]
 }
 
-@test "an answer from GitHub that is not a count fails the run" {
-  echo "not a number" > "${WORK}/pr-count"
-  run --separate-stderr "${SCRIPT}" hourly stable 10.50.1h 10.50.1g
-  [ "$status" -eq 1 ]
-  [ -z "$output" ]
+@test "an answer from GitHub that is not a list of pull requests fails the run" {
+  for answer in "not json" '{"message":"Bad credentials"}' '3'; do
+    printf '%s\n' "${answer}" > "${WORK}/pr-json"
+    run --separate-stderr "${SCRIPT}" hourly stable 10.50.1h 10.50.1g
+    [ "$status" -eq 1 ] || { echo "answer ${answer} -> ${status}"; false; }
+    [ -z "$output" ]
+  done
 }
 
 @test "bad input is refused with exit 2 and nothing on stdout" {

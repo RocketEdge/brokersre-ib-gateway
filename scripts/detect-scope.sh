@@ -28,8 +28,11 @@
 #
 # Side effects: for an hourly run that sees a label other than the pin, one read of GitHub:
 #   gh pr list -R "$GITHUB_REPOSITORY" --head update-<channel>-to-<remote> --state all
+#     --limit 100 --json number,headRepositoryOwner
 # (open, closed and merged pull requests; the branch is the one detect-releases.yml opens its
-# pull request from). Needs gh with GH_TOKEN, and GITHUB_REPOSITORY, only then.
+# pull request from). Only pull requests whose branch is in this repository count: `--head`
+# also matches a fork's branch of the same name. Needs gh with GH_TOKEN, GITHUB_REPOSITORY and
+# jq, only then.
 #
 # Why the inputs are checked: the versions come from IBKR's server and reach a branch name and
 # GITHUB_OUTPUT; anything but a plain IBKR build label, or a line break, is refused.
@@ -69,12 +72,18 @@ if [ "${remote}" = "${pinned}" ]; then
 fi
 
 branch="update-${channel}-to-${remote}"
-if ! count="$(gh pr list -R "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is not set}" --head "${branch}" --state all --json number --jq length)"; then
+repository="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is not set}"
+if ! listing="$(gh pr list -R "${repository}" --head "${branch}" --state all --limit 100 --json number,headRepositoryOwner)"; then
   printf 'detect-scope: could not list the pull requests from %s\n' "${branch}" >&2
   exit 1
 fi
-if ! [[ "${count}" =~ ^[0-9]+$ ]]; then
-  printf 'detect-scope: the pull request lookup for %s answered %q, not a count\n' "${branch}" "${count}" >&2
+# `--head` matches the branch name in any repository, forks included: anyone can open a pull
+# request from a fork branch named update-<channel>-to-<version>. Only this repository's own
+# branches count (the owner's login, compared without regard to case as GitHub does).
+if ! count="$(jq -e --arg owner "${repository%%/*}" \
+  'if type == "array" then [.[] | select(((.headRepositoryOwner.login // "") | ascii_downcase) == ($owner | ascii_downcase))] | length else error("not a list") end' \
+  <<<"${listing}" 2>/dev/null)" || ! [[ "${count}" =~ ^[0-9]+$ ]]; then
+  printf 'detect-scope: the pull request lookup for %s did not answer with a list of pull requests\n' "${branch}" >&2
   exit 1
 fi
 if [ "${count}" -gt 0 ]; then
