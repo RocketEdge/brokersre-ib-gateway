@@ -12,6 +12,7 @@ knowing Docker, and keep it running through restarts, sleep and Windows Update.
 - [Start after a restart](#start-after-a-restart)
 - [If IBKR rejects the login](#if-ibkr-rejects-the-login)
 - [The weekly Sunday login](#the-weekly-sunday-login)
+- [Coming from the public image](#coming-from-the-public-image)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Files the kit creates](#files-the-kit-creates)
@@ -316,6 +317,36 @@ docker exec brokersre-ib-gateway-paper cat /var/log/ibgateway/state/phase
 ```
 
 You should see: `logged-in`. (For live the container is `brokersre-ib-gateway-live`.)
+
+## Coming from the public image
+
+Earlier versions of the kit ran `ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default,
+the public package that is being withdrawn. A gateway set up that way keeps running and starts
+again after a restart, because Docker keeps the image on the computer; what fails once the
+package is gone is any pull of it. To move to an image built on this computer, when someone
+can approve the second factor:
+
+1. Update the repository (`git pull`, or download the ZIP again into the same place: the
+   scheduled tasks run `start.ps1` from it).
+2. In the kit folder, run setup with the options you used before (`-Live`, `-Path`, ...) and
+   `-Force`:
+
+   ```powershell
+   .\setup.ps1 -Force
+   ```
+
+   Setup finds `brokersre-ib-gateway:stable` missing and builds it (Docker Desktop:
+   `..\scripts\build-image.ps1`; Docker Engine in WSL: `build-image.sh` from a copy in the
+   distribution). The `compose.yaml` it writes names the new image and `pull_policy: never`,
+   so it differs from the old one, and setup replaces a differing file only with `-Force`
+   (it keeps a backup, `compose.yaml.bak-<time>`). Docker Compose then replaces the container:
+   the gateway logs in again, with the second factor.
+3. If you passed `-ImageRef ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`, leave it out
+   now, or name the copy you pushed to your own registry.
+
+Without `-Force` setup stops with `compose.yaml exists and differs from what these options
+generate` and changes nothing. `start.ps1` never builds: until setup has run, the scheduled
+start keeps using the old `compose.yaml` and the image Docker still has.
 
 ## Troubleshooting
 

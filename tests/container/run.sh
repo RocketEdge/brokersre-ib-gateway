@@ -3,7 +3,7 @@
 # Container-level tests: run against a built image with the Docker CLI, no IBKR credentials,
 # never contacting IBKR's login servers (the IBC smoke test runs with --network none).
 #
-# Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh [--only ibc-smoke]
+# Usage: IMAGE=brokersre-ib-gateway:stable tests/container/run.sh [--only ibc-smoke]   (the image scripts/build-image.sh built)
 #   --only ibc-smoke   run the IBC smoke test alone (no network, IBC starts, the command server
 #                      answers, STOP ends the Gateway tidily): the check scripts/build-image.sh
 #                      and .ps1 run after a build. It needs only the Docker CLI and no host path

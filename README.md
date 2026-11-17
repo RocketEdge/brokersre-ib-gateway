@@ -68,6 +68,7 @@ what was not run is marked **not tested**.
 - [Pushing to your own private registry](#pushing-to-your-own-private-registry)
 - [Building in your own CI](#building-in-your-own-ci)
 - [Upgrading and rolling back](#upgrading-and-rolling-back)
+- [Coming from the public image](#coming-from-the-public-image)
 - [Troubleshooting the build](#troubleshooting-the-build)
 
 ### Why there is no public image
@@ -595,6 +596,49 @@ and roll back by pinning the earlier digest. A rebuild of the same version (for 
 security fixes) is a new image under the same version tag: tag the old one first if you want
 to keep it. [Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a
 rebuild brings a new Gateway.
+
+### Coming from the public image
+
+Earlier versions of this repository's compose files and of the Windows kit ran
+`ghcr.io/rocketedge/brokersre-ib-gateway:stable` by default, the public package that is being
+withdrawn. What that means for a gateway set up that way:
+
+- **Until you change anything** it keeps running, and it starts again after a restart: Docker
+  keeps the image on the host. What stops working once the package is gone is every pull: a
+  new host, a `docker compose pull`, an `IBGW_IMAGE` that names a digest you have not pulled.
+- **After you update this repository** (`git pull`), the compose files name
+  `brokersre-ib-gateway:stable` and never pull it: `up` stops with
+  `No such image: brokersre-ib-gateway:stable` until you have built it.
+
+Move to an image you built, at a time when someone can approve the second factor (the
+gateway is replaced, so it logs in again):
+
+```bash
+git pull
+scripts/build-image.sh
+docker compose -f compose/docker-compose.example.yml up -d --force-recreate
+```
+
+If you set `IBGW_IMAGE` to the public package (in your shell or in `compose/.env`), remove it
+or point it at your own build first. `--force-recreate` makes compose replace the container
+even where its definition did not change (with the image name changed, it would anyway). The
+first event names what runs now:
+`docker compose -f compose/docker-compose.example.yml logs ib-gateway | grep container_start`.
+For several gateways use `compose/docker-compose.multi.yml` with your profiles in the same way.
+
+With the Windows kit, in the kit folder of the updated repository:
+
+```powershell
+.\setup.ps1 -Force
+```
+
+with the options you used before (`-Live`, `-Path`, ...). Setup builds
+`brokersre-ib-gateway:stable` because it is missing; the `compose.yaml` it writes differs from
+the old one (the image name and `pull_policy`), and setup replaces a differing file only with
+`-Force` (it keeps a backup). The container is then replaced, which means a new login with
+the second factor. If you passed `-ImageRef ghcr.io/rocketedge/brokersre-ib-gateway@sha256:...`,
+leave it out, or name the copy in your own registry. Details:
+[windows/README.md](windows/README.md#coming-from-the-public-image).
 
 ### Troubleshooting the build
 
