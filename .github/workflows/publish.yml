@@ -3,6 +3,14 @@
 # finds a fixable finding). Each channel gets a git tag v<version>-<channel>[-rDATE] and a GitHub
 # release carrying digests.json, one SBOM per platform and the VEX document for IBKR's bundled jars.
 #
+# The package is PRIVATE (ADR 0018): it holds IBKR's installed IB Gateway, which is not
+# redistributed. A package GitHub creates on the first push is private, and this file never
+# sets a visibility. Every registry read and write below (the push, Trivy's remote source, the
+# SBOM tool, cosign, the provenance push, imagetools) uses the credential that
+# docker/login-action writes to the Docker CLI's config.json with the workflow's token
+# (packages: write). The release stays public: its notes name the digest for RocketEdge's
+# own pins and tell everyone else to build the image from the tag (tests/bats/ci/private-package.bats).
+#
 # Order, and why (a tag never points at bytes that were not scanned and signed):
 #   1. build linux/amd64 and linux/arm64 once and push the image index BY DIGEST ONLY: it has no
 #      tag, so no consumer of a tag can receive it;
@@ -380,10 +388,14 @@ jobs:
           IDENTITY_REGEXP: '^https://github.com/RocketEdge/brokersre-ib-gateway/.github/workflows/publish.yml@refs/heads/main$'
         run: |
           # Built with printf so every line stays indented inside this YAML block scalar.
-          printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
+          # The release is public, the image is not (ADR 0018): the notes name the digest for
+          # RocketEdge's own pins and tell everyone else to build the image from this tag. The
+          # assets (digests, SBOMs, OpenVEX) hold no IBKR binary and stay public.
+          printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
             "IB Gateway $VERSION (IBKR $CHANNEL channel) with IBC $IBC_RELEASE_TAG on ubuntu:26.04@$UBUNTU_DIGEST." \
-            "Pin this exact build: \`$IMAGE@$DIGEST\`" \
-            "Verify: \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '$IDENTITY_REGEXP'\`" \
+            "To run it, build the image yourself from this tag: \`git checkout $TAG\`, then \`scripts/build-image.sh --channel $CHANNEL\` (or \`scripts/build-image.ps1 -Channel $CHANNEL\`; add \`--strict\` / \`-Strict\` to refuse any IB Gateway build other than $VERSION); the README describes the build. The image holds IBKR's installed IB Gateway, which is not redistributed." \
+            "RocketEdge's own image of this build is private and cannot be pulled without access to the package: \`$IMAGE@$DIGEST\`." \
+            "With read access to the package, verify it: \`cosign verify $IMAGE@$DIGEST --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '$IDENTITY_REGEXP'\`" \
             "Both platforms (linux/amd64, linux/arm64) of this digest passed the Trivy gate for OS packages before the tags moved. Each platform has its own SBOM (\`sbom-$CHANNEL-linux-amd64.cdx.json\`, \`sbom-$CHANNEL-linux-arm64.cdx.json\`), attested to that platform's manifest; the two manifest digests are in \`digests-$CHANNEL.json\` under \`platforms\`. IBKR's bundled jars carry known CVEs that this image cannot patch; the attached \`ibgateway-vendor-jars.openvex.json\` states what is and is not known about each (docs/evidence.md)." \
             "Interactive Brokers, IBKR, TWS and IB Gateway are trademarks of Interactive Brokers LLC. Not affiliated with Interactive Brokers." \
             > "$RUNNER_TEMP/release-notes.md"

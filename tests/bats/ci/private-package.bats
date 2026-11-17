@@ -168,3 +168,27 @@ package_workflows() {
   [ "$(step_where "${WF}/qualify-paper.yml" qualify name "Only from main, only by digest")" -eq 1 ]
   run ! grep -q -E '^  (pull_request|pull_request_target|push|schedule):' "${WF}/qualify-paper.yml"
 }
+
+@test "the release notes tell nobody to pull the image and name the way to build it" {
+  run awk -f "${LISTER}" "${WF}/publish.yml"
+  release="$(printf '%s\n' "${output}" | awk -F '\t' '$2 == "name" && $3 == "Tag and release" { print $1 }')"
+  [ -n "${release}" ]
+  notes="$(printf '%s\n' "${output}" | awk -F '\t' -v step="${release}" '$1 == step && $2 == "run" { print $3 }')"
+  [[ "${notes}" != *"Pin this exact build"* ]]
+  [[ "${notes}" == *"private"* ]]
+  [[ "${notes}" == *"scripts/build-image.sh --channel \$CHANNEL"* ]]
+  # The notes still carry the digest RocketEdge pins, and the release is checked for it.
+  [[ "${notes}" == *'$IMAGE@$DIGEST'* ]]
+  [[ "${notes}" == *'--expect-in-notes "$DIGEST"'* ]]
+}
+
+@test "no workflow step changes the visibility of a package" {
+  # Scripts and inputs of every step (comments are not steps): a package created by the first
+  # push is private, and nothing may make it public again.
+  for file in "${WF}"/*.yml; do
+    run ! grep -q -i 'visibility' <<<"$(awk -f "${LISTER}" "${file}")"
+  done
+  # The check reads scripts: a step that sets the visibility is caught.
+  printf '%s\n' 'jobs:' '  x:' '    steps:' '      - run: gh api -X PATCH orgs/o/packages/container/p -f visibility=public' > "${WORK}/visible.yml"
+  grep -q -i 'visibility' <<<"$(awk -f "${LISTER}" "${WORK}/visible.yml")"
+}
