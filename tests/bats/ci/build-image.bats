@@ -1028,7 +1028,8 @@ cached_meta() {
   ! grep -Ei '^[[:space:]]*(ARG|ENV|LABEL)[[:space:]].*(https?_proxy|no_proxy|all_proxy|ftp_proxy)' "${SRC}/Dockerfile" || false
 }
 
-# --- OCI labels of a helper build: created (build time, UTC) and revision (the commit).
+# --- OCI labels of a helper build: created (the commit's time, else IBKR's build time; never
+# the clock) and revision (the commit); no provenance attestation.
 
 # created_label: the org.opencontainers.image.created of the recorded build.
 created_label() {

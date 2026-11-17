@@ -199,10 +199,11 @@ if [[ "${label_source}" =~ ^(ibkr|installer|override)$ ]]; then
 else
   fail "installer source label" "com.rocketedge.brokersre.installer.source is '${label_source}'"
 fi
-# The OCI labels of this build, not of the Ubuntu base image: when it was built (UTC, to the
-# second, as scripts/build-image.sh and bake-env.sh write it; Ubuntu's own has fractions and
-# +00:00), from which commit (unknown outside a git work tree), and where its recipe is (the
-# README's build section; the package page it named before is gone).
+# The OCI labels of this build, not of the Ubuntu base image: a created time in UTC, to the
+# second (scripts/build-image.sh writes the commit's time or IBKR's build time of the
+# installer, bake-env.sh the build time; Ubuntu's own has fractions and +00:00), from which
+# commit (unknown outside a git work tree), and where its recipe is (the README's build
+# section; the package page it named before is gone).
 oci_labels="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.created"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.url"}}')"
 IFS='|' read -r label_created label_revision label_url <<<"${oci_labels}"
 if [[ "${label_created}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \

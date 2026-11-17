@@ -5,6 +5,37 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — An unchanged rebuild keeps its image id: deterministic `created`, no provenance
+
+- **What changed:** both wrappers label `org.opencontainers.image.created` with the checkout's
+  commit time in UTC (asked inside the checkout, like `revision`), or outside a git work tree
+  with IBKR's build time of the installer (the stamp's date and time as ISO 8601, written as
+  UTC; IBKR names no zone), never the clock, and build the image with `--provenance=false`.
+  README ("Pinning and reproducing a build", "Upgrading and rolling back"),
+  `docs/evidence.md`, the container suite's comment and both contract files say so.
+- **Result:** bats and Pester red first (two builds of the same inputs, one `created`; a new
+  commit, a new one; `--provenance=false` on the image build), then green. End to end on
+  Docker Desktop 29.9.3 (containerd image store), a fresh clone of `ba2b979`, cache hit: two
+  consecutive `build-image.sh` runs (77 s, 75 s) both gave `sha256:3d508f042063…`, and
+  `build-image.ps1` on the same clone gave the same id; `docker compose ... up -d`
+  (`IBC_LAUNCH=no`, dummy secret files) after the second build printed `Container
+  det-e2e-ib-gateway-1 Running`, the container started by the first `up`. A new commit gave a
+  new manifest, and compose recreated the container. A build through Squid with a canary
+  password in `HTTPS_PROXY` gave the same id and named its two build records.
+- **What did NOT work / root cause:** the deterministic label alone did not keep the id: two
+  warm builds of `890bd39` gave `a2171de11e94`, then `f4a0fdcc0004`, with one manifest,
+  `503040d3eba0`. buildx attaches a min-mode SLSA provenance attestation by default, the
+  containerd image store keeps it, and the image id is then the index over the image manifest
+  and that attestation, whose `startedOn` and `finishedOn` change with every build; with
+  `BUILDX_NO_DEFAULT_ATTESTATIONS=1` both builds were `503040d3eba0`. Compose was not misled:
+  it records the platform manifest (label `com.docker.compose.image`) and left the gateway
+  running in both cases, so the recreation came from the clock in `created`. The attestation
+  held no build arguments (no canary in it): not a leak. It did record the clone's source path.
+- **Next step:** a build without the cached layers (another builder, a pruned cache) still
+  gives a new image, by design (the Ubuntu packages are upgraded again). RocketEdge's bake path
+  still writes the build time (each published digest is signed and attested; it is never
+  rebuilt in place). arm64 and the Windows kit's WSL path were not re-measured.
+
 ### 2026-11-17 — Review of #43: build records, the helper's own build, 5.1 quoting
 
 - **What changed:** when a proxy variable's value holds `@`, both wrappers give the helper

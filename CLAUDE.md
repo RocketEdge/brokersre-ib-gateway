@@ -590,10 +590,17 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   value holds `@` (`--metadata-file`, deleted at once). The helper image's build gets the
   proxy names too (its `apk add`), and the helper's curl errors are shown with `//user:pw@`
   redacted. PowerShell 5.1 turns a trailing backslash before its closing quote into an
-  escaped quote: no argument may end in a separator (`ConvertTo-BiTrimmedPath`). Probe the daemon with `docker version --format
-  '{{.Server.Version}}'` before anything else (`buildx version` answers without a daemon) and
-  do not echo Docker's error (it can carry `DOCKER_HOST`). The helper names host paths, not
-  its mounts: a new message about the cache or the `--installer` file goes through `shown`
-  (`BROKERSRE_HOST_CACHE`, `BROKERSRE_HOST_INSTALLER`). A test string with a backslash goes
-  in through the Edit tool or `bs='\'`: a Bash heredoc on this host halves backslashes, and
-  `"\${X}"` then stops expanding.
+  escaped quote: no argument may end in a separator (`ConvertTo-BiTrimmedPath`). Probe the
+  daemon with `docker version --format '{{.Server.Version}}'` before anything else (`buildx
+  version` answers without a daemon) and do not echo Docker's error (it can carry
+  `DOCKER_HOST`). The helper names host paths, not its mounts: a new message about the cache
+  or the `--installer` file goes through `shown` (`BROKERSRE_HOST_CACHE`,
+  `BROKERSRE_HOST_INSTALLER`). The wrappers' labels never hold the build time:
+  `org.opencontainers.image.created` is the checkout's commit time in UTC (asked inside the
+  checkout), else IBKR's build time from the plan's stamp, and the image build passes
+  `--provenance=false` (buildx's default attestation records the build's start and end time,
+  and the containerd image store's image id covers it), so an unchanged rebuild on the same
+  builder keeps its image id. Compose recreates a container when the platform manifest changes
+  (label `com.docker.compose.image`), which means a new login. A test string with a backslash
+  goes in through the Edit tool or `bs='\'`: a Bash heredoc on this host halves backslashes,
+  and `"\${X}"` then stops expanding.

@@ -469,7 +469,9 @@ What a build used is written down in three places:
   `.ibkr.build_stamp`, `.installer.sha256`, `.installer.source` (`ibkr` or `installer`),
   `.qualified`, `.ibc.version`, `.ibc.release`, and the OCI labels
   `org.opencontainers.image.revision` (the commit you built from, `unknown` outside a git
-  clone) and `org.opencontainers.image.created` (the build time, UTC).
+  clone) and `org.opencontainers.image.created`: that commit's time in UTC, or outside a git
+  clone IBKR's build time of the installer (the date and time of `ibkr_build_stamp` in ISO
+  8601; IBKR names no time zone, so it is written as UTC). It is never the time of the build.
 - **[versions.json](versions.json)** of the commit you built from: the Ubuntu base image by
   digest, IBC by release and SHA-256, and the pinned Gateway versions with their SHA-256 and
   build stamps. The helper image is pinned by digest in `scripts/build-helper/Dockerfile`.
@@ -477,15 +479,21 @@ What a build used is written down in three places:
 
 To build the same Gateway again, check out the same commit and build with the same cache
 (or `--installer` with the kept file). Two things are not frozen: Ubuntu packages are
-installed and upgraded at build time (so a later build has later security fixes), and the
-helper's Alpine packages come from Alpine's index at its first build
-([limitations](docs/limitations.md) L36). A rebuild therefore has the same IB Gateway and IBC,
-not the same image id: each build records its own time (`org.opencontainers.image.created`),
-so even a rebuild that reuses every cached layer gets a new id (before the build scripts set
-that label, a rebuild on the same builder kept its id; one on another builder, with other
-cached Ubuntu layers, did not). Compose starts a container again when its tag points at a new
-id, so `docker compose up -d` after a rebuild means a new login. To run exactly one image,
-name it by its id, by a tag you do not rebuild, or by its digest in your registry.
+installed and upgraded when Docker's build cache does not hold that step (so a later build
+without it has later security fixes), and the helper's Alpine packages come from Alpine's
+index at its first build ([limitations](docs/limitations.md) L36).
+
+Compose starts a container again when its tag points at another image, and a new container
+means a new login. A rebuild of the same commit and installer on the same builder reuses every
+cached layer and keeps the image id: no label holds the build time, and the scripts attach no
+provenance attestation (`--provenance=false`; Docker's default one records the build's start
+and end time, and with the containerd image store the image id covers it). So `docker compose
+up -d` after such a rebuild leaves the running gateway alone. A new commit (even one that
+changes only documentation: `created` is its time), another installer, or a build without
+those cached layers (another builder, or a pruned build cache: the Ubuntu packages are
+installed and upgraded again) gives a new image, and the next `up -d` starts the gateway
+again with a new login. To run exactly one image, name it by its id, by a tag you do not
+rebuild, or by its digest in your registry.
 
 ### Pushing to your own private registry
 
@@ -648,10 +656,13 @@ IBGW_IMAGE=brokersre-ib-gateway:previous docker compose -f compose/docker-compos
 ```
 
 `docker image ls brokersre-ib-gateway` lists what you have. With a registry, push each version
-and roll back by pinning the earlier digest. A rebuild of the same version (for Ubuntu's
-security fixes) is a new image under the same version tag: tag the old one first if you want
-to keep it. [Is a newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a
-rebuild brings a new Gateway.
+and roll back by pinning the earlier digest. A rebuild of the same commit and version on the
+same builder gives the same image ([Pinning and reproducing a
+build](#pinning-and-reproducing-a-build)). It brings Ubuntu's security fixes only when Docker's
+build cache no longer holds the package step (another builder, or a pruned cache), and is then
+a new image under the same version tag: tag the old one first if you want to keep it. [Is a
+newer IB Gateway available?](#is-a-newer-ib-gateway-available) says when a rebuild brings a
+new Gateway.
 
 ### Coming from the public image
 

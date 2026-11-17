@@ -82,10 +82,13 @@ them in your own pipeline. `qualified_by_project: yes` says that the version and
 equal the repository's pin, which passed the project's offline CI; a build that says `no` holds
 a Gateway build the project's CI has not run on ([limitations](limitations.md), L35). Neither
 says that a login happened: a paper login is a separate qualification
-(`scripts/qualify-paper.sh`, [ADR 0014](adr/0014-paper-login-qualification.md)). The labels
-`org.opencontainers.image.created` and `.revision` are set by the maintainers' bake path only:
-an image built with the build helper carries the Ubuntu base image's `created` date and no
-revision (`docker image inspect --format '{{.Created}}'` gives the build time).
+(`scripts/qualify-paper.sh`, [ADR 0014](adr/0014-paper-login-qualification.md)). The build
+scripts label the image with `org.opencontainers.image.revision` (the commit, or `unknown`
+outside a git clone) and `org.opencontainers.image.created`, which is that commit's time in UTC
+(outside a git clone, IBKR's build time of the installer), not the time of the build, so that
+an unchanged rebuild keeps its image id; the maintainers' bake path writes the build time.
+`docker image inspect --format '{{.Created}}'` gives the time the image's last layer was built,
+which a rebuild from Docker's build cache keeps. The scripts build with `--provenance=false`.
 
 ## Which exact software is running?
 
