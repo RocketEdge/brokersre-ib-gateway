@@ -126,3 +126,45 @@ package_workflows() {
     done
   done
 }
+
+@test "every job that reads the package logs in to ghcr.io with the workflow's token first" {
+  run logs_in_before "${WF}/publish.yml" publish id push
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run logs_in_before "${WF}/rebuild.yml" scan-published id published
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run logs_in_before "${WF}/qualify-paper.yml" qualify name "Pull the image"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "a login that is missing, conditional, late or without the permission is caught" {
+  # Without any login step.
+  awk '/^      - / { skip = ($0 ~ /docker\/login-action@/) } !skip' "${WF}/rebuild.yml" > "${WORK}/missing.yml"
+  run logs_in_before "${WORK}/missing.yml" scan-published id published
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no unconditional ghcr.io login"* ]]
+  # The shape qualify-paper.yml had before: a login only for the attestation (`if:`).
+  awk '{ print } /^      - uses: docker\/login-action@/ { print "        if: success() && inputs.attest" }' "${WF}/qualify-paper.yml" > "${WORK}/conditional.yml"
+  run logs_in_before "${WORK}/conditional.yml" qualify name "Pull the image"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no unconditional ghcr.io login"* ]]
+  # A login after the first read.
+  run logs_in_before "${WF}/publish.yml" publish name "The index holds exactly one image per platform (scripts/platform-digests.sh)"
+  [ "$status" -eq 0 ]
+  run logs_in_before "${WF}/publish.yml" publish uses "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1"
+  [ "$status" -eq 1 ]
+  # A job whose permissions do not name packages.
+  sed '/^      packages:/d' "${WF}/rebuild.yml" > "${WORK}/rebuild.yml"
+  run logs_in_before "${WORK}/rebuild.yml" scan-published id published
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"do not name packages"* ]]
+}
+
+@test "the paper qualification still takes a digest only, from main only, behind its environment" {
+  text="$(job "${WF}/qualify-paper.yml" qualify)"
+  [[ "${text}" == *'"${IMAGE}" =~ ^ghcr\.io/rocketedge/brokersre-ib-gateway@sha256:[0-9a-f]{64}$'* ]]
+  [[ "${text}" == *'if [ "${GITHUB_REF}" != "refs/heads/main" ]; then'* ]]
+  printf '%s\n' "${text}" | grep -q -x '    environment: paper-qualification'
+  # The digest check is the job's first step: nothing, not even the login, comes before it.
+  [ "$(step_where "${WF}/qualify-paper.yml" qualify name "Only from main, only by digest")" -eq 1 ]
+  run ! grep -q -E '^  (pull_request|pull_request_target|push|schedule):' "${WF}/qualify-paper.yml"
+}

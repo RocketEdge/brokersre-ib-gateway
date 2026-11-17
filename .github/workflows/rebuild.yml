@@ -20,7 +20,8 @@
 #
 # The digest comes from the registry, not from a release's digests-<channel>.json: releases of an
 # already released version are updated in place, so the newest release is not always the one
-# the channel tag points at.
+# the channel tag points at. The package is private (ADR 0018): the scan logs in to ghcr.io with
+# the workflow's token (packages: read) before it reads anything.
 #
 # When both paths fall on the same day (the 1st): a rebuild requested by the 05:30 scan and the
 # 07:00 monthly rebuild carry the same -rYYYYMMDD suffix. The later publish moves that tag and
@@ -83,6 +84,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      packages: read # the package is private (ADR 0018): reading a tag and scanning need a login
     env:
       CHANNEL: ${{ matrix.channel }}
     # A matrix job has one set of outputs for all legs; each leg writes only the output named
@@ -92,6 +94,16 @@ jobs:
       latest: ${{ steps.issue.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # docker/login-action writes the credential to the Docker CLI's config.json; `docker buildx
+      # imagetools` and Trivy's remote source read it from there (Trivy reads the Docker
+      # credentials of the registry), and the action's post step logs out. Without it an
+      # anonymous read of the private package fails and the leg fails: "could not scan" is
+      # never read as "nothing to do".
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve the digest the channel tag points at
         id: published
         run: |
