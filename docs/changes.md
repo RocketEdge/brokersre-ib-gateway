@@ -5,6 +5,36 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Re-review of #41: no credentials in the WSL copy or the build context
+
+- **What changed:** the Windows kit's WSL build packs a named list of what
+  `scripts/build-image.sh` reads (Dockerfile, `.dockerignore`, `versions.json`, `rootfs/`, the
+  build, resolve and fetch scripts, `scripts/build-helper/`, `tests/container/run.sh`) instead
+  of the whole checkout, removes the archive right after unpacking and gives each copy step an
+  explicit 120 s deadline. `.dockerignore` also excludes `**/secrets`, `**/.env` and
+  `**/*.env` after its re-includes. The leftover advice quotes the host path for its shell
+  (bash `'\''`; PowerShell doubles `'` and the typographic quotes it treats as `'`). The README
+  says the paper-qualified digests came from the former public package (not "before the image
+  became private") and lists the kit's WSL installer cache. Merged `origin/main` after #40.
+- **Result:** red first, then green: four Pester tests of the copy failed on the old code (it
+  packed `.` and kept the archive; 11 of 11 in the context pass under PowerShell 7 and 5.1); a
+  copy holding only the list (348,160 bytes, 32 files; planted credentials, `.env` files,
+  `.venv` and `downloads/` absent from the archive) built with `scripts/build-image.sh` (exit 0,
+  IBC smoke test passed); `build-context.bats` exported what BuildKit received: a top-level
+  `compose/secrets` and `.env` never left the checkout (held before), but `rootfs/secrets/`,
+  `rootfs/.env` and `rootfs/etc/*.env` did until the new rules; the two quoting tests failed
+  on the old advice (the printed `rm` did not parse) and pass, and the PowerShell command
+  removed the file in a folder named with all five quote characters (PowerShell 7).
+- **What did NOT work / root cause:** the first WSL copy excluded what it knew to be large
+  (`.git`, `downloads/`, the bats checkout) instead of naming what the build needs, so every
+  untracked file of a used checkout went along, credentials included, and a killed setup left
+  them in the distribution's `/tmp`. Excluding is open-ended; naming the inputs is closed. A
+  `docker run -v <missing file>:...` for gitleaks created an empty directory `.gitleaks.toml`
+  in the worktree, which then failed the gitleaks pre-commit hook ("Config File .gitleaks Not
+  Found"); removed.
+- **Next step:** CI on the merge; a real WSL distribution for the kit's copy-and-build path
+  (still mocked).
+
 ### 2026-11-17 — Review of #41: image modes, the kit's WSL build, wording that stays true
 
 - **What changed:** the Dockerfile sets owner (root) and mode of everything `rootfs/` brings in

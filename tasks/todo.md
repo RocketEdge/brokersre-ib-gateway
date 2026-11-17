@@ -155,6 +155,7 @@
 - [ ] After the public package is deleted (Phase 4): a follow-up pull request switches "RocketEdge no longer distributes a public image ... is being withdrawn" to the past tense with the date and the proof (an anonymous pull that fails), in README, NOTICE, SECURITY, evidence, upgrade policy, upgrade check, the compose and kit texts, the Azure pack and the contract files
 - [x] Review of #41 (2026-11-17): rootfs owner and modes fixed in the Dockerfile (container check); the kit builds in WSL from a copy in the distribution; the leftover advice names the caller's command and path; wording true before and after the deletion; `qualified_by_project` defined as "the pin passed the offline CI"; migration steps for users of the public default
 - [ ] Not covered after the review: a real WSL distribution for the kit's copy-and-build path
+- [x] Re-review of #41 (2026-11-17): the WSL copy packs a named list of the build's inputs (no `compose/secrets`, `.env`, `downloads/`), removes the archive after unpacking; `.dockerignore` excludes `**/secrets` and `.env` files inside admitted folders (`build-context.bats`); the leftover advice quotes the path per shell; README wording on the paper-qualified digests and the WSL cache; merged `origin/main` after #40
 
 ## Private image, public build recipe: phase 3 (2026-11-17, branch `ci/private-publish`)
 

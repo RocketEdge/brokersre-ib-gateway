@@ -300,9 +300,14 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   registry path). The Azure VM overlay (`apply-config.sh`) sets `pull_policy: missing` for the
   digest its userData names. `setup.ps1` builds a missing `brokersre-ib-gateway:stable` or
   `:latest` with `scripts/build-image.ps1` (`Invoke-GwImageBuild`); with Docker Engine in WSL
-  it copies the tree into the distribution first (`Invoke-GwWslImageBuild`), never builds from
-  `/mnt/c`; `start.ps1` never builds. Docs say "no longer distributes a public image" / "is
-  being withdrawn" until the deletion is done and proven (open item in `tasks/todo.md`).
+  it copies a named list of the build's inputs into the distribution first
+  (`Invoke-GwWslImageBuild`: Dockerfile, `.dockerignore`, `versions.json`, `rootfs/`, the
+  build, resolve and fetch scripts, `scripts/build-helper/`, `tests/container/run.sh`), never
+  the whole tree (a checkout holds IBKR credentials in `compose/secrets`) and never builds from
+  `/mnt/c`; a new file that `build-image.sh` reads joins that list. `.dockerignore` admits only
+  the Dockerfile's inputs and excludes `**/secrets`, `**/.env`, `**/*.env` after the re-includes
+  (`tests/bats/ci/build-context.bats`). `start.ps1` never builds. Docs say "no longer
+  distributes a public image" / "is being withdrawn" until the deletion is done and proven (open item in `tasks/todo.md`).
   `qualified_by_project: yes` means the pin passed the offline CI, never that a login did.
 - COPY takes owner and mode from the build host (Windows context: 0755 on every file; a 0777
   context left `/etc` and `/usr` world-writable): the Dockerfile sets owner and mode of every
