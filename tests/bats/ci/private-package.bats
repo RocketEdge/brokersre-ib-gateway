@@ -126,6 +126,58 @@ gate_problems() {
   return "${bad}"
 }
 
+# GATE_STEPS: "<job> <step id>" of every step that runs scripts/check-package-private.sh in
+# publish.yml; each must stop its job unless the script exits 0.
+GATE_STEPS=("private-package anonymous")
+
+# gate_switch_problems FILE: print every way the visibility gate of FILE (a publish workflow)
+# is switched off, and fail when there is one:
+#   * a gate step that lets an exit other than 0 pass (a case arm that does nothing other than
+#     `0) ;;`, fewer than two `exit 1`, `|| true`), or that does not run the script as written;
+#   * `continue-on-error` on a gate step, anywhere in the job private-package, or on the job
+#     publish (its non-gating Trivy steps keep theirs);
+#   * a job condition on publish (it could run after a failed `needs`).
+gate_switch_problems() {
+  local file="$1" spec gate_job gate_id n script arms bad=0
+  if job "${file}" private-package | grep -q -E '^ +continue-on-error:'; then
+    echo "private-package has continue-on-error"
+    bad=1
+  fi
+  if job "${file}" publish | grep -q -E '^    (continue-on-error|if):'; then
+    echo "publish has a job-level continue-on-error or if"
+    bad=1
+  fi
+  for spec in "${GATE_STEPS[@]}"; do
+    gate_job="${spec% *}"
+    gate_id="${spec#* }"
+    n="$(step_where "${file}" "${gate_job}" id "${gate_id}")"
+    if [ -z "${n}" ]; then
+      echo "${gate_job}: no step ${gate_id}"
+      bad=1
+      continue
+    fi
+    if job_steps "${file}" "${gate_job}" | awk -F '\t' -v step="${n}" '$1 == step && $2 == "continue-on-error"' | grep -q .; then
+      echo "${gate_job} ${gate_id}: continue-on-error"
+      bad=1
+    fi
+    script="$(job_steps "${file}" "${gate_job}" | awk -F '\t' -v step="${n}" '$1 == step && $2 == "run" { print $3 }')"
+    if ! grep -q -F 'scripts/check-package-private.sh "${IMAGE#ghcr.io/}" visibility-probe || rc=$?' <<<"${script}"; then
+      echo "${gate_job} ${gate_id}: does not run the check as written"
+      bad=1
+    fi
+    arms="$(grep -E '^ *[^ #][^)]*\) *;; *$' <<<"${script}" | sed -E 's/^ +//')"
+    if [ "${arms}" != "0) ;;" ]; then
+      echo "${gate_job} ${gate_id}: passes on '${arms//$'\n'/ | }', expected exit 0 only"
+      bad=1
+    fi
+    if [ "$(grep -c -E '^ *exit 1$' <<<"${script}")" -lt 2 ] || grep -q -F '|| true' <<<"${script}"; then
+      echo "${gate_job} ${gate_id}: an exit other than 0 does not stop the job"
+      bad=1
+    fi
+  done
+  return "${bad}"
+}
+
 # package_workflows: the workflows that name the gateway package (not the sidecar's).
 package_workflows() {
   grep -l -E 'ghcr\\?\.io/rocketedge/brokersre-ib-gateway([^-]|$)' "${WF}"/*.yml | sed 's|.*/||' | sort
@@ -292,6 +344,35 @@ pulling_steps() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # No other workflow pushes to the gateway package.
   run ! grep -l -E 'docker push|push=true|--push' "${WF}/rebuild.yml" "${WF}/qualify-paper.yml" "${WF}/detect-releases.yml" "${WF}/ci.yml"
+}
+
+@test "the visibility gate cannot be switched off: exit 0 only, no continue-on-error, no job condition" {
+  run gate_switch_problems "${WF}/publish.yml"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "the review's ways to switch the gate off are caught (G2: exit 3 passes; G3: continue-on-error)" {
+  # G2: "inconclusive" passes.
+  sed 's/^            0) ;;$/            0 | 3) ;;/' "${WF}/publish.yml" > "${WORK}/g2.yml"
+  run ! cmp -s "${WF}/publish.yml" "${WORK}/g2.yml"
+  run gate_switch_problems "${WORK}/g2.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"expected exit 0 only"* ]]
+  # G3: continue-on-error on the gate step, on the gate job, on publish.
+  awk '{ print } /^        id: anonymous$/ { print "        continue-on-error: true" }' "${WF}/publish.yml" > "${WORK}/g3-step.yml"
+  run gate_switch_problems "${WORK}/g3-step.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"continue-on-error"* ]]
+  awk '{ print } /^  private-package:$/ { print "    continue-on-error: true" }' "${WF}/publish.yml" > "${WORK}/g3-job.yml"
+  run gate_switch_problems "${WORK}/g3-job.yml"
+  [ "$status" -eq 1 ]
+  awk '{ print } /^  publish:$/ { print "    continue-on-error: true" }' "${WF}/publish.yml" > "${WORK}/g3-publish.yml"
+  run gate_switch_problems "${WORK}/g3-publish.yml"
+  [ "$status" -eq 1 ]
+  # The failure arms that stop the job, removed or neutralised.
+  sed 's/scripts\/check-package-private.sh "${IMAGE#ghcr.io\/}" visibility-probe || rc=\$?/scripts\/check-package-private.sh "${IMAGE#ghcr.io\/}" visibility-probe || true/' "${WF}/publish.yml" > "${WORK}/true.yml"
+  run gate_switch_problems "${WORK}/true.yml"
+  [ "$status" -eq 1 ]
 }
 
 @test "a publish job that does not wait for the gate, or runs after it failed, is caught" {
