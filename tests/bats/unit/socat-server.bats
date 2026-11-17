@@ -7,6 +7,7 @@
 # could not bind it even with reuseaddr, exited, and its error went to /dev/null.
 
 load socat-server
+bats_require_minimum_version 1.5.0
 
 setup() {
   WORK="$(mktemp -d)"
@@ -56,6 +57,19 @@ teardown() {
   IFS= read -r -t 2 reply <&4
   exec 4>&-
   [ "${reply}" == "late" ]
+}
+
+@test "stop_servers without WORK fails and stops no server" {
+  # A setup that fails before it sets WORK still runs teardown; "/server.sh" alone would match
+  # every test's servers.
+  serve 'printf "alive\n"'
+  # bash leaves at the failed ${WORK:?} expansion (status 127 in bash 5.3): any failure will do.
+  run ! env -u WORK bash -c "source '${BATS_TEST_DIRNAME}/socat-server.bash'; stop_servers"
+  [[ "$output" == *"stop_servers needs WORK"* ]]
+  exec 4<>"/dev/tcp/127.0.0.1/${PORT}"
+  IFS= read -r -t 2 reply <&4
+  exec 4>&-
+  [ "${reply}" == "alive" ]
 }
 
 @test "a socat that cannot listen is reported at once, in its own words" {

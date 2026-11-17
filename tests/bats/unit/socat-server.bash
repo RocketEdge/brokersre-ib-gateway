@@ -48,7 +48,8 @@ serve() {
 
 # stop_servers: stop every listener serve() started in this test and the processes it forked
 # for connections. All of them carry WORK/server.sh in their command line, and WORK is private
-# to the test, so no other test's server is touched.
+# to the test, so no other test's server is touched. Without WORK (a setup that failed before
+# setting it) the pattern would be "/server.sh", every test's servers: it fails instead.
 stop_servers() {
-  pkill -f "${WORK}/server.sh" 2>/dev/null || true
+  pkill -f "${WORK:?stop_servers needs WORK, the private directory of the test}/server.sh" 2>/dev/null || true
 }
