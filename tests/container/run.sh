@@ -3,9 +3,27 @@
 # Container-level tests: run against a built image with the Docker CLI, no IBKR credentials,
 # never contacting IBKR's login servers (the IBC smoke test runs with --network none).
 #
-# Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh
-# Exit code: 0 when every test passed. Each test prints PASS/FAIL with its reason.
+# Usage: IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh [--only ibc-smoke]
+#   --only ibc-smoke   run the IBC smoke test alone (no network, IBC starts, the command server
+#                      answers, STOP ends the Gateway tidily): the check scripts/build-image.sh
+#                      and .ps1 run after a build. It needs only the Docker CLI and no host path
+#                      (its secrets are in a volume), so it also runs inside a container that
+#                      reaches the daemon through its socket.
+# Exit code: 0 when every test passed, 2 on a usage error. Each test prints PASS/FAIL with its
+# reason.
 set -uo pipefail
+
+usage() {
+  echo "usage: IMAGE=<image> $0 [--only ibc-smoke]" >&2
+  exit 2
+}
+only=""
+case "$#:${1:-}" in
+  0:) ;;
+  2:--only) only="$2" ;;
+  *) usage ;;
+esac
+case "${only}" in "" | ibc-smoke) ;; *) usage ;; esac
 
 # quiet_grep <grep arguments...>: grep that says only yes or no, reading ALL of its input.
 # Not `grep -q`: under pipefail a quiet grep exits at its first match, the writer in front of
@@ -36,10 +54,13 @@ printf '%s\n' "wrong""vnc" >"${secrets_dir}/vnc-wrong-password"
 chmod 0755 "${secrets_dir}" && chmod 0644 "${secrets_dir}"/*
 host_secrets="${secrets_dir}"
 if command -v cygpath >/dev/null 2>&1; then host_secrets="$(cygpath -m "${secrets_dir}")"; fi
+# What run_container mounts at /run/secrets: the host directory above, or (in the IBC smoke
+# test) the volume ibgw-test-secrets, which a function may select with `local secrets_source=...`.
+secrets_source="${host_secrets}"
 # shellcheck disable=SC2317,SC2329  # invoked through the EXIT trap
 cleanup() {
   docker rm -f ibgw-test >/dev/null 2>&1 || true
-  docker volume rm ibgw-test-settings ibgw-test-logs >/dev/null 2>&1 || true
+  docker volume rm ibgw-test-settings ibgw-test-logs ibgw-test-secrets >/dev/null 2>&1 || true
   rm -rf "${secrets_dir}"
 }
 trap cleanup EXIT
@@ -47,7 +68,7 @@ trap cleanup EXIT
 run_container() { # extra-docker-args...
   docker rm -f ibgw-test >/dev/null 2>&1 || true
   docker run -d --name ibgw-test \
-    -v "${host_secrets}:/run/secrets:ro" \
+    -v "${secrets_source}:/run/secrets:ro" \
     -e TWS_USERID_FILE=/run/secrets/ib-username \
     -e TWS_PASSWORD_FILE=/run/secrets/ib-password \
     -e TRADING_MODE=paper \
@@ -72,6 +93,83 @@ gateway_jvm_running() {
   in_container 'for p in $(pgrep -x java); do if tr "\0" " " <"/proc/${p}/cmdline" | grep -q "ibcalpha\.ibc"; then exit 0; fi; done; exit 1'
 }
 
+# fill_secrets_volume: the suite's dummy credentials in the volume ibgw-test-secrets, written by
+# the image under test (as root, readable by uid 1000). A volume and not a bind mount: the IBC
+# smoke test also runs inside a container that reaches the daemon through its socket
+# (scripts/build-image.ps1), and a path of that container means nothing to the daemon.
+fill_secrets_volume() {
+  docker volume rm ibgw-test-secrets >/dev/null 2>&1 || true
+  docker run --rm --user 0:0 -v ibgw-test-secrets:/s --entrypoint bash "${IMAGE}" \
+    -c "printf 'dummyuser' >/s/ib-username && printf 'dummypassword-not-real' >/s/ib-password && chmod 0755 /s && chmod 0644 /s/ib-username /s/ib-password" >/dev/null
+}
+
+# ibc_smoke: the IBC smoke test, offline and hardened as the reference compose runs: IBC and
+# the Gateway JVM start, the command server listens, the health check stays honest, and SIGTERM
+# ends the Gateway through IBC's STOP. Called by the full suite and by `--only ibc-smoke`.
+ibc_smoke() {
+  echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) =="
+  # The reference compose runs read-only with every capability dropped, so the smoke test does
+  # too: IBC and the Gateway JVM must start in exactly that configuration.
+  local secrets_source=ibgw-test-secrets stop_pid
+  fill_secrets_volume
+  docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
+  run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true -e JAVA_HEAP_MB=1024 \
+    --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
+  if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
+    fail "ibc smoke" "7462 never listened"
+    docker logs ibgw-test | tail -30
+  fi
+  if gateway_jvm_running; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
+  # A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
+  # Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
+  if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -q "^_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home "'; then
+    pass "Gateway JVM gets a user.home on the settings volume"
+  else
+    fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
+  fi
+  # JAVA_HEAP_MB=1024 above: the Gateway reports its real maximum heap in launcher.log a few
+  # seconds after start. 1,048,576 KB proves the run-time value won over the image's 768 MB.
+  if wait_for 60 in_container 'grep -q "HeapUsage: Max=1,048,576KB" /home/ibgateway/Jts/settings/launcher.log'; then
+    pass "JAVA_HEAP_MB sets the Gateway heap at run time (1024 MB in effect)"
+  else
+    fail "runtime heap" "launcher.log does not show a 1024 MB heap: $(in_container 'grep -o "HeapUsage: Max=[0-9,]*KB" /home/ibgateway/Jts/settings/launcher.log | tail -1' 2>/dev/null)"
+  fi
+  # The relay follows the login: before a login it must refuse connections instead of accepting
+  # and dropping them.
+  if port_open 4004; then fail "relay gate" "relay listens on 4004 before any login"; else pass "relay closed while the Gateway is not logged in"; fi
+  if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
+    pass "Java home exists, is writable and private (0700) under a read-only root"
+  else
+    fail "java home dir" "missing, not writable or not 0700"
+  fi
+  if in_container 'test -s /var/log/ibgateway/ibc/ibc.log'; then pass "raw IBC log captured to the volume"; else fail "ibc log" "empty"; fi
+  if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh'; then fail "healthcheck" "reported healthy without a login"; else pass "healthcheck honestly unhealthy before login"; fi
+  docker stop -t 90 ibgw-test >/dev/null 2>&1 &
+  stop_pid=$!
+  if wait_for 95 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true'; then pass "SIGTERM stops the container (IBC STOP path)"; else fail "shutdown" "container still running after 95 s"; fi
+  wait "${stop_pid}" 2>/dev/null || true
+  if docker logs ibgw-test 2>&1 | quiet_grep '"event":"shutdown_complete"'; then pass "shutdown_complete event emitted"; else
+    fail "shutdown event" "missing"
+    docker logs ibgw-test 2>&1 | tail -5
+  fi
+}
+
+# finish: print the verdict and exit 0 when no test failed, 1 otherwise.
+finish() {
+  echo
+  if [ "${failures}" -eq 0 ]; then
+    echo "ALL CONTAINER TESTS PASSED"
+    exit 0
+  fi
+  echo "${failures} container test(s) FAILED"
+  exit 1
+}
+
+if [ "${only}" = ibc-smoke ]; then
+  ibc_smoke
+  finish
+fi
+
 echo "== structure =="
 if [ "$(docker run --rm --entrypoint id "${IMAGE}" -u)" = "1000" ]; then pass "runs as uid 1000"; else fail "uid" "not 1000"; fi
 if docker run --rm --entrypoint bash "${IMAGE}" -c 'command -v sudo' >/dev/null 2>&1; then fail "no sudo" "sudo present"; else pass "no sudo binary"; fi
@@ -81,6 +179,26 @@ if docker run --rm --entrypoint test "${IMAGE}" -f /usr/share/doc/ibc/LICENSE.tx
 if docker run --rm --entrypoint bash "${IMAGE}" -c 'test -x "/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}/ibgateway" && test -f /opt/ibc/IBC.jar'; then pass "Gateway and IBC installed"; else fail "install" "gateway launcher or IBC.jar missing"; fi
 labels=$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.licenses"}} {{index .Config.Labels "com.rocketedge.brokersre.ibc.version"}}')
 if [[ "${labels}" == MIT\ 3.* ]]; then pass "OCI labels present (${labels})"; else fail "labels" "${labels}"; fi
+# The build's provenance (ADR 0018): the Gateway version, IBKR's build stamp it was checked
+# against (the one the installed Gateway carries), the installer's SHA-256, and whether the
+# project qualified that build.
+build_labels="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "com.rocketedge.brokersre.ibkr.version"}}|{{index .Config.Labels "com.rocketedge.brokersre.ibkr.build_stamp"}}|{{index .Config.Labels "com.rocketedge.brokersre.installer.sha256"}}|{{index .Config.Labels "com.rocketedge.brokersre.qualified"}}')"
+IFS='|' read -r label_version label_stamp label_sha label_qualified <<<"${build_labels}"
+installed="$(docker run --rm --entrypoint bash "${IMAGE}" -c 'printf "%s|" "${IB_GATEWAY_VERSION}"; sed -n "s/.*applicationVersion=\"\([^\"]*\)\".*/\1/p" "/home/ibgateway/Jts/ibgateway/${IB_GATEWAY_VERSION}/.install4j/i4jparams.conf" | head -n 1')"
+if [ "${label_version}" = "${installed%%|*}" ] && [ -n "${label_stamp}" ] && [ "${label_stamp}" = "${installed#*|}" ] \
+  && [[ "${label_sha}" =~ ^[0-9a-f]{64}$ ]] && [[ "${label_qualified}" =~ ^(yes|no)$ ]]; then
+  pass "build labels: version ${label_version}, stamp ${label_stamp} as installed, installer SHA-256, qualified=${label_qualified}"
+else
+  fail "build labels" "labels '${build_labels}', installed '${installed}'"
+fi
+# Where the installer's bytes came from: ibkr (IBKR's channel URL, now or for the cached copy),
+# installer (a file the user gave with --installer) or override (a test server).
+label_source="$(docker inspect "${IMAGE}" --format '{{index .Config.Labels "com.rocketedge.brokersre.installer.source"}}')"
+if [[ "${label_source}" =~ ^(ibkr|installer|override)$ ]]; then
+  pass "installer source label: ${label_source}"
+else
+  fail "installer source label" "com.rocketedge.brokersre.installer.source is '${label_source}'"
+fi
 
 echo "== render + relay without IBC (IBC_LAUNCH=no) =="
 run_container -e IBC_LAUNCH=no -e SAMPLE_INTERVAL_S=2
@@ -352,49 +470,7 @@ else
   fail "console bad setting" "exit=$(docker inspect -f '{{.State.ExitCode}}' ibgw-test 2>/dev/null) logs: $(docker logs ibgw-test 2>&1 | tail -3 | cut -c1-300)"
 fi
 
-echo "== IBC smoke (offline, --network none, hardened: read-only root, no capabilities) =="
-# The reference compose runs read-only with every capability dropped, so the smoke test does
-# too: IBC and the Gateway JVM must start in exactly that configuration.
-docker volume rm ibgw-test-settings >/dev/null 2>&1 || true
-run_container --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true -e JAVA_HEAP_MB=1024 \
-  --tmpfs /tmp --tmpfs /run/brokersre:uid=1000,gid=1000,mode=0750 -v ibgw-test-settings:/home/ibgateway/Jts/settings
-if wait_for "${SMOKE_TIMEOUT}" port_open 7462; then pass "IBC command server listening on 7462 within ${SMOKE_TIMEOUT}s"; else
-  fail "ibc smoke" "7462 never listened"
-  docker logs ibgw-test | tail -30
-fi
-if gateway_jvm_running; then pass "IBC/Gateway Java process running"; else fail "ibc process" "not running"; fi
-# A real login writes .hwid into the JVM's user.home; when that is the read-only image home the
-# Gateway blocks behind a dialog nobody sees. The JVM must be told a writable home.
-if in_container 'j=$(pgrep -x java | head -1); tr "\0" "\n" <"/proc/${j}/environ" | grep -q "^_JAVA_OPTIONS=-Duser.home=/home/ibgateway/Jts/settings/.java-home "'; then
-  pass "Gateway JVM gets a user.home on the settings volume"
-else
-  fail "java home" "_JAVA_OPTIONS missing from the JVM environment"
-fi
-# JAVA_HEAP_MB=1024 above: the Gateway reports its real maximum heap in launcher.log a few
-# seconds after start. 1,048,576 KB proves the run-time value won over the image's 768 MB.
-if wait_for 60 in_container 'grep -q "HeapUsage: Max=1,048,576KB" /home/ibgateway/Jts/settings/launcher.log'; then
-  pass "JAVA_HEAP_MB sets the Gateway heap at run time (1024 MB in effect)"
-else
-  fail "runtime heap" "launcher.log does not show a 1024 MB heap: $(in_container 'grep -o "HeapUsage: Max=[0-9,]*KB" /home/ibgateway/Jts/settings/launcher.log | tail -1' 2>/dev/null)"
-fi
-# The relay follows the login: before a login it must refuse connections instead of accepting
-# and dropping them.
-if port_open 4004; then fail "relay gate" "relay listens on 4004 before any login"; else pass "relay closed while the Gateway is not logged in"; fi
-if in_container 'test -d /home/ibgateway/Jts/settings/.java-home && test -w /home/ibgateway/Jts/settings/.java-home && test "$(stat -c %a /home/ibgateway/Jts/settings/.java-home)" = 700'; then
-  pass "Java home exists, is writable and private (0700) under a read-only root"
-else
-  fail "java home dir" "missing, not writable or not 0700"
-fi
-if in_container 'test -s /var/log/ibgateway/ibc/ibc.log'; then pass "raw IBC log captured to the volume"; else fail "ibc log" "empty"; fi
-if in_container 'TRADING_MODE=paper /usr/local/lib/brokersre/healthcheck.sh'; then fail "healthcheck" "reported healthy without a login"; else pass "healthcheck honestly unhealthy before login"; fi
-docker stop -t 90 ibgw-test >/dev/null 2>&1 &
-stop_pid=$!
-if wait_for 95 bash -c '! docker inspect -f "{{.State.Running}}" ibgw-test 2>/dev/null | grep -q true'; then pass "SIGTERM stops the container (IBC STOP path)"; else fail "shutdown" "container still running after 95 s"; fi
-wait "${stop_pid}" 2>/dev/null || true
-if docker logs ibgw-test 2>&1 | quiet_grep '"event":"shutdown_complete"'; then pass "shutdown_complete event emitted"; else
-  fail "shutdown event" "missing"
-  docker logs ibgw-test 2>&1 | tail -5
-fi
+ibc_smoke
 
 echo "== rejected-login latch (offline, --network none) =="
 # After IBKR has rejected the credentials, a later start with the same secret files must not
@@ -523,10 +599,4 @@ sleep 45
 if port_open 7462; then fail "command server off" "7462 is listening with port 0"; else pass "IBC_COMMAND_SERVER_PORT=0 keeps 7462 closed"; fi
 if in_container 'ibc-cmd STOP; test $? -eq 2'; then pass "ibc-cmd reports the disabled server"; else fail "ibc-cmd" "unexpected exit"; fi
 
-echo
-if [ "${failures}" -eq 0 ]; then
-  echo "ALL CONTAINER TESTS PASSED"
-  exit 0
-fi
-echo "${failures} container test(s) FAILED"
-exit 1
+finish

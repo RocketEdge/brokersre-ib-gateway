@@ -519,18 +519,63 @@ published image (`up-to-date`, exit 0; [limitations](docs/limitations.md) L27).
 
 ## Building and testing
 
+Build the image with the build helper. It needs Docker with buildx (Docker Desktop, or Docker
+Engine 23 or later) and bash or PowerShell, nothing else: finding, downloading and checking
+IBKR's installer run in a small helper container.
+
 ```bash
-eval "$(scripts/bake-env.sh)"                      # variables from versions.json (needs jq)
-docker buildx bake stable --set '*.platform=linux/amd64' --load
-git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core  # LF matters inside the image
-tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable   # unit suite inside the image
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh  # offline container tests
-IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh    # compose files as shipped: several gateways, gateway + strategy
-tests/recipes/run.sh                                                         # log-shipper recipes: validate, then run against a stand-in (needs only Docker)
+scripts/build-image.sh                     # stable, for this machine's architecture
+scripts/build-image.sh --channel latest    # IBKR's latest channel
+scripts/build-image.sh --print-plan        # what it would build; downloads and builds nothing
+scripts/build-image.sh --help              # all options
+```
+
+```powershell
+pwsh -NoProfile -File scripts/build-image.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-image.ps1 -Channel latest
+```
+
+- It builds the version pinned in `versions.json` when IBKR still serves it, and checks the
+  installer's SHA-256 against the pin. When IBKR serves another version (IBKR serves only one
+  build per channel, usually newer than the pin), it builds IBKR's current build instead: it
+  accepts the installer only when IBKR's
+  `version.json` is the same before and after the download and the installed Gateway carries
+  the build stamp IBKR announced. Such an image is labelled
+  `com.rocketedge.brokersre.qualified=no` and a warning tells you how to qualify it with one
+  paper login. `--strict` refuses to build it (exit 4).
+- `--installer FILE` builds from an installer you already have; its version comes from its
+  build stamp, and a file you keep in `downloads/` is never overwritten or removed. Every
+  accepted installer is cached by version and SHA-256 with its source
+  (`~/.cache/brokersre-ib-gateway`, `%LOCALAPPDATA%\brokersre-ib-gateway` for PowerShell), so
+  the same version builds again while IBKR is unreachable; a file given with `--installer`
+  stands in for IBKR's download only when it is the pinned installer.
+- After the build it runs the offline IBC smoke test (`--no-smoke` skips it). The image is
+  tagged `brokersre-ib-gateway:<channel>` and `brokersre-ib-gateway:<version>` (`--tag`
+  replaces both), and the last lines are `key: value`: `version`, `channel`,
+  `qualified_by_project`, `installer_sha256`, `ibkr_build_stamp`, `image`, `image_id`.
+- Exit codes: `0` built, `1` download, check, build or smoke test failed, `2` usage, `3` IBKR
+  unreachable and no usable cached installer, `4` `--strict` and IBKR serves another version. The
+  decision is [ADR 0018](docs/adr/0018-private-image-public-build-recipe.md); the interface is
+  in [the spec](docs/specs/2026-11-17-private-image-public-recipe.md).
+
+Tests:
+
+```bash
+git clone --config core.autocrlf=false --config core.eol=lf --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core  # LF matters inside the image
+tests/bats/run-in-image.sh brokersre-ib-gateway:stable                    # unit suite inside the image
+IMAGE=brokersre-ib-gateway:stable tests/container/run.sh                   # offline container tests
+IMAGE=brokersre-ib-gateway:stable tests/container/run.sh --only ibc-smoke  # the IBC smoke test alone
+IMAGE=brokersre-ib-gateway:stable tests/compose/run.sh                     # compose files as shipped: several gateways, gateway + strategy
+tests/recipes/run.sh                                                       # log-shipper recipes: validate, then run against a stand-in (needs only Docker)
 ```
 
 The container tests never log in: the IBC smoke test runs with `--network none` and proves that
 IBC starts, the command server listens and `STOP` shuts the Gateway down tidily.
+
+Maintainers build the pinned versions for both platforms with `docker buildx bake` (variables
+from `versions.json` through `eval "$(scripts/bake-env.sh)"`, which needs jq); that path builds
+only the pins and fails while IBKR serves another version, unless the pinned installer is in
+`downloads/`.
 
 ## Upgrade policy
 

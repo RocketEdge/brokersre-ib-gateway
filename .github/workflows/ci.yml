@@ -1,6 +1,8 @@
-# Lint, build the stable channel for amd64, run the unit suite inside the image, run the
-# container tests offline, scan with Trivy. No IBKR credentials exist here and the IBC smoke test
-# runs with --network none, so nothing ever contacts IBKR's login servers.
+# Lint, build the stable channel for amd64 with the build helper (scripts/build-image.sh, which
+# follows IBKR's channel when IBKR is ahead of the pin, ADR 0018), run the unit suite inside the
+# image, run the container tests offline, scan with Trivy, test the PowerShell build wrapper.
+# No IBKR credentials exist here and the IBC smoke test runs with --network none, so nothing
+# ever contacts IBKR's login servers (the installer is downloaded from IBKR's public URL).
 name: CI
 
 on:
@@ -24,6 +26,11 @@ jobs:
         with:
           dockerfile: Dockerfile
           config: .hadolint.yaml
+      - name: hadolint (the build helper's image)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: scripts/build-helper/Dockerfile
+          config: .hadolint.yaml
       - name: shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
@@ -37,6 +44,9 @@ jobs:
           jq -e '[.ibc.sha256, .channels.stable.sha256.x64, .channels.stable.sha256.arm, .channels.latest.sha256.x64, .channels.latest.sha256.arm] | all(test("^[0-9a-f]{64}$"))' versions.json
           jq -e '.base.digest | test("^sha256:[0-9a-f]{64}$")' versions.json
           jq -e '[.channels.stable.version, .channels.latest.version] | all(test("^10\\.[0-9]+\\.[0-9]+[a-z]?$"))' versions.json
+          # IBKR's build time of each pin: the Dockerfile checks the installed Gateway's stamp
+          # against it (scripts/bake-env.sh, fetch-installer.sh --check-stamp).
+          jq -e '[.channels.stable.build_datetime, .channels.latest.build_datetime] | all(type == "string" and test("^[0-9]{8} [0-9]{2}:[0-9]{2}:[0-9]{2}$"))' versions.json
       - name: README version table matches versions.json
         run: scripts/readme-versions.sh --check
       - name: Every tracked shell script carries the execute bit (a Windows host does not record it)
@@ -70,19 +80,21 @@ jobs:
       TEST_IMAGE: ghcr.io/rocketedge/brokersre-ib-gateway:stable
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: docker/setup-buildx-action@v4.4.1
-      - name: Pre-fetch archived stable installers (IBKR serves only its newest build)
-        # Without this, every build of main fails from the day IBKR moves past the pinned version
-        # until the bump merges (2026-11-11). Copies are used only when they match the pin.
-        env:
-          GH_TOKEN: ${{ secrets.ARCHIVE_READ_TOKEN }}
+      - name: Build stable (amd64) with the build helper, and its IBC smoke test
+        # The way users build (ADR 0018): the pin when IBKR serves it, otherwise IBKR's newer
+        # build checked against IBKR's own stamp and labelled not qualified. A bake build of the
+        # pin failed every pull request from the day IBKR moved on (2026-11-11, 2026-11-17)
+        # unless the private archive held the pinned installer. The summary lines are printed
+        # last; a build the project has not qualified is also announced as a notice.
         run: |
-          eval "$(scripts/bake-env.sh)"
-          scripts/prefetch-installers.sh stable "$STABLE_VERSION" "$STABLE_SHA256_X64" "$STABLE_SHA256_ARM" downloads
-      - name: Build stable (amd64) and load
-        run: |
-          eval "$(scripts/bake-env.sh)"
-          docker buildx bake stable --set '*.platform=linux/amd64' --set '*.cache-from=type=gha' --set '*.cache-to=type=gha,mode=max' --load
+          set -euo pipefail
+          scripts/build-image.sh --channel stable --platform linux/amd64 --tag "$TEST_IMAGE" > build-summary.txt
+          cat build-summary.txt
+          if grep -qx 'qualified_by_project: no' build-summary.txt; then
+            built="$(sed -n 's/^version: //p' build-summary.txt)"
+            pinned="$(jq -r .channels.stable.version versions.json)"
+            echo "::notice title=Gateway build not qualified::CI built IB Gateway ${built} (IBKR's stable channel); versions.json pins ${pinned}. The image is labelled qualified=no (docs/limitations.md L35)."
+          fi
       - name: Unit suite inside the image (bats)
         run: |
           git clone -q --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core
@@ -156,6 +168,53 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4.39.3
         with:
           sarif_file: trivy.sarif
+
+  # scripts/build-image.ps1 under both PowerShell editions it supports (Windows PowerShell 5.1,
+  # PowerShell 7), with docker mocked, and PSScriptAnalyzer with the Windows kit's settings.
+  # What runs in the helper container is tested by tests/bats/ci/build-image.bats (lint job).
+  build-image-ps1:
+    name: PowerShell build wrapper (${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      PESTER_VERSION: "6.2.0"
+      PSSCRIPTANALYZER_VERSION: "1.25.0"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install Pester and PSScriptAnalyzer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          if ($PSVersionTable.PSEdition -eq 'Desktop') { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null }
+          Install-Module -Name Pester -RequiredVersion $env:PESTER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+      - name: Pester (scripts/tests)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module -Name Pester -RequiredVersion $env:PESTER_VERSION
+          '{0} {1}, Pester {2}' -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, (Get-Module Pester).Version
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'scripts/tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+      - name: PSScriptAnalyzer (scripts)
+        if: matrix.shell == 'pwsh'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
+          $findings = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1 -ErrorVariable ruleErrors -ErrorAction SilentlyContinue)
+          $findings | ForEach-Object { '{0}:{1} [{2}/{3}] {4}' -f $_.ScriptName, $_.Line, $_.Severity, $_.RuleName, $_.Message }
+          $ruleErrors | ForEach-Object { 'RULE ERROR: {0} {1}' -f $_.TargetObject, $_.Exception.Message }
+          'findings: {0}, rule errors: {1}' -f $findings.Count, $ruleErrors.Count
+          if ($findings.Count -gt 0 -or $ruleErrors.Count -gt 0) { exit 1 }
 
   # The log-shipper recipes under docs/recipes: `vector validate`, then an offline run against a
   # stand-in receiver. Needs only Docker; it does not use the gateway image and contacts no

@@ -5,6 +5,105 @@ Next step.
 
 ## Change History
 
+### 2026-11-17 — Review of #39: cache provenance and key, the user's files, the trust tests
+
+- **What changed:** the helper's cache is keyed by version and SHA-256
+  (`installers/<v>/<arch>/<sha256>/`) and records each entry's source (`ibkr`, `installer`,
+  `override` for the tests' server); a non-pinned version is reused, online or offline, only
+  from the origin of the current run, and bytes given with `--installer` serve only as the pin
+  when their SHA-256 is the pin's. The image gets `com.rocketedge.brokersre.installer.source`
+  (bake: `ibkr`). A file already at the build context's installer path is the user's: the same
+  bytes are used and kept, other bytes stop the build (exit 1); the wrappers remove only what
+  they put there. Redirects must lead to HTTPS also under the test override. A docker failure
+  of the helper run (125-127) is exit 1 in both wrappers. The stamp reader stops at
+  `i4jparams.conf`. CI prints a notice for an unqualified build. Spec, ADR 0018, README and
+  both contract files: exit 3 is "IBKR unreachable and no usable cached installer", and the
+  fall-forward takes any version other than the pin (IBKR may roll a channel back).
+- **Result:** the review's probes, each now a test that was red first: a user's third-party
+  copy stamped like IBKR's 10.50.1h was built instead of IBKR's download (no request to IBKR)
+  and is now ignored by a build IBKR answers; an `--installer` copy of the pinned version with
+  other bytes replaced the cached pin (offline `--strict` then exit 3) and now sits beside it;
+  `--installer downloads/<name>` lost the user's file after a successful and after a failed
+  build and now keeps it; `docker run` exit 125 was passed on and is now 1. Mutations of the
+  helper (the review's ten, rewritten for the new code, and three for the new checks), each
+  run against `build-image.bats` and `fetch-installer.bats`:
+
+  | # | Mutation | Before the review | Now |
+  |---|---|---|---|
+  | m1 | no second read of `version.json` | caught | caught (4 tests) |
+  | m2 | cache reuse without re-hashing | missed | caught |
+  | m3 | helper stamp compared by suffix only | caught | caught |
+  | m4 | before/after compared by version only | missed | caught |
+  | m5 | `--proto-redir` dropped | missed | caught (2) |
+  | m6 | cache hit without the stamp | missed | caught |
+  | m7 | offline pin found without the pin's SHA-256 | missed | caught |
+  | m8 | `qualified` from the version alone | missed | caught (2) |
+  | m9 | `fetch-installer.sh` stamp compared by suffix only | caught | caught |
+  | m10 | no format check of `version.json` fields | missed | caught |
+  | m11 | cached newer version reused from any origin | (new) | caught (3) |
+  | m12 | offline fallback from any origin | (new) | caught |
+  | m13 | wrapper removes the user's `downloads/` file | (new) | caught (2) |
+
+  `--installer <real 10.50.1h> --print-plan` through the Windows bind mount (stamp and
+  SHA-256) takes 12.8 s; the stamp read alone took 3.5 min in the review.
+- **What did NOT work / root cause:** the first suite tested that each check accepts good
+  input and refuses the one bad input the author thought of; the review's mutations show that
+  a check can be weakened in ways no test exercised (a field compared in part, a criterion
+  dropped from a lookup). The provenance gap came from treating "the same stamp" as "the same
+  bytes from the same place". The redirect check could not be tested because the override
+  relaxed redirects together with the first request.
+- **Next step:** mutate any trust check that changes and watch a test fail (both contract
+  files say so); phase 2 builds on this branch.
+
+### 2026-11-17 — A build that survives IBKR replacing its installers (ADR 0018, phase 1)
+
+- **What changed:** `scripts/build-image.sh` and `scripts/build-image.ps1` build the image on
+  any host with Docker; `scripts/resolve-installer.sh` decides, downloads, verifies and caches
+  the installer inside a helper container (`scripts/build-helper/Dockerfile`, Docker CLI
+  pinned by digest). When IBKR serves another version than the pin the build falls forward:
+  IBKR's `version.json` must be the same before and after the download (one retry), the
+  installer's stamp and the installed stamp must equal it, and the image is labelled
+  `com.rocketedge.brokersre.qualified=no` (`--strict`: exit 4). `fetch-installer.sh
+  --check-stamp` fails a Dockerfile build whose installed `applicationVersion` or version
+  differs from `IB_GATEWAY_BUILD_STAMP`; the bake path passes the pinned stamp from
+  `build_datetime`. New labels `ibkr.version`, `ibkr.build_stamp`, `installer.sha256` (per
+  platform, through one label stage per architecture) and `qualified`.
+  `tests/container/run.sh --only ibc-smoke` runs the IBC smoke test alone (secrets from a
+  volume). CI's `build-test` builds with the helper, without the private archive. Spec,
+  ADR 0018 (amends 0007 and 0009), L35, L36.
+- **Result:** the first red: a clean build of `main` (bake arguments of `versions.json`)
+  failed at 02:05 UTC with `fetch-installer: SHA-256 MISMATCH for
+  ibgateway-10.50.1g-standalone-linux-x64.sh`, actual `eb578b23…`, which is IBKR's 10.50.1h.
+  With the helper on live IBKR: Git Bash built 10.50.1h in 4 min 40 s (download, build, smoke
+  test), `qualified_by_project: no`, warning printed; the image's configuration equals the
+  published 10.50.1g image's apart from the version, and the full container suite passed on
+  it (86 checks, including the new label check, which fails on the published image). Tests:
+  29 bats tests of the helper against a fake IBKR server (five mutations the author chose, of
+  the before/after check, `--strict`, the stamp comparison, the pin check and the cache
+  fallback, each failed them; an independent review's ten mutations then found seven that
+  passed the suite: see the entry above),
+  3 Dockerfile-level stamp tests with fake installers, 10 unit tests of the stamp reader,
+  3 bake tests, 25 Pester tests under Windows PowerShell 5.1 and PowerShell 7.
+- **What did NOT work / root cause:** PowerShell's binder ends a script with exit 1, before
+  it runs, when a parameter is given without its value, so typed parameters could not keep
+  exit 2 for usage errors: `build-image.ps1` parses `$args` itself. Pester: `$script:` inside
+  a function defined in `BeforeAll` did not reach the variables the mocks wrote (eight tests
+  passed or failed on nothing), and `return @(...)` unrolled an array of calls so that `[0]`
+  was the first argument. `docker build` of the helper with a `docker-container` default
+  builder would have kept the image in the build cache only: the helper is built with
+  `buildx build --load`. `git -c core.autocrlf=false clone` of bats-core still checked out
+  CRLF on Windows (bats-core's `* text=auto` follows `core.eol`); the documented command now
+  sets both. `BATS_TEST_TIMEOUT` exported from `setup_file` left all three Docker tests
+  waiting on bats' `sleep` watchdog after their builds had finished (not isolated; not used).
+  A failed resolve first left its 360 MB download in the cache for a day; it now removes it.
+  In CI the process-level Pester test failed under both editions: with `$ErrorActionPreference
+  = 'Stop'` a Windows PowerShell 5.1 host makes `& exe 2>$null` throw on the first stderr
+  line; it uses `Start-Process` with file redirection now. CodeQL flagged the fake IBKR
+  server (`py/path-injection`); it now serves only resolved paths inside its root.
+- **Next step:** phase 2 (README recipe, compose defaults to the local tag, Windows kit builds
+  a missing image), phase 3 (private publishing, hourly detection), phase 4 (delete the public
+  package). A paper login with a self-built 10.50.1h image would qualify it (L35).
+
 ### 2026-11-17 — The published sidecar 0.2.2 against a paper login (L20)
 
 - **What changed:** documentation only: L20 records what the published sidecar 0.2.2

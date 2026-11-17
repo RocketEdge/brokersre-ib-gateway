@@ -7,13 +7,18 @@ derived from gnzsnz/ib-gateway-docker and consumed by RocketEdge BrokerSRE. This
 ## THE COMMANDS
 
 ```bash
-eval "$(scripts/bake-env.sh)"                                        # variables from versions.json (jq)
+scripts/build-image.sh [--channel stable|latest] [--strict] [--installer FILE] [--platform linux/amd64|linux/arm64] [--tag NAME] [--no-smoke] [--cache-dir DIR] [--print-plan]   # THE build (only Docker needed; ADR 0018): exit 0 built, 1 failed, 2 usage, 3 IBKR unreachable and no usable cached installer, 4 --strict and IBKR serves another version; last 7 stdout lines `key: value`
+pwsh -NoProfile -File scripts/build-image.ps1 [-Channel ...] [-Strict] [-Installer FILE] [-Platform ...] [-Tag ...] [-NoSmoke] [-CacheDir DIR] [-PrintPlan]   # the same from PowerShell 7 or Windows PowerShell 5.1
+pwsh -NoProfile -Command "Invoke-Pester scripts/tests" ; powershell -NoProfile -Command "Invoke-Pester scripts/tests"   # build-image.ps1, Pester 6.2.0, both editions (docker mocked)
+pwsh -NoProfile -Command "Invoke-ScriptAnalyzer -Path scripts -Recurse -Settings windows/PSScriptAnalyzerSettings.psd1"   # 0 findings
+IMAGE=<image> tests/container/run.sh --only ibc-smoke                                     # the offline IBC smoke test alone (what build-image runs after a build)
+eval "$(scripts/bake-env.sh)"                                        # variables from versions.json (jq), incl. <CHANNEL>_BUILD_STAMP
 docker buildx bake --print stable latest > /dev/null                 # bake definition resolves
-docker buildx bake stable --set '*.platform=linux/amd64' --load      # local build
+docker buildx bake stable --set '*.platform=linux/amd64' --load      # maintainer build of the PINNED version (fails when IBKR moved past it and no archived copy is in downloads/)
 hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
-git -c core.autocrlf=false clone --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image
+git clone --config core.autocrlf=false --config core.eol=lf --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image (core.eol too: bats-core says `* text=auto`)
 tests/bats/run-in-image.sh ghcr.io/rocketedge/brokersre-ib-gateway:stable                # unit suite, inside the image
-tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table, documented commands), on the host (needs jq; doc-commands.bats needs python3, zsh and sh)
+tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table, documented commands, build helper against a fake IBKR server, Dockerfile stamp check), on the host (needs jq; doc-commands.bats needs python3, zsh and sh; build-image.bats needs curl and python3; dockerfile-stamp.bats and bake-env.bats need Docker)
 scripts/check-vex.sh security/vex/ibgateway-vendor-jars.openvex.json                     # VEX document valid (add Trivy `--pkg-types library --list-all-pkgs --format json` reports to compare)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/container/run.sh               # offline container tests (incl. the reference compose as shipped)
 IMAGE=ghcr.io/rocketedge/brokersre-ib-gateway:stable tests/compose/run.sh                 # compose files as shipped (several gateways, gateway + strategy, console override); offline
@@ -40,9 +45,15 @@ All of these must be green before claiming a change done; run them fresh.
 ## Invariants
 
 1. **Every input is pinned and verified**: `versions.json` holds the base digest, the Gateway
-   version and installer SHA-256 per architecture, and the IBC release tag and SHA-256. The
-   Dockerfile fails the build on any mismatch. No other file carries a version of anything
-   that goes INTO the gateway image. A companion that runs next to it pins its own third-party
+   version, IBKR's `build_datetime` and installer SHA-256 per architecture, and the IBC release
+   tag and SHA-256. The Dockerfile fails the build on any mismatch, and on an installed Gateway
+   whose build stamp differs from `IB_GATEWAY_BUILD_STAMP` (`fetch-installer.sh --check-stamp`).
+   The one deliberate exception is the build helper's fall-forward (ADR 0018): when IBKR serves
+   another version than the pin, `scripts/build-image.sh` verifies it against IBKR's own stamp
+   instead of a pin and labels the image `com.rocketedge.brokersre.qualified=no`; `--strict`
+   refuses it. No other file carries a version of anything that goes INTO the gateway image
+   (the build helper's base image, `docker:<v>-cli` by digest in
+   `scripts/build-helper/Dockerfile`, builds nothing into it). A companion that runs next to it pins its own third-party
    image by digest in the file that uses it: the Vector shipper in
    `compose/docker-compose.azure.yml`, repeated as the default of `vectorImage` in
    `azure/bicep/vm.bicep`; `azure/tests/run.sh` fails when the two differ. The sidecar image
@@ -84,7 +95,10 @@ All of these must be green before claiming a change done; run them fresh.
    view-only unless `VNC_VIEW_ONLY=no`, started with `-noremote` so the mode cannot change
    while the container runs, every visit an event; nothing in the image connects to it.
 7. **IBKR binaries are never redistributed from here** (ADR 0007): the installer is fetched from
-   IBKR at build time; the private archive is RocketEdge's internal fallback.
+   IBKR at build time; the private archive is RocketEdge's internal fallback. The image holds
+   the installed Gateway, so it is not distributed publicly either (ADR 0018): users build it
+   with `scripts/build-image.sh`; RocketEdge's own image becomes private (spec phases 3 and 4).
+   The installer cache of the build helper lives on the user's machine, never here.
 8. **Docker `latest` is never published**; `latest` is IBKR's channel name. Channel tags move
    only through `publish.yml` after Trivy passes on both platforms of the pushed digest;
    consumers pin digests. Tags are created from the scanned, signed digest by
@@ -113,7 +127,13 @@ All of these must be green before claiming a change done; run them fresh.
 ```text
 Dockerfile                 two-stage build; ARGs come from docker-bake.hcl <- versions.json
 docker-bake.hcl            targets stable/latest, tags, labels; scripts/bake-env.sh exports variables
-scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first)
+scripts/fetch-installer.sh build-time installer fetch + SHA-256 verification (pre-fetched copy first); --read-stamp / --check-stamp: the installed Gateway's build stamp (i4jparams.conf)
+scripts/build-image.sh, scripts/build-image.ps1   the build for users and CI (ADR 0018, spec docs/specs/2026-11-17-private-image-public-recipe.md); thin wrappers: helper image, resolve, buildx build, smoke test, accept
+scripts/resolve-installer.sh                      the ONE implementation of resolve/download/verify/cache (resolve, accept, discard), run in the helper container; BROKERSRE_TEST_IBKR_BASE_URL is its test-only override
+scripts/build-helper/Dockerfile                   the helper image (docker CLI pinned by digest + bash, curl, jq), built locally as brokersre-ib-gateway-build-helper:local
+scripts/tests/build-image.Tests.ps1               Pester tests of build-image.ps1 (docker mocked)
+tests/bats/ci/build-image.bats, fake-ibkr.py, fake-installer.bash   the helper and wrapper against a fake IBKR server and fake install4j installers (stub docker)
+tests/bats/ci/dockerfile-stamp.bats, fetch-installer.bats, bake-env.bats   the stamp check in the Dockerfile's setup stage, in the script, and on the bake path
 rootfs/usr/local/bin/entrypoint.sh            orchestration under tini; SIGTERM -> IBC STOP
 rootfs/usr/local/lib/brokersre/*.sh           common, log (events), render-config, java-env, start-xvfb/vnc/socat/ibc, classify-ibc-log, login-latch (a rejected login is not repeated), screenshot (opt-in picture of the screen, a copy of Xvfb's framebuffer file), rotating-append, tail-gateway-logs, sampler (metrics), doctor (preflight), ibc-cmd, healthcheck
 scripts/readme-versions.sh                    README version table <- versions.json (--check in CI; the detect workflows run it)
@@ -138,7 +158,7 @@ compose/docker-compose.azure.yml                      the shipper next to the ga
 sidecar/                                              optional second image (Python 3.15, uv): API probe, /livez /readyz /status /metrics, notifier; src/, tests/ (unit, container/, e2e/), schemas/status.v1.schema.json, Dockerfile, README.md (ADR 0010, docs/sidecar.md)
 compose/docker-compose.sidecar.yml, -sidecar-shared.yml   the sidecar next to the gateway: own network namespace (default) or the gateway's (option)
 windows/                                              host kit for Windows 10/11: setup, doctor, harden, start, uninstall (.ps1) over BrokerSre.Gateway.psm1 + src/{Native,Core,Secrets,Stack,Checks,Harden,Commands}.ps1; templates/compose.yaml.tmpl; tests/ (Pester); README.md (ADR 0011)
-.github/workflows/  ci, azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
+.github/workflows/  ci (lint, build-test with scripts/build-image.sh, build-image-ps1 under 5.1 and 7, recipes, examples), azure-pack (the pack's offline suite), sidecar (tests, image, smoke, end to end), sidecar-publish (from main only), sidecar-rescan (weekly), windows-kit (Pester under 5.1 and 7, PSScriptAnalyzer), publish, rebuild, detect-releases, detect-ibc-release, qualify-paper (manual, environment paper-qualification) (CodeQL comes from GitHub default setup, enabled by the organisation)
 rootfs/usr/local/lib/brokersre/vnc-hook.sh            x11vnc -afteraccept/-gone hook -> vnc_client_connected, vnc_client_disconnected (ADR 0017)
 compose/docker-compose.console.yml                    break-glass console over the reference compose (secret, VNC_VIEW_ONLY, loopback bridge port); docs/console.md
 tests/container/vnc-client.sh                         RFB 3.8 client in bash with DES: the tests' stand-in for a person on the console
@@ -150,9 +170,42 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
 
 ## Gotchas
 
-- IBKR's installer URLs are unversioned; when IBKR moves a channel, `fetch-installer.sh` fails
-  with a checksum mismatch by design. Bump `versions.json` (detect-releases does) or drop the
-  archived installer under `downloads/`.
+- IBKR's installer URLs are unversioned (a versioned path answers 404); when IBKR moves a
+  channel, the bake path's `fetch-installer.sh` fails with a checksum mismatch by design (bump
+  `versions.json`, or drop the archived installer under `downloads/`). `scripts/build-image.sh`
+  falls forward instead: IBKR's `version.json` (`<channel>-standalone/version.json`, JSONP)
+  before and after the download, the installer's own stamp and the installed stamp must agree,
+  and the image is labelled not qualified. The stamp is `applicationVersion="(.<suffix>)
+  <buildDateTime>"` in `.install4j/i4jparams.conf`; the version is `applicationName`'s number
+  plus that suffix. A re-pin needs `build_datetime` too (bake-env.sh refuses a channel without
+  it, and the Dockerfile fails a stamp that differs).
+- The build helper runs as the calling user on Linux (`--user uid:gid`, so the cache and
+  `downloads/` stay the user's) and creates the cache directory before mounting it (Docker
+  would create a missing one as root). It writes into `downloads/` only for the duration of a
+  build, and never touches a file that was there before (same bytes: used and kept,
+  `context_owned: no`; other bytes: exit 1). `build-image.sh` must stay bash 3.2-safe (macOS):
+  no empty-array expansion under `set -u`, no `${x,,}`, no `mapfile`.
+- The helper's cache is keyed by version AND SHA-256 (`installers/<v>/<arch>/<sha256>/`) and
+  records each entry's source (`ibkr`, `installer`, `override`); a non-pinned version is reused
+  only from the origin of the current run, so a test server's or a user's bytes never stand in
+  for IBKR's (review of #39). Every trust check has a bats test that fails when the check is
+  weakened; when you touch `resolve-installer.sh`, mutate the check you changed and watch a
+  test fail (the review's ten mutations are listed in `docs/changes.md`). Redirects must lead
+  to HTTPS also under `BROKERSRE_TEST_IBKR_BASE_URL`; a docker failure of the helper run
+  (125-127) is exit 1.
+- PowerShell's parameter binder ends a script with exit 1 before it runs when a parameter is
+  given without its value; `build-image.ps1` therefore parses `$args` itself to keep exit 2
+  for usage errors. In Pester, `$script:` inside a function defined in `BeforeAll` does not
+  reach the variables the mocks and the tests share (pass them as parameters), and a function
+  that returns an array of arrays must `return , $array` or the caller indexes the first
+  inner element. A test that runs a script as a process uses `Start-Process` with
+  `-RedirectStandardError <file>`, never `& exe 2>$null`: under `$ErrorActionPreference =
+  'Stop'` (the CI steps) a Windows PowerShell 5.1 host turns the redirected standard error
+  line into a terminating error (first CI run of the wrapper's tests, 2026-11-17).
+- A `head ... | grep -m 1` under `pipefail` is the `grep -q` trap again (SIGPIPE to the
+  writer): `resolve-installer.sh` reads the installer header with `sed -n` over the whole
+  input. Setting `BATS_TEST_TIMEOUT` in `setup_file` left every test of a suite waiting on its
+  `sleep` watchdog in the Alpine runner (2026-11-17, not isolated); the suites do not set it.
 - `ibcstart.sh` resolves Java from `.install4j/inst_jre.cfg` in the Gateway directory; the
   Dockerfile writes it (bundled JRE on x64, system OpenJDK 25 on arm64).
 - Four rows of `ibc-patterns.tsv` are confirmed by a real log, the rest are from IBC 3.24.x
