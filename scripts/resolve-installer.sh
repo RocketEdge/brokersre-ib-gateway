@@ -39,13 +39,14 @@
 #     nothing usable cached; 4 --strict and IBKR serves (or the installer is) another version.
 #   resolve-installer.sh accept --cache DIR --run ID --image NAME
 #     After a successful build: moves the run's installer (if one was staged) into
-#     DIR/installers/<version>/<arch>/ with its `meta`, prints the warning for a build the
+#     DIR/installers/<version>/<arch>/<sha256>/ with its `meta` (an entry that holds the same
+#     bytes is kept; a fresh IBKR copy only upgrades its source), prints the warning for a build the
 #     project has not qualified (stderr) and the five summary lines version, channel,
 #     qualified_by_project, installer_sha256, ibkr_build_stamp (stdout); removes the run.
 #   resolve-installer.sh discard --cache DIR --run ID
 #     After a failed build: removes the run (nothing is cached).
 #
-# Cache layout (DIR): installers/<version>/<arch>/{ibgateway-<version>-standalone-linux-<arch>.sh,
+# Cache layout (DIR): installers/<version>/<arch>/<sha256>/{ibgateway-<version>-standalone-linux-<arch>.sh,
 #   meta}; meta holds `key: value` lines version, channel, arch, sha256, ibkr_build_stamp,
 #   source (ibkr, override or installer), accepted_at (UTC). runs/<id>/ holds a run's plan and staged installer; runs older
 #   than a day are removed by the next resolve. A cached file is used only while its SHA-256
@@ -142,19 +143,23 @@ read_installer_stamp() {
 # meta_get FILE KEY: the value of `KEY: value` in FILE.
 meta_get() { sed -n "s/^$2: //p" "$1" | head -n 1; }
 
-# cache_entry VERSION: the cache directory of VERSION for this architecture.
-cache_entry() { printf '%s/installers/%s/%s' "${cache}" "$1" "${arch}"; }
+# cache_entry VERSION SHA256: the cache directory of those bytes of VERSION for this
+# architecture. Keyed by both, so that other bytes under the same version (a re-upload, a file
+# given with --installer) never replace a verified entry, the pin's least of all.
+cache_entry() { printf '%s/installers/%s/%s/%s' "${cache}" "$1" "${arch}" "$2"; }
 
 # cache_usable DIR [SHA256] [STAMP] [SOURCE]: true when DIR holds an installer whose bytes
-# still match its meta, and whose meta matches SHA256, STAMP and SOURCE when given. SOURCE is
-# where the bytes came from (ibkr, override, installer): a build that IBKR answers reuses only
-# what came from IBKR, never bytes a user supplied with --installer or a test server sent.
+# still match its meta (and the directory's name), and whose meta matches SHA256, STAMP and
+# SOURCE when given. SOURCE is where the bytes came from (ibkr, override, installer): a build
+# that IBKR answers reuses only what came from IBKR, never bytes a user supplied with
+# --installer or a test server sent.
 cache_usable() {
   local dir="$1" want_sha="${2:-}" want_stamp="${3:-}" want_source="${4:-}" file sha
   [ -f "${dir}/meta" ] || return 1
   file="${dir}/ibgateway-$(meta_get "${dir}/meta" version)-standalone-linux-${arch}.sh"
   [ -f "${file}" ] || return 1
   sha="$(meta_get "${dir}/meta" sha256)"
+  [ "$(basename "${dir}")" = "${sha}" ] || return 1
   if [ -n "${want_sha}" ] && [ "${sha}" != "${want_sha}" ]; then return 1; fi
   if [ -n "${want_stamp}" ] && [ "$(meta_get "${dir}/meta" ibkr_build_stamp)" != "${want_stamp}" ]; then return 1; fi
   if [ -n "${want_source}" ] && [ "$(meta_get "${dir}/meta" source)" != "${want_source}" ]; then return 1; fi
@@ -164,19 +169,24 @@ cache_usable() {
   fi
 }
 
-# cache_newest_of_channel: print the cache directory of the most recently accepted version of
-# this channel and architecture that came from this run's origin, or nothing.
-cache_newest_of_channel() {
-  local meta best="" best_at="" at
-  for meta in "${cache}"/installers/*/"${arch}"/meta; do
+# cache_newest VERSION STAMP SOURCE: print the directory of the most recently accepted usable
+# cache entry of this architecture with VERSION (with any version of this channel when VERSION
+# is empty), build STAMP and SOURCE (either may be empty: any); print nothing when none is.
+cache_newest() {
+  local want_version="$1" want_stamp="$2" want_source="$3" meta dir best="" best_at="" at
+  for meta in "${cache}"/installers/*/"${arch}"/*/meta; do
     [ -f "${meta}" ] || continue
-    [ "$(meta_get "${meta}" channel)" = "${channel}" ] || continue
-    [ "$(meta_get "${meta}" source)" = "${origin}" ] || continue
-    at="$(meta_get "${meta}" accepted_at)"
-    if [ -z "${best}" ] || [[ "${at}" > "${best_at}" ]]; then
-      best="$(dirname "${meta}")"
-      best_at="${at}"
+    dir="$(dirname "${meta}")"
+    if [ -n "${want_version}" ]; then
+      [ "$(meta_get "${meta}" version)" = "${want_version}" ] || continue
+    else
+      [ "$(meta_get "${meta}" channel)" = "${channel}" ] || continue
     fi
+    at="$(meta_get "${meta}" accepted_at)"
+    if [ -n "${best}" ] && ! [[ "${at}" > "${best_at}" ]]; then continue; fi
+    cache_usable "${dir}" "" "${want_stamp}" "${want_source}" || continue
+    best="${dir}"
+    best_at="${at}"
   done
   printf '%s' "${best}"
 }
@@ -270,12 +280,12 @@ read_pins() {
   ibc_sha="$(jq -er '.ibc.sha256' "${versions}")"
 }
 
-# resolve_offline REASON EXIT: IBKR could not be used; take the cached pin, else (without
-# --strict) the newest cached version of the channel, else exit EXIT.
+# resolve_offline REASON EXIT: IBKR could not be used; take the cached pin (its SHA-256), else (without
+# --strict) the newest cached version of the channel from this run's origin, else exit EXIT.
 resolve_offline() {
   local reason="$1" code="$2" dir
   ibkr_reachable=no
-  dir="$(cache_entry "${pin_version}")"
+  dir="$(cache_entry "${pin_version}" "${pin_sha}")"
   if cache_usable "${dir}" "${pin_sha}"; then
     say "${reason}; building the cached pinned ${pin_version}"
     use_cached "${dir}"
@@ -284,8 +294,8 @@ resolve_offline() {
   if [ "${strict}" = yes ]; then
     die "${code}" "${reason}, and the pinned ${pin_version} (${arch}) is not in the cache ${cache}"
   fi
-  dir="$(cache_newest_of_channel)"
-  if [ -n "${dir}" ] && cache_usable "${dir}"; then
+  dir="$(cache_newest "" "" "${origin}")"
+  if [ -n "${dir}" ]; then
     say "${reason}; building the cached $(meta_get "${dir}/meta" version), accepted $(meta_get "${dir}/meta" accepted_at)"
     use_cached "${dir}"
     return
@@ -311,7 +321,7 @@ resolve_from_ibkr() {
   if [ "${served_version}" = "${pin_version}" ]; then
     version="${pin_version}"
     build_stamp="${pin_stamp}"
-    cached="$(cache_entry "${pin_version}")"
+    cached="$(cache_entry "${pin_version}" "${pin_sha}")"
     if cache_usable "${cached}" "${pin_sha}"; then
       say "IBKR serves the pinned ${pin_version}; using the cached copy"
       use_cached "${cached}"
@@ -337,8 +347,8 @@ the new bytes in versions.json after checking them."
   if [ "${strict}" = yes ]; then
     die 4 "--strict: IBKR's ${channel} channel serves ${served_version}; versions.json pins ${pin_version}"
   fi
-  cached="$(cache_entry "${served_version}")"
-  if cache_usable "${cached}" "" "${build_stamp}" "${origin}"; then
+  cached="$(cache_newest "${served_version}" "${build_stamp}" "${origin}")"
+  if [ -n "${cached}" ]; then
     say "IBKR serves ${served_version} ${served_datetime}; using the cached copy"
     use_cached "${cached}"
     return 0
@@ -480,7 +490,7 @@ cmd_resolve() {
 
 # cmd_accept ARGS...: the `accept` subcommand (see the contract).
 cmd_accept() {
-  local cache="" run="" image="" run_dir plan version channel arch qualified sha stamp pinned_version dest
+  local cache="" run="" image="" run_dir plan version channel arch qualified sha stamp pinned_version dest file source
   while [ $# -gt 0 ]; do
     case "$1" in
       --cache) cache="${2:?}" && shift 2 ;;
@@ -501,14 +511,26 @@ cmd_accept() {
   stamp="$(meta_get "${plan}" ibkr_build_stamp)"
   pinned_version="$(meta_get "${plan}" pinned_version)"
   if [ ! -e "${run_dir}/from-cache" ] && [ -f "${run_dir}/download-${arch}.sh" ]; then
-    dest="${cache}/installers/${version}/${arch}"
-    rm -rf "${dest}"
-    mkdir -p "${dest}"
-    mv -f "${run_dir}/download-${arch}.sh" "${dest}/ibgateway-${version}-standalone-linux-${arch}.sh"
-    printf 'version: %s\nchannel: %s\narch: %s\nsha256: %s\nibkr_build_stamp: %s\nsource: %s\naccepted_at: %s\n' \
-      "${version}" "${channel}" "${arch}" "${sha}" "${stamp}" "$(meta_get "${plan}" installer_source)" \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${dest}/meta"
-    say "cached ${version} (${arch}) in ${dest}"
+    source="$(meta_get "${plan}" installer_source)"
+    dest="${cache}/installers/${version}/${arch}/${sha}"
+    file="${dest}/ibgateway-${version}-standalone-linux-${arch}.sh"
+    if [ -f "${dest}/meta" ] && [ -f "${file}" ] && [ "$(sha256_of "${file}")" = "${sha}" ]; then
+      # These bytes are cached already (the directory is their SHA-256): keep the entry, so
+      # that bytes IBKR sent are not relabelled as a user's file; a copy fresh from IBKR only
+      # upgrades the recorded source of an entry that came from elsewhere.
+      if [ "${source}" = ibkr ] && [ "$(meta_get "${dest}/meta" source)" != ibkr ]; then
+        sed -i 's/^source: .*/source: ibkr/' "${dest}/meta"
+      fi
+      rm -f "${run_dir}/download-${arch}.sh"
+    else
+      rm -rf "${dest}"
+      mkdir -p "${dest}"
+      mv -f "${run_dir}/download-${arch}.sh" "${file}"
+      printf 'version: %s\nchannel: %s\narch: %s\nsha256: %s\nibkr_build_stamp: %s\nsource: %s\naccepted_at: %s\n' \
+        "${version}" "${channel}" "${arch}" "${sha}" "${stamp}" "${source}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${dest}/meta"
+      say "cached ${version} (${arch}) in ${dest}"
+    fi
   fi
   rm -rf "${run_dir}"
   if [ "${qualified}" != yes ]; then

@@ -245,9 +245,9 @@ last_lines() {
   # The installer was in the build context during the build, and is gone afterwards.
   grep -qx ibgateway-10.50.1g-standalone-linux-x64.sh "${WORK}/stub/context-downloads"
   [ ! -e "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" ]
-  # Accepted into the cache by version, with its SHA-256.
-  cmp "${CACHE}/installers/10.50.1g/x64/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/pinned-x64.sh"
-  grep -qx "sha256: ${PIN_X64}" "${CACHE}/installers/10.50.1g/x64/meta"
+  # Accepted into the cache by version and SHA-256.
+  cmp "${CACHE}/installers/10.50.1g/x64/${PIN_X64}/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/pinned-x64.sh"
+  grep -qx "sha256: ${PIN_X64}" "${CACHE}/installers/10.50.1g/x64/${PIN_X64}/meta"
 }
 
 @test "IBKR serves the pinned version with other bytes: SHA-256 mismatch, exit 1, nothing built or cached" {
@@ -286,7 +286,7 @@ last_lines() {
   # version.json was read before and after the download, the installer once.
   [ "$(grep -c '^GET /stable-standalone/version.json$' "${WORK}/requests.log")" -eq 2 ]
   [ "$(installer_requests stable x64)" -eq 1 ]
-  grep -qx "ibkr_build_stamp: (.1h) 20261116 16:02:08" "${CACHE}/installers/10.50.1h/x64/meta"
+  grep -qx "ibkr_build_stamp: (.1h) 20261116 16:02:08" "${CACHE}/installers/10.50.1h/x64/${NEWER_X64}/meta"
 }
 
 @test "IBKR moved past the pin and the installer's stamp is not what version.json says: exit 1, naming both" {
@@ -365,7 +365,7 @@ last_lines() {
   [ "$(buildx_arg IB_GATEWAY_CHANNEL)" = latest ]
   [ "$(buildx_arg IB_GATEWAY_BUILD_STAMP)" = "(.1a) 20261120 09:00:00" ]
   [ ! -s "${WORK}/requests.log" ]
-  [ -f "${CACHE}/installers/10.53.1a/x64/meta" ]
+  [ -f "${CACHE}/installers/10.53.1a/x64/$(sha256_of "${WORK}/mine.sh")/meta" ]
 }
 
 @test "--installer with the pinned bytes builds the pin, qualified" {
@@ -525,7 +525,7 @@ last_lines() {
   [ "$(buildx_option --platform)" = linux/arm64 ]
   [ "$(buildx_arg IB_GATEWAY_SHA256_ARM)" = "${PIN_ARM}" ]
   [ "$(installer_requests stable arm)" -eq 1 ]
-  [ -f "${CACHE}/installers/10.50.1g/arm/meta" ]
+  [ -f "${CACHE}/installers/10.50.1g/arm/${PIN_ARM}/meta" ]
 }
 
 @test "--tag replaces the default tags; image names it" {
@@ -542,7 +542,7 @@ last_lines() {
   serve_installer stable x64 "${WORK}/pinned-x64.sh"
   XDG_CACHE_HOME="${WORK}/xdg" run --separate-stderr "${REPO}/scripts/build-image.sh" --no-smoke
   [ "$status" -eq 0 ]
-  [ -f "${WORK}/xdg/brokersre-ib-gateway/installers/10.50.1g/x64/meta" ]
+  [ -f "${WORK}/xdg/brokersre-ib-gateway/installers/10.50.1g/x64/${PIN_X64}/meta" ]
 }
 
 @test "without the test override the helper asks IBKR, over HTTPS only" {
@@ -772,4 +772,38 @@ cached_meta() {
   build --no-smoke
   [ "$status" -eq 0 ]
   [ "$(buildx_arg IB_GATEWAY_INSTALLER_SOURCE)" = ibkr ]
+}
+
+# --- Cache entries are keyed by version and SHA-256 (review of #39).
+
+@test "an --installer copy of the pinned version with other bytes does not replace the cached pin" {
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  make_fake_installer "${WORK}/reupload.sh" "IB Gateway 10.50" "(.1g) 20261109 16:10:13" ibgateway-stable-standalone-linux-x64 re-upload
+  build --installer "${WORK}/reupload.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: no" ]
+  rm -f "${WORK}/stub/buildx-args"
+  BROKERSRE_TEST_IBKR_BASE_URL="http://127.0.0.1:1" build --strict --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(last_lines | sed -n 3p)" = "qualified_by_project: yes" ]
+  [ "$(buildx_arg IB_GATEWAY_SHA256_X64)" = "${PIN_X64}" ]
+  [ "$(find "${CACHE}/installers/10.50.1g/x64" -name meta | wc -l)" -eq 2 ]
+}
+
+@test "the same bytes given again with --installer keep the entry IBKR's download made" {
+  serve_version stable 10.50.1h "20261116 16:02:08"
+  serve_installer stable x64 "${WORK}/newer-x64.sh"
+  use_stub_ibkr
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  build --installer "${WORK}/newer-x64.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(find "${CACHE}/installers/10.50.1h/x64" -name meta | wc -l)" -eq 1 ]
+  grep -qx 'source: ibkr' "$(cached_meta 10.50.1h)"
+  build --no-smoke
+  [ "$status" -eq 0 ]
+  [ "$(installer_requests stable x64)" -eq 1 ]
 }
