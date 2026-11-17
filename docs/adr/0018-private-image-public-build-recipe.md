@@ -232,7 +232,7 @@ checklist is in `tasks/todo.md`):
 2. *Manage Actions access*, *Add repository*: `RocketEdge/brokersre-ib-gateway` with role
    Write; `RocketEdge/brokersre` with role Read.
 3. Re-enable `publish.yml` and `detect-releases.yml`; dispatch `publish.yml` with
-   `channels="stable latest"`; read the run through the job "the package is private" (its log
+   `channels="stable latest"`; read the run through the job "the package is not public" (its log
    says `private: an anonymous read ... was refused`), the same check right before the push,
    and each channel's "Verify the signature and attestations".
 4. Then re-enable `rebuild.yml`: its scan fails while the package holds no channel tags.

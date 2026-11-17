@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Prove that a ghcr.io package is private: an ANONYMOUS read of one of its tags must be refused.
+# Prove that a ghcr.io package is not anonymously readable: an ANONYMOUS read of one of its
+# tags must be refused. That is all it proves: a private and an internal package both pass
+# (docs/limitations.md L40); the word "private" in its output and its name means exactly this.
 #
 # Purpose: publish.yml's gate before any image with IBKR software in it is pushed (ADR 0018).
-# A package GitHub creates on the first push from a workflow may come out public (GitHub's
+# A package GitHub creates on the first push from a workflow comes out public here (GitHub's
 # "Default permissions and access settings for packages modified through workflows": such a
 # package "inherits the visibility and permissions model of the repository", and this
-# repository is public; the organisation's "Package creation" setting can also force public).
+# repository is public; seen on 2026-11-17, ADR 0018 amendment; the organisation's "Package
+# creation" setting can also force public).
 # So publish.yml first pushes a placeholder without IBKR content (FROM scratch, one text file)
 # and runs this script on it; only exit 0 lets the gateway image be built and pushed.
 #
@@ -14,7 +17,8 @@
 #   repository  the package path below ghcr.io, lower case, e.g. rocketedge/brokersre-ib-gateway
 #   tag         a tag that exists in the package (publish.yml pushed it just before)
 #   stdout      on exit 0 one line: private: <why>
-#   exit        0 private: the anonymous token request was refused (401/403)
+#   exit        0 private (not anonymously readable; private or internal): the anonymous token
+#                 request was refused (401/403)
 #               1 PUBLIC: the anonymous token was granted and the manifest request with it
 #                 returned the manifest (message on stderr)
 #               2 bad input (nothing requested)
