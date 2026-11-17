@@ -28,12 +28,13 @@ BeforeAll {
         .SYNOPSIS
         A plan as the helper's 'resolve' prints it for IBKR's 10.50.1h on stable.
         #>
-        param([string]$Stamp, [string]$Context)
+        param([string]$Stamp, [string]$Context, [string]$Owned = 'yes')
         return @('version: 10.50.1h', 'channel: stable', 'arch: x64', 'pinned_version: 10.50.1g', 'pinned: no',
             'qualified_by_project: no', ('ibkr_build_stamp: {0}' -f $Stamp), ('installer_sha256: {0}' -f ('b' * 64)),
-            'source: ibkr', 'cache_hit: no', 'ibkr_reachable: yes', 'run: run-Ab12Cd34', ('context_file: {0}' -f $Context),
+            'source: ibkr', 'installer_source: ibkr', 'cache_hit: no', 'ibkr_reachable: yes', 'run: run-Ab12Cd34',
+            ('context_file: {0}' -f $Context), ('context_owned: {0}' -f $Owned),
             'build_arg: IB_GATEWAY_VERSION=10.50.1h', ('build_arg: IB_GATEWAY_BUILD_STAMP={0}' -f $Stamp),
-            'build_arg: IB_GATEWAY_QUALIFIED=no')
+            'build_arg: IB_GATEWAY_QUALIFIED=no', 'build_arg: IB_GATEWAY_INSTALLER_SOURCE=ibkr')
     }
 
     function Get-TestCall {
@@ -182,6 +183,17 @@ Describe 'Invoke-BuildImage' {
         (Get-TestCall -Calls $script:calls -Marker 'accept').Count | Should -Be 0
         (Get-TestCall -Calls $script:calls -Marker 'ibc-smoke').Count | Should -Be 0
         Test-Path -LiteralPath $contextPath | Should -BeFalse
+    }
+
+    It 'an installer the user put in downloads/ (context_owned: no) stays after a <outcome> build' -TestCases @(
+        @{ outcome = 'successful'; buildExit = 0; code = 0 }, @{ outcome = 'failed'; buildExit = 1; code = 1 }
+    ) {
+        $script:buildExit = $buildExit
+        $script:plan = Get-TestPlan -Stamp $script:stamp -Context $script:context -Owned 'no'
+        $contextPath = Join-Path $script:repo ($script:context -replace '/', [IO.Path]::DirectorySeparatorChar)
+        Set-Content -LiteralPath $contextPath -Value 'the user''s installer'
+        Invoke-BuildImage -ArgumentList @('-NoSmoke', '-CacheDir', $script:cache) -RepoRoot $script:repo | Should -Be $code
+        Test-Path -LiteralPath $contextPath | Should -BeTrue
     }
 
     It 'the smoke test runs in the helper container through the Docker socket, offline' {

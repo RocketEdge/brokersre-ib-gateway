@@ -365,7 +365,10 @@ function Invoke-BuildImage {
         }
     }
     finally {
-        if ($contextFile -ne '' -and (Test-Path -LiteralPath $contextPath)) { Remove-Item -LiteralPath $contextPath -Force }
+        # Only the installer this run put into downloads/; a file that was there before (the
+        # user's, context_owned: no) is never removed.
+        $owned = (Get-BiPlanValue -Plan $plan -Key 'context_owned') -eq 'yes'
+        if ($owned -and $contextFile -ne '' -and (Test-Path -LiteralPath $contextPath)) { Remove-Item -LiteralPath $contextPath -Force }
     }
 
     if ($settings.Smoke) {

@@ -807,3 +807,33 @@ cached_meta() {
   [ "$status" -eq 0 ]
   [ "$(installer_requests stable x64)" -eq 1 ]
 }
+
+# --- The build context's downloads/: the wrapper removes only what it put there (review of #39).
+
+@test "--installer naming the file in downloads/ keeps it after a successful build, and caches it" {
+  cp "${WORK}/pinned-x64.sh" "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  build --installer "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" --no-smoke
+  [ "$status" -eq 0 ]
+  cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/pinned-x64.sh"
+  [ -f "${CACHE}/installers/10.50.1g/x64/${PIN_X64}/meta" ]
+}
+
+@test "--installer naming the file in downloads/ keeps it after a failed build" {
+  cp "${WORK}/pinned-x64.sh" "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  STUB_BUILD_RC=1 build --installer "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" --no-smoke
+  [ "$status" -eq 1 ]
+  cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/pinned-x64.sh"
+}
+
+@test "a file with other bytes at the installer's place in downloads/ is refused and left untouched" {
+  printf 'an archived copy of something else\n' >"${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"
+  cp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
+  serve_version stable 10.50.1g "20261109 16:10:13"
+  serve_installer stable x64 "${WORK}/pinned-x64.sh"
+  build --no-smoke
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
+  cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
+  [ ! -e "${WORK}/stub/buildx-args" ]
+  no_runs_left
+}

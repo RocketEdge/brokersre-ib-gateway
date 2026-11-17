@@ -17,8 +17,10 @@
 #       source (how this run got it: ibkr|override|cache|installer), installer_source (where
 #       the bytes came from: ibkr, override = the test server, installer = --installer),
 #       cache_hit (yes|no), ibkr_reachable (yes|no|not-asked),
-#       then, unless --print-plan: context_file, run, and one `build_arg: NAME=VALUE` line per
-#       Dockerfile build argument.
+#       then, unless --print-plan: run, context_file, context_owned (yes when this run put the
+#       file there and the wrapper removes it after the build; no when the same bytes were there
+#       already, the user's file), and one `build_arg: NAME=VALUE` line per Dockerfile build
+#       argument. Other bytes already at the context file's place are refused (exit 1).
 #     Decision (docs/specs/2026-11-17-private-image-public-recipe.md, ADR 0018):
 #       - --installer FILE: the version, build stamp, channel and architecture are read from the
 #         installer's own i4jparams.conf (fetch-installer.sh --read-stamp); qualified when the
@@ -401,7 +403,7 @@ emit_plan() {
     if [ "${print_plan}" = no ]; then
       sha_arg=IB_GATEWAY_SHA256_X64
       if [ "${arch}" = arm ]; then sha_arg=IB_GATEWAY_SHA256_ARM; fi
-      printf 'run: %s\ncontext_file: downloads/%s\n' "${run_id}" "${context_name}"
+      printf 'run: %s\ncontext_file: downloads/%s\ncontext_owned: %s\n' "${run_id}" "${context_name}" "${context_owned}"
       printf 'build_arg: %s=%s\n' \
         UBUNTU_DIGEST "${ubuntu_digest}" \
         IBC_VERSION "${ibc_version}" \
@@ -475,10 +477,22 @@ cmd_resolve() {
   [[ "${version}" =~ ${VERSION_RE} ]] || die 1 "refusing the version '${version}' (expected digits.digits.suffix)"
 
   context_name="ibgateway-${version}-standalone-linux-${arch}.sh"
+  context_owned=yes
   if [ "${print_plan}" = no ]; then
     mkdir -p "${downloads}"
-    cp "${installer_file}" "${downloads}/.${context_name}.part"
-    mv -f "${downloads}/.${context_name}.part" "${downloads}/${context_name}"
+    # A file already at that place is the user's (an archived installer for the bake path, or
+    # the very file named with --installer): never overwritten, never removed by the wrapper.
+    # The Dockerfile takes whatever is there, so other bytes than this build's are refused.
+    if [ -e "${downloads}/${context_name}" ]; then
+      if [ "$(sha256_of "${downloads}/${context_name}" 2>/dev/null)" != "${installer_sha}" ]; then
+        die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched: move it elsewhere, or build from it with --installer."
+      fi
+      context_owned=no
+      say "downloads/${context_name} already holds this installer; it is used and left in place"
+    else
+      cp "${installer_file}" "${downloads}/.${context_name}.part"
+      mv -f "${downloads}/.${context_name}.part" "${downloads}/${context_name}"
+    fi
     if [ "${source}" = cache ]; then
       : >"${run_dir}/from-cache"
     elif [ "${installer_file}" != "${run_dir}/download-${arch}.sh" ]; then

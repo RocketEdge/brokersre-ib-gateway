@@ -201,8 +201,12 @@ discard() {
   helper discard --cache /cache --run "${run_id}" >/dev/null 2>&1 || true
 }
 context_path="${repo_root}/${context_file}"
+# remove_context_installer: remove the installer this run put into downloads/ (and only that:
+# a file that was there before, the user's, is never removed).
 # shellcheck disable=SC2329  # invoked through the EXIT trap
-remove_context_installer() { rm -f "${context_path}"; }
+remove_context_installer() {
+  if [ "$(value context_owned)" = yes ]; then rm -f "${context_path}"; fi
+}
 trap remove_context_installer EXIT
 
 set -- buildx build --platform "${platform}" --load
