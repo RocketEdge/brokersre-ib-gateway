@@ -834,6 +834,12 @@ cached_meta() {
   build --no-smoke
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"downloads/ibgateway-10.50.1g-standalone-linux-x64.sh holds other bytes"* ]]
+  # The likely cause and the safe way out are named: a leftover of an interrupted or parallel
+  # build, removed only when no other build runs, in either shell.
+  [[ "$stderr" == *"leftover of an interrupted build or of a build running in parallel"* ]]
+  [[ "$stderr" == *"no other build is running"* ]]
+  [[ "$stderr" == *"rm downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"* ]]
+  [[ "$stderr" == *"Remove-Item downloads/ibgateway-10.50.1g-standalone-linux-x64.sh"* ]]
   cmp "${REPO}/downloads/ibgateway-10.50.1g-standalone-linux-x64.sh" "${WORK}/kept"
   [ ! -e "${WORK}/stub/buildx-args" ]
   no_runs_left

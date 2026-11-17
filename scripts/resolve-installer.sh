@@ -493,7 +493,14 @@ cmd_resolve() {
     # The Dockerfile takes whatever is there, so other bytes than this build's are refused.
     if [ -e "${downloads}/${context_name}" ]; then
       if [ "$(sha256_of "${downloads}/${context_name}" 2>/dev/null)" != "${installer_sha}" ]; then
-        die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched: move it elsewhere, or build from it with --installer."
+        # The usual cause is not a file the user put there: a build killed before its cleanup
+        # (or a second build from the same folder, which shares downloads/) leaves its copy.
+        die 1 "downloads/${context_name} holds other bytes than the installer this build uses (${installer_sha}); the build would read that file. It was left untouched.
+  It may be a leftover of an interrupted build or of a build running in parallel from this
+  folder. If no other build is running, remove it and build again:
+    rm downloads/${context_name}                 (bash)
+    Remove-Item downloads/${context_name}        (PowerShell)
+  If you put it there yourself, move it elsewhere, or build from it with --installer."
       fi
       context_owned=no
       say "downloads/${context_name} already holds this installer; it is used and left in place"
