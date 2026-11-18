@@ -37,6 +37,14 @@ steps() {
   awk -f "${LISTER}" "$1"
 }
 
+# step_run FILE NAME: the script lines of the first step called NAME (nothing when none is).
+step_run() {
+  local n
+  n="$(steps "$1" | awk -F '\t' -v name="$2" '$2 == "name" && $3 == name { print $1; exit }')"
+  [ -n "${n}" ] || return 0
+  steps "$1" | awk -F '\t' -v step="${n}" '$1 == step && $2 == "run" { print $3 }'
+}
+
 # scanner_steps FILE: the numbers of the steps that run the scanner action.
 scanner_steps() {
   steps "$1" | awk -F '\t' '$2 == "uses" && $3 ~ /^aquasecurity\/trivy-action@/ { print $1 }'
@@ -271,6 +279,41 @@ cron_conditions() {
 @test "CI lints the helper's Dockerfile and checks build_datetime in versions.json" {
   grep -q 'dockerfile: scripts/build-helper/Dockerfile' "${WF}/ci.yml"
   grep -q 'build_datetime' "${WF}/ci.yml"
+}
+
+@test "CI shellchecks and formats every tracked .sh and .bash file, the list taken from git" {
+  # Hand-written globs left tests/bats/unit/socat-server.bash and tests/bats/ci/fake-installer.bash
+  # out of both checks (review of #48). The two lint lines of ci.yml run here with stand-ins for
+  # shellcheck and docker that print the files they are given; those must be what git tracks.
+  if ! git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      echo "a git work tree is required on GitHub Actions" >&2
+      false
+    fi
+    skip "needs git and a work tree"
+  fi
+  mkdir "${WORK}/bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'for a in "$@"; do case "${a}" in -*) ;; *) printf "%s\n" "${a}" ;; esac; done' >"${WORK}/bin/shellcheck"
+  # The files follow shfmt's last flag, -d.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'while [ "$#" -gt 0 ] && [ "$1" != -d ]; do shift; done' 'shift' 'printf "%s\n" "$@"' >"${WORK}/bin/docker"
+  chmod +x "${WORK}/bin/shellcheck" "${WORK}/bin/docker"
+  git -C "${ROOT}" ls-files -- '*.sh' '*.bash' | sort >"${WORK}/tracked"
+  grep -qx 'tests/bats/unit/socat-server.bash' "${WORK}/tracked"
+  grep -qx 'tests/bats/ci/fake-installer.bash' "${WORK}/tracked"
+  line="$(step_run "${WF}/ci.yml" shellcheck | grep 'shellcheck -x')"
+  [ -n "${line}" ]
+  (cd "${ROOT}" && PATH="${WORK}/bin:${PATH}" bash -c "${line}") | sort >"${WORK}/shellchecked"
+  diff "${WORK}/tracked" "${WORK}/shellchecked"
+  line="$(step_run "${WF}/ci.yml" 'shfmt (diff only)')"
+  [ -n "${line}" ]
+  (cd "${ROOT}" && PATH="${WORK}/bin:${PATH}" bash -c "${line}") | sort >"${WORK}/formatted"
+  diff "${WORK}/tracked" "${WORK}/formatted"
+}
+
+@test "pre-commit shellchecks and formats .sh and .bash files" {
+  grep -c 'files: \\.(sh|bash)\$' "${ROOT}/.pre-commit-config.yaml" | grep -qx 2
 }
 
 @test "CI runs the PowerShell build wrapper's Pester tests under both editions and its analyzer" {

@@ -115,6 +115,67 @@ teardown() {
   [ "${reply}" == "alive" ]
 }
 
+@test "stop_servers also ends the processes a handler started" {
+  # A handler's children do not name WORK/server.sh in their command line, so matching on it
+  # missed them: with `sleep 30` as its server body, api-handshake.bats left one sleep behind
+  # on every run (review of #48). The handler below starts one and writes down its PID.
+  serve "sleep 60 & echo \"\$!\" >'${WORK}/child.pid'; wait"
+  exec 4<>"/dev/tcp/127.0.0.1/${PORT}"
+  for _ in $(seq 1 50); do
+    if [ -s "${WORK}/child.pid" ]; then break; fi
+    sleep 0.1
+  done
+  child="$(cat "${WORK}/child.pid")"
+  kill -0 "${child}"
+  stop_servers
+  exec 4>&-
+  # Gone, or a zombie its new parent has not collected yet: either way it no longer runs.
+  for _ in $(seq 1 50); do
+    state="$(ps -o stat= -p "${child}" || true)"
+    if [ -z "${state}" ] || [[ "${state}" == Z* ]]; then break; fi
+    sleep 0.1
+  done
+  [ -z "${state}" ] || [[ "${state}" == Z* ]]
+}
+
+@test "stop_servers never signals the test's own process group" {
+  # A process the test itself started that runs WORK/server.sh is in bats' process group, and
+  # a kill of that group would end bats too. It is stopped by name instead (SIGTERM, 143), and
+  # the test goes on to the end. The script waits in a builtin (read on a FIFO opened read-write,
+  # which never blocks on open), so it starts no child that could outlive the test.
+  mkfifo "${WORK}/hold"
+  serve "read -t 5 -r _ <>'${WORK}/hold'"
+  "${WORK}/server.sh" </dev/null >/dev/null 2>&1 3>&- &
+  own=$!
+  for _ in $(seq 1 50); do
+    if pgrep -f "${WORK}/server.sh" | grep -qx "${own}"; then break; fi
+    sleep 0.1
+  done
+  pgrep -f "${WORK}/server.sh" | grep -qx "${own}"
+  stop_servers
+  own_status=0
+  wait "${own}" || own_status=$?
+  [ "${own_status}" -eq 143 ]
+}
+
+@test "stop_servers signals no group when it cannot read the test's own, and says so" {
+  # In CI bats is PID 1, so the test's own group is 1. Were that unreadable, the guard would
+  # compare with nothing, and kill -- -1 signals every process the caller may signal (review
+  # of #49). It must fall back to stopping by name and fail loudly instead.
+  serve 'printf "alive\n"'
+  real_ps="$(command -v ps)"
+  mkdir "${WORK}/bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ "$*" = "-o pgid= -p ${TEST_SHELL_PID}" ]; then exit 0; fi' \
+    "exec '${real_ps}' \"\$@\"" >"${WORK}/bin/ps"
+  chmod +x "${WORK}/bin/ps"
+  TEST_SHELL_PID=$$ PATH="${WORK}/bin:${PATH}" run stop_servers
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot read the test's process group"* ]]
+  # The name match still stopped the listener.
+  run ! pgrep -f "${WORK}/server.sh"
+}
+
 @test "no unit suite uses a fixed port inside Linux's ephemeral range" {
   # Hardening (review of #47): serve() takes port 0. A suite with a fixed listener port, or a
   # port it expects to be closed, keeps it below 32768, where ip_local_port_range
