@@ -11,14 +11,13 @@
 setup() {
   CLIENT="${BATS_TEST_DIRNAME}/../../container/vnc-client.sh"
   WORK="$(mktemp -d)"
-  PORT=$((40000 + RANDOM % 20000))
   # Assembled, so that no scanner takes this file for a leak.
   SECRET="hunter2""vnc"
   printf '%s\n' "${SECRET}" >"${WORK}/pw"
 }
 
 teardown() {
-  pkill -f "TCP-LISTEN:${PORT}" 2>/dev/null || true
+  stop_servers
   rm -rf "${WORK}"
 }
 
@@ -27,23 +26,14 @@ lib() {
   VNC_CLIENT_LIB=1 bash -uc "source '${CLIENT}'; \"\$@\"" _ "$@"
 }
 
-# serve <script-body>: start a socat listener on PORT that runs the given shell snippet for
-# each connection (stdin/stdout are the socket). Detached from bats' descriptors.
-serve() {
-  printf '%s\n' '#!/usr/bin/env bash' "$1" >"${WORK}/server.sh"
-  chmod +x "${WORK}/server.sh"
-  socat "TCP-LISTEN:${PORT},reuseaddr,fork" "EXEC:${WORK}/server.sh" >/dev/null 2>&1 3>&- &
-  for _ in $(seq 1 50); do
-    if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/${PORT}" 2>/dev/null; then return 0; fi
-    sleep 0.1
-  done
-  return 1
-}
+# serve <script-body>: a socat listener on a port the kernel picks, named in PORT;
+# stop_servers ends it (tests/bats/unit/socat-server.bash).
+load socat-server
 
 # A server that speaks RFB 3.8 with VNC authentication as far as the client goes. It records
 # what the client sent (hex, one item per line) in WORK/seen and answers the password check
-# with the four bytes in RESULT. The challenge is the bytes 00 01 ... 0f. A probe connection
-# that sends nothing ends at the first read.
+# with the four bytes in RESULT. The challenge is the bytes 00 01 ... 0f. A connection that
+# sends nothing ends at the first read.
 rfb_server() { # RESULT (eight hex digits)
   serve 'seen="'"${WORK}"'/seen"
 printf "RFB 003.008\n"

@@ -201,3 +201,9 @@
 
 - [ ] Decide L40: a gate that also reads the package's `visibility` from GitHub's API and refuses anything but the chosen value (first establish whether the workflow's token may read the package's metadata)
 - [x] After the build-recipe pull request merges: README "Automatic updates" and `docs/upgrade-policy.md` still say the detection runs daily (now hourly, full check daily). Done on 2026-11-17 (branch `docs/package-state`): hourly at minute 23; the full check (download, hash, decide) daily at 06:00 UTC, on dispatch and in an hourly run at the first sight of a version
+
+## Unit-suite stand-in server flake (2026-11-18, branch `fix/vnc-client-flake`, #47)
+
+- [x] Root cause of the intermittent `vnc-client.bats` failure (drawn port held by an earlier client in TIME_WAIT); `serve` takes port 0 from the kernel (`tests/bats/unit/socat-server.bash`)
+- [x] Review of #47: test 1 forces the client to close first and accepts FIN-WAIT-2; `stop_servers` refuses an unset `WORK`; fixed test ports below 32768 with a guard
+- [ ] Follow-up: `serve` rewrites `WORK/server.sh` in place, and test 1 of `socat-server.bats` calls it twice. On this kernel, writing a script that is in `execve()` fails with "Text file busy" (963 refused rewrites during 3000 execs), so a second `serve` can fail while the first listener's handler is still starting. Unconfirmed as the cause of the one stressed failure of test 1 (1 in 800 loaded runs, log lost; its exact sequence passed 1000 of 1000). Cheap fix: write the script under a new name and `mv` it into place (or one script per call), with a test that runs `serve` while another process keeps executing the old script

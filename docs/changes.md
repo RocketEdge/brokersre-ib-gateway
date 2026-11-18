@@ -5,6 +5,82 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — Review of #47: the held-port test, `stop_servers` without `WORK`, fixed ports
+
+- **What changed:** test 1 of `socat-server.bats` gives its first server `cat >/dev/null`, so
+  the client always closes first, and looks for the client's port in FIN-WAIT-2 or TIME_WAIT
+  for 5 s (it waited 2 s for TIME_WAIT only, behind a server that could close first).
+  `stop_servers` expands `${WORK:?...}`: with `WORK` unset its pattern was `/server.sh`, every
+  test's servers. Hardening: `wait-for-gateway.bats` 47001 and `doctor.bats` 47631/47632 move
+  to 17001 and 17631/17632, below the ephemeral range, and a guard in `socat-server.bats` scans
+  the unit suites for a fixed listener or connect port inside 32768-60999. The previous
+  entry's rate arithmetic is shown per suite.
+- **Result:** the reviewer's loop failed test 1 once under client churn (line 34, no port
+  found). With the client closing 0.3 s after the server, the old lookup found nothing in 20
+  of 20 runs (the TIME_WAIT was the server's) and the new one found the port in 20 of 20.
+  Against `main`'s `serve` the new test 1 still fails, after 5367 ms, socat logging `E bind(6,
+  {AF=2 0.0.0.0:49736}, 16): Address already in use`. `socat-server.bats` loops: 0 of 300
+  under churn (about 1,100 client ports in TIME_WAIT); final file, churn plus a 2-CPU cap:
+  1 of 200 with 8 busy loops (see below), then 0 of 300 with 8 and 0 of 300 with 16. The
+  `stop_servers` test failed first ("expected nonzero exit code"), the guard listed the five
+  uses; both pass now. Unit suite 534/534 in the image.
+- **What did NOT work / root cause:** the test assumed the client closes first while its
+  server could close first, and looked for one state only. My own load loop (0 of 200) never
+  hit that; delaying the client's close did, every time. I removed the containers of the 1 of
+  200 run before copying its log, so that failure's line is unknown. A candidate, observed but
+  unconfirmed: `serve` rewrites `WORK/server.sh` in place, test 1 calls it twice, and on this
+  kernel a write to a script that is in `execve()` fails with "Text file busy" (963 refused
+  rewrites while 3000 execs of a `#!/usr/bin/env bash` script ran; the exec side failed too,
+  `bad interpreter: Text file busy`). Test 1's exact sequence, 1000 times under 8 busy loops,
+  never failed.
+- **Next step:** `tasks/todo.md` follow-up: write the script under a new name and `mv` it into
+  place, with a test that keeps executing the old one. A failing loop keeps its logs until they
+  are copied.
+
+### 2026-11-18 — Unit-suite stand-in servers take their port from the kernel
+
+- **What changed:** `api-handshake.bats` and `vnc-client.bats` shared a byte-identical
+  `serve()`; it now lives once in `tests/bats/unit/socat-server.bash`. It starts socat on
+  `TCP-LISTEN:0,bind=127.0.0.1` and reads the port from socat's own `listening on` notice (a
+  connect made as soon as the line appeared was refused 0 times in 200) instead of drawing a
+  port from 40000-59999 and probing it for 5 s. When socat exits or does not listen within
+  5 s, `serve` prints socat's log. `stop_servers` ends a test's servers by its private `WORK`
+  path.
+  `socat-server.bats` pins three cases. Test-only: nothing under `rootfs/` changed, the image
+  is the same.
+- **Result:** root cause of the intermittent "a full session" failure (CI: `build-test` on
+  #43, attempt 1, test 504; `main` at `f999345`, test 505; both `serve` line 40 after 5.4 s,
+  2 of about 95 complete unit-suite runs since 2026-11-12). The drawn port lies inside Linux's
+  ephemeral range (32768-60999). A client that closes first keeps its own port in TIME_WAIT for
+  60 s, and that socket was made without SO_REUSEADDR, so socat's bind fails with "Address
+  already in use" despite `reuseaddr`; socat exits, its stderr went to `/dev/null`, and the
+  probe polled a dead port. Red first: with `PORT` set to a client port in TIME_WAIT the old
+  `serve` failed after 5382 ms and socat logged `E bind(6, {AF=2 0.0.0.0:35136}, 16): Address
+  already in use`; a socat that cannot listen was waited out for 5.3 s without a word. Loops of
+  `vnc-client.bats` inside the image, serial as in CI: under client churn (about 1,100 client
+  ports in TIME_WAIT, 490-690 of them in the draw range) 26 of 300 runs failed before (29
+  tests; each one a socat EADDRINUSE on a port that a client TIME_WAIT socket held, 29 of 29)
+  and 0 of 300 after; under CPU stress alone (2-CPU cap, 40 busy loops on 20 vCPUs, about 7 s
+  per run) no bind failure before (1 of 200 runs failed differently, see below) and 0 of 200
+  after; idle, 0 of 400 before and 0 of 400 after. In sampled runs of the whole suite, 12
+  client ports sat in the draw range while `vnc-client.bats` ran (19-21 with 2 CPUs), so each
+  of its 3 `serve` calls hit one with 12/20000-21/20000 = 0.06-0.1 %: 0.18-0.32 % per run;
+  `api-handshake.bats` runs first and saw 1-4 such ports, 6 calls x 0.005-0.02 % =
+  0.03-0.12 %. Together about 0.2-0.4 % per CI run, below the observed rate (2 of about 95;
+  95 % interval 0.26-7.4 %). No leftover process that kills socat was found.
+- **What did NOT work / root cause:** the first version of the fix read the log with a bare
+  `line="$(grep ...)"`. Bats runs tests under errexit, so the first poll that found nothing
+  ended the test: green on an idle machine, 259 of 300 loop runs failed once socat started
+  later (busy container, socat behind a logging wrapper). A test with a socat that starts 1 s
+  late failed in 28 ms; the poll is now the `if` condition. The loop's first socat wrapper
+  captured socat's stderr, which the new `serve` reads, and made every run fail: a harness
+  artefact, replaced by `tee`. A plain loop (0 of 400) could not show the flake at all.
+- **Next step:** under the CPU stress, one pre-fix run of "a full session" failed because the
+  stand-in server's last record (`after ...`) was not written within the test's 5 s wait (the
+  server pipeline was still running at teardown); not seen in CI, not changed here. The fixed
+  ports of `wait-for-gateway.bats` and `doctor.bats` moved below the range in the review
+  round (entry above).
+
 ### 2026-11-17 — Package access proven: outsiders refused, workflows still publish
 
 - **What changed:** documentation only: an ADR 0018 note and the owner checklist record two

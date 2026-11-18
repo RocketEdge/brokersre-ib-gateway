@@ -11,27 +11,20 @@
 setup() {
   : "${BROKERSRE_LIB:?set BROKERSRE_LIB to rootfs/usr/local/lib/brokersre}"
   WORK="$(mktemp -d)"
-  PORT=$((40000 + RANDOM % 20000))
+  # A port nothing listens on, for the tests without a server; serve() replaces it with the
+  # port its listener got.
+  PORT=1
   PROBE="${BROKERSRE_LIB}/api-handshake.sh"
 }
 
 teardown() {
-  pkill -f "TCP-LISTEN:${PORT}" 2>/dev/null || true
+  stop_servers
   rm -rf "${WORK}"
 }
 
-# serve <script-body>: start a socat listener on PORT that runs the given shell snippet for
-# each connection (stdin/stdout are the socket). Detached from bats' descriptors.
-serve() {
-  printf '%s\n' '#!/usr/bin/env bash' "$1" >"${WORK}/server.sh"
-  chmod +x "${WORK}/server.sh"
-  socat "TCP-LISTEN:${PORT},reuseaddr,fork" "EXEC:${WORK}/server.sh" >/dev/null 2>&1 3>&- &
-  for _ in $(seq 1 50); do
-    if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/${PORT}" 2>/dev/null; then return 0; fi
-    sleep 0.1
-  done
-  return 1
-}
+# serve <script-body>: a socat listener on a port the kernel picks, named in PORT;
+# stop_servers ends it (tests/bats/unit/socat-server.bash).
+load socat-server
 
 # A server that behaves like the Gateway: reads the 17 handshake bytes, records them as hex,
 # and answers "176\0" + "20261112 08:00:00 EST\0" (26 bytes, length prefix 0x0000001a).

@@ -164,7 +164,7 @@ tests/bats/ci/doc-commands.bats, doc-block.awk, doc-exec-paths.awk, pty-answers.
 rootfs/usr/local/lib/brokersre/api-handshake.sh   read-only proof that the API answers (TWS API handshake only); HEALTHCHECK_API=handshake uses it
 rootfs/etc/brokersre/                         ibc.config.ini.tmpl, jts.ini.tmpl, ibc-patterns.tsv (event classification), known-windows.txt (titles IBC handles)
 schemas/log-event.v2.schema.json (current), log-event.v1.schema.json (history)
-tests/bats/unit/*.bats (run inside the image), tests/container/run.sh (docker CLI), tests/fixtures/
+tests/bats/unit/*.bats (run inside the image; socat-server.bash is their stand-in TCP server), tests/container/run.sh (docker CLI), tests/fixtures/
 compose/docker-compose.example.yml
 compose/docker-compose.multi.yml, compose/README.md   several gateways on one host (profiles live/paper, commented third block)
 scripts/check-compose-usernames.sh                    no two gateways with the same username (SHA-256; prints no username)
@@ -244,6 +244,14 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   Never loop it, and never run it in CI (invariant 9).
 - bats: a background process started in a test must close descriptor 3 and its output
   (`cmd >/dev/null 2>&1 3>&- &`), or bats waits for it and the run hangs.
+- bats: a stand-in TCP server takes its port from the kernel (`serve` in
+  `tests/bats/unit/socat-server.bash`: `TCP-LISTEN:0`, the port read from socat's `listening on`
+  notice). Never draw a listener port from 32768-60999 (Linux's ephemeral range): an earlier
+  client's port there stays in TIME_WAIT for 60 s and makes `TCP-LISTEN` fail with "Address
+  already in use" even with `reuseaddr` (two CI failures of `vnc-client.bats`, 2026-11-17).
+  A suite's own fixed listener or closed port stays below 32768 (`socat-server.bats` scans
+  every unit suite for one inside the range). Poll in a helper with `if x="$(grep ...)"; then`: bats runs tests under errexit, so a bare
+  `x="$(grep ...)"` that finds nothing yet ends the test at the first poll (only `run` lifts it).
 - A literal backslash-u sequence in a file written through an editor or agent tool can come out
   as the character it names; assemble such test strings from parts (see `render.bats`).
 - The host that develops this repository may lack `jq`: run `tests/bats/ci` inside the image

@@ -8,7 +8,8 @@
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../../../examples/wait-for-gateway.sh"
   STUB="$(mktemp -d)"
-  PORT=47001
+  # Below 32768, outside Linux's ephemeral range: no earlier client connection can hold it.
+  PORT=17001
   # The good server: read the client's 17 handshake bytes one by one (so that nothing after
   # them is swallowed), record them as hex, answer with a length-prefixed
   # "<server version>\0<connection time>\0" (26 bytes), then record whatever else arrives.

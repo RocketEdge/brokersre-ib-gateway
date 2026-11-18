@@ -52,3 +52,34 @@ it in a minute by doing what the README says.
 volumes, both containers created before either starts. An image never carries a directory at
 a path where another image's volume is mounted, and a reader of a shared volume mounts it with
 `nocopy`.
+
+## 2026-11-18 — A port the test picks can be taken; a readiness poll must survive errexit
+
+**Pattern:** two unit suites started socat on a random port from 40000-59999 and probed it for
+5 s. That range lies inside Linux's ephemeral range, and a client that closes first keeps its
+own port in TIME_WAIT for 60 s, so now and then the drawn port was an earlier client's: socat
+failed with "Address already in use" (reuseaddr does not help against a socket made without
+it), exited, and its error went to /dev/null. CI showed only "serve failed" after 5.4 s, twice.
+The first version of the fix then read socat's log with a bare `line="$(grep ...)"`: under
+bats' errexit the first poll that found nothing ended the test. It passed on an idle machine
+and failed 259 of 300 loop runs once socat started a little later (busy container, socat
+behind a logging wrapper). Only the loop showed it.
+
+**Rule:** a test listener takes port 0 and learns its port from the server (socat's
+`listening on` notice), and the helper prints the server's own log when it does not come up.
+Poll with `if x="$(...)"; then` in code that runs under errexit. Prove a flake fix with a loop
+under the failing condition (and under load) before and after, not with one green run.
+
+## 2026-11-18 — A test that needs a TCP state must force who closes first
+
+**Pattern:** the regression test for the fix above needed "a port an earlier client still
+holds". Its server ran `exit 0` and the test waited 2 s for `state time-wait` on the client.
+The independent review's loop failed it once: when the server closed first, the TIME_WAIT was
+the server's, and before the server closes the client sits in FIN-WAIT-2, which that filter
+does not show. My own load loop never hit it (0 of 200); a client that closes 0.3 s late made
+it fail every time.
+
+**Rule:** when a test needs a socket state, force the order that produces it (a server that
+only reads, so the client closes first), accept every state that has the property the test
+needs (FIN-WAIT-2 and TIME_WAIT both hold the port), and reproduce a suspected race by
+delaying one side deterministically instead of hoping a load loop hits it.
