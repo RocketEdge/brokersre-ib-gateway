@@ -311,8 +311,10 @@ stop_real_relay() {
 }
 
 @test "the stand-in socat starts no child, so stopping it leaves nothing behind" {
-  # A child of the stand-in does not carry its path, so the teardown's pkill misses it: the
-  # stand-in's `sleep 600 &` outlived the suite (review of #49).
+  # A signal to the stand-in never reaches a child it started in the background, and no
+  # pkill -f on the stand-in's path matches that child: the old stand-in's `sleep 600 &` ran
+  # on for up to 10 minutes after "a relay that dies while it is wanted" killed the stand-in
+  # (review of #49).
   "${STUB_DIR}/socat" TCP-LISTEN:1 >/dev/null 2>&1 3>&- &
   stub=$!
   wait_until 5 test -s "${STARTS}"
@@ -322,6 +324,8 @@ stop_real_relay() {
     if [ -n "${children}" ]; then break; fi
     sleep 0.1
   done
+  # The stand-in was alive (not a zombie, whose command line is empty) when it was looked at.
+  pgrep -f "${STUB_DIR}/socat" | grep -qx "${stub}"
   kill "${stub}"
   [ -z "${children}" ]
 }

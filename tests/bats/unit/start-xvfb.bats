@@ -67,8 +67,9 @@ start() {
 }
 
 @test "the stand-in Xvfb starts no child, so stopping it leaves nothing behind" {
-  # A child of the stand-in does not carry its path, so the teardown's pkill misses it: the
-  # stand-in's `sleep 600 &` outlived every test, 4 per run (review of #49).
+  # A signal to the stand-in never reaches a child it started in the background, and no
+  # pkill -f on the stand-in's path matches that child: the old stand-in's `sleep 600 &` ran
+  # on for up to 10 minutes after start() killed the stand-in by pid, 4 per run (review of #49).
   "${WORK}/bin/Xvfb" :78 >/dev/null 2>&1 3>&- &
   stub=$!
   for _ in $(seq 1 50); do
@@ -82,6 +83,9 @@ start() {
     if [ -n "${children}" ]; then break; fi
     sleep 0.1
   done
+  # The stand-in was alive (not a zombie, whose command line is empty) when it was looked at:
+  # with its wait broken it exits at once, and the other tests here would not notice.
+  pgrep -f "${WORK}/bin/Xvfb" | grep -qx "${stub}"
   kill "${stub}"
   [ -z "${children}" ]
 }
