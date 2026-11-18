@@ -12,8 +12,12 @@ setup() {
   export STARTS="${STUB_DIR}/starts"
   : >"${STARTS}"
   # A stand-in for socat: records that it was started with which arguments, then stays alive
-  # under its own name (no exec), so the tests can find it by its path.
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >>"${STARTS}"' 'sleep 600 &' 'wait' >"${STUB_DIR}/socat"
+  # under its own name (no exec), so the tests can find it by its path. It waits in a builtin
+  # (read on a FIFO opened read-write, which never blocks on open and never gets data), so it
+  # has no child: a `sleep 600 &` child outlived the suite (review of #49).
+  export HOLD="${STUB_DIR}/hold"
+  mkfifo "${HOLD}"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >>"${STARTS}"' 'read -r -t 600 _ <>"${HOLD}"' >"${STUB_DIR}/socat"
   chmod +x "${STUB_DIR}/socat"
   export PATH="${STUB_DIR}:${PATH}"
   export SOCAT_PORT=4004 API_PORT=4002 TRADING_MODE=paper RELAY_POLL_S=0.2 SOCAT_RESTART_DELAY=0
@@ -304,4 +308,20 @@ stop_real_relay() {
   wait_until 10 grep -q '"event":"relay_refused"' "${STUB_DIR}/events"
   stop_real_relay
   grep '"event":"relay_refused"' "${STUB_DIR}/events" | head -1 | jq -e '.data.last_peer == "127.0.0.1" and .data.allow == "127.0.0.2/32"' >/dev/null
+}
+
+@test "the stand-in socat starts no child, so stopping it leaves nothing behind" {
+  # A child of the stand-in does not carry its path, so the teardown's pkill misses it: the
+  # stand-in's `sleep 600 &` outlived the suite (review of #49).
+  "${STUB_DIR}/socat" TCP-LISTEN:1 >/dev/null 2>&1 3>&- &
+  stub=$!
+  wait_until 5 test -s "${STARTS}"
+  children=""
+  for _ in $(seq 1 10); do
+    children="$(pgrep -P "${stub}" || true)"
+    if [ -n "${children}" ]; then break; fi
+    sleep 0.1
+  done
+  kill "${stub}"
+  [ -z "${children}" ]
 }

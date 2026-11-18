@@ -9,8 +9,12 @@ setup() {
   export LOG_DIR="${WORK}/logs" RUN_DIR="${WORK}/run" DISPLAY=":77" BOOT_ID="0123456789abcdef"
   mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${WORK}/bin"
   export ARGS="${WORK}/xvfb.args"
-  # A stand-in for Xvfb: records its arguments, then stays alive like the real one.
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >"${ARGS}"' 'sleep 600 &' 'wait' >"${WORK}/bin/Xvfb"
+  # A stand-in for Xvfb: records its arguments, then stays alive like the real one. It waits in
+  # a builtin (read on a FIFO opened read-write, which never blocks on open and never gets
+  # data), so it has no child: a `sleep 600 &` child outlived every test (review of #49).
+  export HOLD="${WORK}/hold"
+  mkfifo "${HOLD}"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >"${ARGS}"' 'read -r -t 600 _ <>"${HOLD}"' >"${WORK}/bin/Xvfb"
   chmod +x "${WORK}/bin/Xvfb"
   export PATH="${WORK}/bin:${PATH}"
   unset SCREENSHOTS
@@ -60,4 +64,24 @@ start() {
   [ "$(cat "${ARGS}")" == ":77 -ac -nolisten tcp -screen 0 1024x768x16" ]
   echo "$output" | jq -s -e 'map(.event) == ["screenshots_unavailable", "xvfb_started"]' >/dev/null
   echo "$output" | jq -s -e '.[0].level == "warn" and .[0].src == "xvfb"' >/dev/null
+}
+
+@test "the stand-in Xvfb starts no child, so stopping it leaves nothing behind" {
+  # A child of the stand-in does not carry its path, so the teardown's pkill misses it: the
+  # stand-in's `sleep 600 &` outlived every test, 4 per run (review of #49).
+  "${WORK}/bin/Xvfb" :78 >/dev/null 2>&1 3>&- &
+  stub=$!
+  for _ in $(seq 1 50); do
+    if [ -s "${ARGS}" ]; then break; fi
+    sleep 0.1
+  done
+  [ -s "${ARGS}" ]
+  children=""
+  for _ in $(seq 1 10); do
+    children="$(pgrep -P "${stub}" || true)"
+    if [ -n "${children}" ]; then break; fi
+    sleep 0.1
+  done
+  kill "${stub}"
+  [ -z "${children}" ]
 }
