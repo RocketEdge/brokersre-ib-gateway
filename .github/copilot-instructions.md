@@ -15,7 +15,7 @@ IMAGE=<image> tests/container/run.sh --only ibc-smoke                           
 eval "$(scripts/bake-env.sh)"                                        # variables from versions.json (jq), incl. <CHANNEL>_BUILD_STAMP
 docker buildx bake --print stable latest > /dev/null                 # bake definition resolves
 docker buildx bake stable --set '*.platform=linux/amd64' --load      # maintainer build of the PINNED version (fails when IBKR moved past it and no archived copy is in downloads/)
-hadolint Dockerfile ; shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
+hadolint Dockerfile ; git ls-files -z -- '*.sh' '*.bash' | xargs -0 shellcheck -x   # every tracked shell file and bats helper, as the lint job does (shfmt likewise)
 git clone --config core.autocrlf=false --config core.eol=lf --depth 1 -b v1.14.0 https://github.com/bats-core/bats-core tests/.bats-core   # once; LF matters inside the image (core.eol too: bats-core says `* text=auto`)
 tests/bats/run-in-image.sh brokersre-ib-gateway:stable                                  # unit suite, inside the image (the image scripts/build-image.sh built)
 tests/.bats-core/bin/bats tests/bats/ci                                                  # CI scripts (release and rebuild policy, tag promotion, VEX drift, workflow policy, archive pre-fetch, README table, documented commands, build helper against a fake IBKR server, Dockerfile stamp check), on the host (needs jq; doc-commands.bats needs python3, zsh and sh; build-image.bats needs curl and python3; dockerfile-stamp.bats and bake-env.bats need Docker)

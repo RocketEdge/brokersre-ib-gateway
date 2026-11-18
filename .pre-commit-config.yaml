@@ -19,15 +19,16 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        # .bats files use run/$status/$output idioms that trip SC2030/SC2031; CI lints .sh only.
-        files: \.sh$
+        # .bats files use run/$status/$output idioms that trip SC2030/SC2031; CI lints .sh and
+        # .bash (the bats helpers), every tracked one.
+        files: \.(sh|bash)$
         types: [file]
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.14.1-1
     hooks:
       - id: shfmt
         args: ["-i", "2", "-ci", "-bn", "-d"]
-        files: \.sh$
+        files: \.(sh|bash)$
   - repo: https://github.com/hadolint/hadolint
     rev: v2.15.1
     hooks:

@@ -10,6 +10,7 @@
 # make_fake_installer OUT APPLICATION_NAME APPLICATION_VERSION MEDIA_NAME [FILLER]: write a fake
 # installer to OUT. FILLER (optional) is extra text in the archive, so two installers with the
 # same stamp can still have different bytes (a re-upload under the same version).
+# shellcheck disable=SC2016  # the single-quoted lines are the installer's own script: their $ expand when it runs, not here
 make_fake_installer() {
   local out="$1" name="$2" app_version="$3" media="$4" filler="${5:-}" payload_dir size
   payload_dir="$(mktemp -d)"

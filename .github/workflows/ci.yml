@@ -32,13 +32,18 @@ jobs:
         with:
           dockerfile: scripts/build-helper/Dockerfile
           config: .hadolint.yaml
+      # Every tracked .sh and .bash file, listed by git: hand-written globs missed two test
+      # helpers (review of #48). The azure and sidecar workflows lint their own scripts again,
+      # with their own options, when their paths change. .bats files are not shell scripts to
+      # shellcheck (bats' run/$status/$output idioms). tests/bats/ci/workflows.bats runs these
+      # two lines with stand-ins and requires exactly the files git tracks.
       - name: shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck --version | head -2
-          shellcheck -x rootfs/usr/local/bin/*.sh rootfs/usr/local/lib/brokersre/*.sh scripts/*.sh tests/bats/*.sh tests/container/*.sh tests/compose/*.sh tests/recipes/*.sh examples/*.sh
+          git ls-files -z -- '*.sh' '*.bash' | xargs -0 shellcheck -x
       - name: shfmt (diff only)
-        run: docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d rootfs scripts tests/container tests/compose tests/recipes tests/bats/run-in-image.sh examples/wait-for-gateway.sh
+        run: git ls-files -z -- '*.sh' '*.bash' | xargs -0 docker run --rm -v "$PWD:/work" -w /work mvdan/shfmt:v3.14.1 -i 2 -ci -bn -d
       - name: versions.json sanity
         run: |
           jq -e '.schema_version == 1' versions.json
