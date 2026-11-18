@@ -18,14 +18,21 @@
 # given shell snippet for each connection (stdin/stdout are the socket, stderr goes to socat's
 # log). Detached from bats' descriptors (closes 3, see the bats note in CLAUDE.md).
 #   Requires: WORK, a writable directory private to the test.
-#   Writes:   WORK/server.sh (replaced on every call) and one log WORK/socat.XXXXXX per call.
+#   Writes:   WORK/server.sh, replaced on every call by renaming a new file onto it (never
+#             rewritten in place), and one log WORK/socat.XXXXXX per call.
 #   Returns:  0 once socat listens, with PORT set to its port (a later call replaces PORT);
 #             1 when socat exits or does not listen within 5 s, after printing socat's log on
 #             stderr, which bats shows with the failure.
+# Why the rename: an earlier listener's handler may be in execve() of WORK/server.sh, and Linux
+# refuses a write to a file that is being exec'd ("Text file busy"; one in 800 loaded runs of
+# a test that calls serve twice failed, review of #47). rename(2) only swaps the directory
+# entry: a handler keeps the inode it opened, the next connection runs the new script.
 serve() {
-  local log pid line
-  printf '%s\n' '#!/usr/bin/env bash' "$1" >"${WORK}/server.sh"
-  chmod +x "${WORK}/server.sh"
+  local log pid line script
+  script="$(mktemp "${WORK}/server.XXXXXX")"
+  printf '%s\n' '#!/usr/bin/env bash' "$1" >"${script}"
+  chmod +x "${script}"
+  mv -f "${script}" "${WORK}/server.sh"
   log="$(mktemp "${WORK}/socat.XXXXXX")"
   socat -d -d "TCP-LISTEN:0,bind=127.0.0.1,fork" "EXEC:${WORK}/server.sh" >/dev/null 2>"${log}" 3>&- &
   pid=$!
