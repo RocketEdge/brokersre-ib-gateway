@@ -99,8 +99,8 @@ file and renaming it onto the name, never rewritten in place.
 **Pattern (same day):** six stress-loop containers ran `sleep infinity` as PID 1. Every
 `stop_servers` orphans socat, bash, sleep, dd and od processes, and a PID 1 that never reaps
 kept each as a zombie (2 to 12 per suite run, more with a logging wrapper). After about 5 h
-every `fork()` failed and the loops hung without failing. In CI the suite's PID 1 is bats,
-which reaps: 0 zombies sampled.
+every `fork()` failed and the loops hung without failing. In CI the suite's PID 1 is bats (a
+bash process), which reaps: started that way, at most 1 zombie was sampled, and it was reaped.
 
 **Rule:** an experiment container gets a reaping PID 1 (`docker run --init`), every loop run
 a `timeout`, the loop an overall deadline, and its log a process count every few runs.

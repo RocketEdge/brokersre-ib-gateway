@@ -24,9 +24,11 @@
 #             1 when socat exits or does not listen within 5 s, after printing socat's log on
 #             stderr, which bats shows with the failure.
 # Why the rename: an earlier listener's handler may be in execve() of WORK/server.sh, and Linux
-# refuses a write to a file that is being exec'd ("Text file busy"; one in 800 loaded runs of
-# a test that calls serve twice failed, review of #47). rename(2) only swaps the directory
-# entry: a handler keeps the inode it opened, the next connection runs the new script.
+# refuses a write to a file that is being exec'd ("Text file busy"; the suspected, unconfirmed
+# cause of one failure in 800 loaded runs of a test that calls serve twice, review of #47, its
+# log lost). rename(2) only swaps the directory entry: a handler that has opened the script
+# keeps reading the old inode; one still starting runs the new script, which is harmless
+# because every listener runs WORK/server.sh.
 serve() {
   local log pid line script
   script="$(mktemp "${WORK}/server.XXXXXX")"

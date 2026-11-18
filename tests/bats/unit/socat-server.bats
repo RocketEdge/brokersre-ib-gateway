@@ -83,7 +83,7 @@ teardown() {
   # only for the execve() itself, so this cannot be made deterministic from user space. Eight
   # loops keep executing WORK/server.sh while serve() replaces it 60 times: an in-place
   # rewrite was refused in 29 of 400 such calls, so the old helper fails this test with a
-  # probability above 99 % (review follow-up of #47).
+  # probability of about 99 % (review follow-up of #47).
   serve 'exit 0'
   : >"${WORK}/exec-loops.on"
   loops=()
