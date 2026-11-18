@@ -15,10 +15,18 @@ Next step.
   `relay.bats` 60 of 60 and `start-xvfb.bats` 15 of 15 over three runs each; the whole unit
   suite, run as CI runs it, 541 of 541, and a process list taken 12 s after it ended showed
   nothing but PID 1 (before: 1 `sleep 600` per `relay.bats` run, 4 per `start-xvfb.bats` run).
-- **What did NOT work / root cause:** teardown stops a stand-in by its path (`pkill -f`), and
-  its `sleep 600` child carries no such path, so the child outlived the test by up to 10
-  minutes. `exec sleep 600` would leave no child but would also drop the path the tests find
+- **What did NOT work / root cause:** a test killed the stand-in, by pid (`start()` in
+  `start-xvfb.bats`, every test) or by `pkill -f` on its path ("a relay that dies while it is
+  wanted" in `relay.bats`). A signal to a bash script never reaches the child it started in
+  the background, and no `pkill -f` on the stand-in's path matches that child, so the
+  `sleep 600` ran on for up to 10 minutes. Elsewhere in `relay.bats` the supervisor stops the
+  stand-in, and `relay_stop` in `start-socat.sh` signals its children first
+  (`pkill -TERM -P <pid>`), which also ended the child. (A first account of this blamed
+  the teardown's `pkill -f`; the review of #50 counted leftovers per test and found the kills
+  above.) `exec sleep 600` would leave no child but would also drop the path the tests find
   the stand-in by; a builtin wait keeps the stand-in one process with its own command line.
+  The new tests also check that the stand-in is still alive when its children are looked for:
+  with its wait broken it exits at once, which the other `start-xvfb.bats` tests do not notice.
 - **Next step:** none. A stand-in that must stay alive waits in a builtin (contract note in
   `CLAUDE.md`).
 

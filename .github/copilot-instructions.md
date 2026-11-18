@@ -260,8 +260,9 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   every process the caller may), so what a handler started ends with it: matching on
   `WORK/server.sh` alone left a handler's children running. A stand-in program that must stay
   alive waits in a builtin (`read -r -t 600 _ <>"${HOLD}"` on a FIFO from `mkfifo`), never
-  `sleep N &` and `wait`: the sleep child does not carry the stand-in's path and outlives the
-  teardown's `pkill -f` (`relay.bats`, `start-xvfb.bats`).
+  `sleep N &` and `wait`: a signal to the stand-in never reaches that child, and no `pkill -f`
+  on the stand-in's path matches it, so a kill of the stand-in alone leaves it running
+  (`relay.bats`, `start-xvfb.bats`).
 - Lint: CI shellchecks and shfmts every file `git ls-files -- '*.sh' '*.bash'` lists (not
   `.bats`); `tests/bats/ci/workflows.bats` holds the steps to that list. Waive a finding only
   with a scoped `# shellcheck disable=SCnnnn  # reason`. `tests/bats/ci/agent-contract.bats`
