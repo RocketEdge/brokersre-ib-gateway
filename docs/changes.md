@@ -5,6 +5,33 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — The socat and Xvfb stand-ins wait without a child process
+
+- **What changed:** the stand-in `socat` of `relay.bats` and the stand-in `Xvfb` of
+  `start-xvfb.bats` stay alive by `read -r -t 600` on a FIFO opened read-write (created in
+  `setup`, path in `HOLD`) instead of `sleep 600 &` and `wait`. A test in each suite starts
+  the stand-in and fails when it has a child process.
+- **Result:** both new tests failed on the old stand-ins (a `sleep 600` child) and pass;
+  `relay.bats` 60 of 60 and `start-xvfb.bats` 15 of 15 over three runs each; the whole unit
+  suite 541 of 541, with bats as PID 1 as in CI (the review sampled the processes throughout:
+  no orphan) and under a bash PID 1, where a process list taken 12 s after the suite ended
+  showed nothing but PID 1 (before: 1 `sleep 600` per `relay.bats` run, 4 per
+  `start-xvfb.bats` run).
+- **What did NOT work / root cause:** a test killed the stand-in, by pid (`start()` in
+  `start-xvfb.bats`, every test) or by `pkill -f` on its path ("a relay that dies while it is
+  wanted" in `relay.bats`). A signal to a bash script never reaches the child it started in
+  the background, and no `pkill -f` on the stand-in's path matches that child, so the
+  `sleep 600` ran on for up to 10 minutes. Elsewhere in `relay.bats` the supervisor stops the
+  stand-in, and `relay_stop` in `start-socat.sh` signals its children first
+  (`pkill -TERM -P <pid>`), which also ended the child. (A first account of this blamed
+  the teardown's `pkill -f`; the review of #50 counted leftovers per test and found the kills
+  above.) `exec sleep 600` would leave no child but would also drop the path the tests find
+  the stand-in by; a builtin wait keeps the stand-in one process with its own command line.
+  The new tests also check that the stand-in is still alive when its children are looked for:
+  with its wait broken it exits at once, which the other `start-xvfb.bats` tests do not notice.
+- **Next step:** none. A stand-in that must stay alive waits in a builtin (contract note in
+  `CLAUDE.md`).
+
 ### 2026-11-18 — Follow-ups of the review of #48: lint coverage, contract check, server groups
 
 - **What changed:** (1) the lint job's shellcheck and shfmt steps lint every file
