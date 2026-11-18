@@ -258,7 +258,10 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   under `setsid`, and `stop_servers` sends SIGTERM to each listener's whole process group
   (never the test's own, never a group below 2: in CI bats is PID 1 and `kill -- -1` signals
   every process the caller may), so what a handler started ends with it: matching on
-  `WORK/server.sh` alone left a handler's children running.
+  `WORK/server.sh` alone left a handler's children running. A stand-in program that must stay
+  alive waits in a builtin (`read -r -t 600 _ <>"${HOLD}"` on a FIFO from `mkfifo`), never
+  `sleep N &` and `wait`: the sleep child does not carry the stand-in's path and outlives the
+  teardown's `pkill -f` (`relay.bats`, `start-xvfb.bats`).
 - Lint: CI shellchecks and shfmts every file `git ls-files -- '*.sh' '*.bash'` lists (not
   `.bats`); `tests/bats/ci/workflows.bats` holds the steps to that list. Waive a finding only
   with a scoped `# shellcheck disable=SCnnnn  # reason`. `tests/bats/ci/agent-contract.bats`

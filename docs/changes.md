@@ -5,6 +5,23 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — The socat and Xvfb stand-ins wait without a child process
+
+- **What changed:** the stand-in `socat` of `relay.bats` and the stand-in `Xvfb` of
+  `start-xvfb.bats` stay alive by `read -r -t 600` on a FIFO opened read-write (created in
+  `setup`, path in `HOLD`) instead of `sleep 600 &` and `wait`. A test in each suite starts
+  the stand-in and fails when it has a child process.
+- **Result:** both new tests failed on the old stand-ins (a `sleep 600` child) and pass;
+  `relay.bats` 60 of 60 and `start-xvfb.bats` 15 of 15 over three runs each; the whole unit
+  suite, run as CI runs it, 541 of 541, and a process list taken 12 s after it ended showed
+  nothing but PID 1 (before: 1 `sleep 600` per `relay.bats` run, 4 per `start-xvfb.bats` run).
+- **What did NOT work / root cause:** teardown stops a stand-in by its path (`pkill -f`), and
+  its `sleep 600` child carries no such path, so the child outlived the test by up to 10
+  minutes. `exec sleep 600` would leave no child but would also drop the path the tests find
+  the stand-in by; a builtin wait keeps the stand-in one process with its own command line.
+- **Next step:** none. A stand-in that must stay alive waits in a builtin (contract note in
+  `CLAUDE.md`).
+
 ### 2026-11-18 — Follow-ups of the review of #48: lint coverage, contract check, server groups
 
 - **What changed:** (1) the lint job's shellcheck and shfmt steps lint every file
