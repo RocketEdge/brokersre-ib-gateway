@@ -66,9 +66,13 @@ serve() {
 #           WORK is private to the test, so no other test's server is touched. Without WORK (a
 #           setup that failed before setting it) the pattern would be "/server.sh", every test's
 #           servers: it fails instead.
-#   Stops:  the whole process group of each (SIGTERM), never the test's own group, then by name
-#           whatever matched in the test's own group (a script the test ran itself).
-#   Returns: 0.
+#   Stops:  the whole process group of each (SIGTERM), never the test's own group and never a
+#           group below 2, then by name whatever matched in the test's own group (a script the
+#           test ran itself).
+#   Returns: 0; 1 when the test's own group cannot be read, after stopping by name only.
+# Fail closed: in CI bats is PID 1 and the test's group is 1. `kill -- -1` signals every
+# process the caller may signal and `kill -- -0` the caller's own group, so an unreadable own
+# group or a group of 0 or 1 is never signalled (review of #49).
 # Why groups: a handler's children do not name WORK/server.sh, so matching on it left them
 # running (a `sleep 30` per api-handshake.bats run, review of #48). serve() puts each listener
 # in a group of its own, and one kill(-group) reaches every member at once; walking the
@@ -77,10 +81,19 @@ stop_servers() {
   local pattern own pids group
   pattern="${WORK:?stop_servers needs WORK, the private directory of the test}/server.sh"
   own="$(ps -o pgid= -p "$$" | tr -d ' ')"
+  case "${own}" in
+    '' | *[!0-9]*)
+      echo "stop_servers: cannot read the test's process group; stopping servers by name only" >&2
+      pkill -f "${pattern}" 2>/dev/null || true
+      return 1
+      ;;
+  esac
   pids="$(pgrep -d , -f "${pattern}" || true)"
   if [ -n "${pids}" ]; then
     for group in $(ps -o pgid= -p "${pids}" | sort -u); do
-      if [ "${group}" != "${own}" ]; then kill -TERM -- "-${group}" 2>/dev/null || true; fi
+      if [ "${group}" -gt 1 ] && [ "${group}" != "${own}" ]; then
+        kill -TERM -- "-${group}" 2>/dev/null || true
+      fi
     done
   fi
   pkill -f "${pattern}" 2>/dev/null || true

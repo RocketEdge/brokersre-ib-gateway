@@ -158,6 +158,24 @@ teardown() {
   [ "${own_status}" -eq 143 ]
 }
 
+@test "stop_servers signals no group when it cannot read the test's own, and says so" {
+  # In CI bats is PID 1, so the test's own group is 1. Were that unreadable, the guard would
+  # compare with nothing, and kill -- -1 signals every process the caller may signal (review
+  # of #49). It must fall back to stopping by name and fail loudly instead.
+  serve 'printf "alive\n"'
+  real_ps="$(command -v ps)"
+  mkdir "${WORK}/bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ "$*" = "-o pgid= -p ${TEST_SHELL_PID}" ]; then exit 0; fi' \
+    "exec '${real_ps}' \"\$@\"" >"${WORK}/bin/ps"
+  chmod +x "${WORK}/bin/ps"
+  TEST_SHELL_PID=$$ PATH="${WORK}/bin:${PATH}" run stop_servers
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot read the test's process group"* ]]
+  # The name match still stopped the listener.
+  run ! pgrep -f "${WORK}/server.sh"
+}
+
 @test "no unit suite uses a fixed port inside Linux's ephemeral range" {
   # Hardening (review of #47): serve() takes port 0. A suite with a fixed listener port, or a
   # port it expects to be closed, keeps it below 32768, where ip_local_port_range
