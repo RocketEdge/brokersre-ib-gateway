@@ -59,6 +59,49 @@ teardown() {
   [ "${reply}" == "late" ]
 }
 
+@test "serve puts each script in place as a new file and leaves the old one untouched" {
+  # A handler of an earlier listener may be running the old script (bash keeps it open and
+  # reads it as it goes) or still be in execve() of it. Rewriting that file in place changes
+  # what it reads, and during its execve() the write is refused ("Text file busy", see the
+  # next test). A rename gives the new script its own inode and leaves the old one alone.
+  serve 'exit 0'
+  exec 5<"${WORK}/server.sh"
+  old_inode="$(stat -c %i "${WORK}/server.sh")"
+  serve 'printf "second\n"'
+  [ "$(stat -c %i "${WORK}/server.sh")" != "${old_inode}" ]
+  old_text="$(cat <&5)"
+  exec 5<&-
+  [ "${old_text}" == "$(printf '%s\n' '#!/usr/bin/env bash' 'exit 0')" ]
+  exec 4<>"/dev/tcp/127.0.0.1/${PORT}"
+  IFS= read -r -t 2 reply <&4
+  exec 4>&-
+  [ "${reply}" == "second" ]
+}
+
+@test "serve replaces the script while other processes keep executing it" {
+  # Linux refuses a write to a file that is in execve() ("Text file busy"); the denial lasts
+  # only for the execve() itself, so this cannot be made deterministic from user space. Eight
+  # loops keep executing WORK/server.sh while serve() replaces it 60 times: an in-place
+  # rewrite was refused in 29 of 400 such calls, so the old helper fails this test with a
+  # probability of about 99 % (review follow-up of #47).
+  serve 'exit 0'
+  : >"${WORK}/exec-loops.on"
+  loops=()
+  for _ in 1 2 3 4 5 6 7 8; do
+    (while [ -e "${WORK}/exec-loops.on" ]; do "${WORK}/server.sh" </dev/null >/dev/null 2>&1 || true; done) >/dev/null 2>&1 3>&- &
+    loops+=("$!")
+  done
+  for i in $(seq 1 60); do
+    serve "printf 'v${i}\n'"
+  done
+  rm -f "${WORK}/exec-loops.on"
+  wait "${loops[@]}"
+  exec 4<>"/dev/tcp/127.0.0.1/${PORT}"
+  IFS= read -r -t 2 reply <&4
+  exec 4>&-
+  [ "${reply}" == "v60" ]
+}
+
 @test "stop_servers without WORK fails and stops no server" {
   # A setup that fails before it sets WORK still runs teardown; "/server.sh" alone would match
   # every test's servers.

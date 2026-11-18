@@ -83,3 +83,27 @@ it fail every time.
 only reads, so the client closes first), accept every state that has the property the test
 needs (FIN-WAIT-2 and TIME_WAIT both hold the port), and reproduce a suspected race by
 delaying one side deterministically instead of hoping a load loop hits it.
+
+## 2026-11-18 — A probe outside bats has no errexit; a rewrite in place races exec
+
+**Pattern:** `serve` rewrote `WORK/server.sh` in place, and a write to a file that is in
+`execve()` fails with "Text file busy". A probe script that called `serve` 600 times beside 8
+exec loops reported no failure: outside bats there is no errexit, so the refused write did not
+stop `serve`, which went on and returned 0. Read under bats, the same loop failed 30 of 30
+runs, and a tight write loop showed 43 % of writes refused.
+
+**Rule:** a probe of a test helper runs the helper as the tests do (under errexit) or checks
+its stderr whatever it returns. A file that something may execute is replaced by writing a new
+file and renaming it onto the name, never rewritten in place.
+
+**Pattern (same day):** six stress-loop containers ran `sleep infinity` as PID 1. Every
+`stop_servers` orphans socat, bash, sleep, dd and od processes, and a PID 1 that never reaps
+kept each as a zombie (2 to 12 per suite run, more with a logging wrapper). After about 5 h
+every `fork()` failed and the loops hung without failing. In CI the suite's PID 1 is bats (a
+bash process), which reaps: started that way, no zombie with parent PID 1 appeared in 179
+samples. A first check through one `docker exec` per second got 4 samples per run on this host
+and reported "at most 1 zombie", which the review could not reproduce: sample inside the
+container, and count zombies by parent, because a test's own short-lived children show up too.
+
+**Rule:** an experiment container gets a reaping PID 1 (`docker run --init`), every loop run
+a `timeout`, the loop an overall deadline, and its log a process count every few runs.

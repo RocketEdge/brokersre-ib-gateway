@@ -206,4 +206,7 @@
 
 - [x] Root cause of the intermittent `vnc-client.bats` failure (drawn port held by an earlier client in TIME_WAIT); `serve` takes port 0 from the kernel (`tests/bats/unit/socat-server.bash`)
 - [x] Review of #47: test 1 forces the client to close first and accepts FIN-WAIT-2; `stop_servers` refuses an unset `WORK`; fixed test ports below 32768 with a guard
-- [ ] Follow-up: `serve` rewrites `WORK/server.sh` in place, and test 1 of `socat-server.bats` calls it twice. On this kernel, writing a script that is in `execve()` fails with "Text file busy" (963 refused rewrites during 3000 execs), so a second `serve` can fail while the first listener's handler is still starting. Unconfirmed as the cause of the one stressed failure of test 1 (1 in 800 loaded runs, log lost; its exact sequence passed 1000 of 1000). Cheap fix: write the script under a new name and `mv` it into place (or one script per call), with a test that runs `serve` while another process keeps executing the old script
+- [x] Follow-up of #47: `serve` replaces `WORK/server.sh` by rename, never in place, with a test that runs `serve` while other processes keep executing the script (#48)
+- [ ] CI lints no `tests/bats/unit/*.bash` helper: the shellcheck glob is `tests/bats/*.sh`, the shfmt list does not name them, and pre-commit matches `.sh` files only (review of #48)
+- [ ] No check keeps `CLAUDE.md` and `.github/copilot-instructions.md` identical (none found in the review of #48): add a `cmp` step to `lint`
+- [ ] `api-handshake.bats` leaves one `sleep 30` per run behind (it ends by itself after 30 s): stop it in the suite's teardown
