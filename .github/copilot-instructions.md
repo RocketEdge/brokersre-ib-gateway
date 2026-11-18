@@ -254,7 +254,14 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   bats runs tests under errexit, so a bare `x="$(grep ...)"` that finds nothing yet ends the
   test at the first poll (only `run` lifts it). Never rewrite a script in place while anything
   may execute it: a write to a file in `execve()` fails with "Text file busy"; write a new
-  file and `mv -f` it onto the name, as `serve` does with `server.sh`.
+  file and `mv -f` it onto the name, as `serve` does with `server.sh`. `serve` starts socat
+  under `setsid`, and `stop_servers` sends SIGTERM to each listener's whole process group
+  (never the test's own), so what a handler started ends with it: matching on
+  `WORK/server.sh` alone left a handler's children running.
+- Lint: CI shellchecks and shfmts every file `git ls-files -- '*.sh' '*.bash'` lists (not
+  `.bats`); `tests/bats/ci/workflows.bats` holds the steps to that list. Waive a finding only
+  with a scoped `# shellcheck disable=SCnnnn  # reason`. `tests/bats/ci/agent-contract.bats`
+  fails when this file and `.github/copilot-instructions.md` differ.
 - A literal backslash-u sequence in a file written through an editor or agent tool can come out
   as the character it names; assemble such test strings from parts (see `render.bats`).
 - The host that develops this repository may lack `jq`: run `tests/bats/ci` inside the image

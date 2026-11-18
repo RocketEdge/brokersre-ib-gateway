@@ -5,6 +5,33 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — Follow-ups of the review of #48: lint coverage, contract check, server groups
+
+- **What changed:** (1) the lint job's shellcheck and shfmt steps lint every file
+  `git ls-files -- '*.sh' '*.bash'` lists instead of hand-written globs, which missed
+  `tests/bats/unit/socat-server.bash` and `tests/bats/ci/fake-installer.bash`; pre-commit
+  matches `.bash` too; `fake-installer.bash` gets a scoped SC2016 waiver (its single-quoted
+  lines are the generated installer's script). (2) `tests/bats/ci/agent-contract.bats` fails
+  when `CLAUDE.md` and `.github/copilot-instructions.md` differ. (3) `serve` starts socat under
+  `setsid`; `stop_servers` sends SIGTERM to each listener's process group (never the test's
+  own), then stops by name what matched in the test's own group.
+- **Result:** `workflows.bats` runs the two lint lines with stand-ins and requires exactly the
+  67 tracked files: it failed on the old lines (16 files missing: the two helpers, 11 under
+  `azure/`, 3 under `sidecar/`) and passes now. All 67 pass shellcheck 0.11.0 (the runner's
+  version) and shfmt 3.14.1. The contract test failed on a copy with one added line, printing
+  it. The new `stop_servers` test failed on the old helper (a handler's `sleep` still ran) and
+  passes; three runs of `api-handshake.bats`, `vnc-client.bats` and `socat-server.bats` in a
+  row left no process behind (the old helper left a `sleep 30` per `api-handshake.bats` run).
+- **What did NOT work / root cause:** matching on `WORK/server.sh` finds the listener and its
+  handlers but not what a handler starts: those processes name only their own command. A
+  process-tree walk was rejected because it races with a handler that forks while it is walked;
+  one kill of a process group reaches every member at once. The first version of the guard
+  test ran a `sleep` in the test's own group and left it behind itself; it now waits in a
+  builtin (`read -t` on a FIFO).
+- **Next step:** none planned. Trade-off: listeners now live in their own session, so a Ctrl-C
+  at a terminal no longer signals them directly; they end through `stop_servers` (teardown) or,
+  under `tests/bats/run-in-image.sh` and in CI, with the container.
+
 ### 2026-11-18 — `serve` replaces its script by rename, never in place
 
 - **What changed:** `serve` in `tests/bats/unit/socat-server.bash` writes each script to a new

@@ -207,6 +207,6 @@
 - [x] Root cause of the intermittent `vnc-client.bats` failure (drawn port held by an earlier client in TIME_WAIT); `serve` takes port 0 from the kernel (`tests/bats/unit/socat-server.bash`)
 - [x] Review of #47: test 1 forces the client to close first and accepts FIN-WAIT-2; `stop_servers` refuses an unset `WORK`; fixed test ports below 32768 with a guard
 - [x] Follow-up of #47: `serve` replaces `WORK/server.sh` by rename, never in place, with a test that runs `serve` while other processes keep executing the script (#48)
-- [ ] CI lints no `tests/bats/unit/*.bash` helper: the shellcheck glob is `tests/bats/*.sh`, the shfmt list does not name them, and pre-commit matches `.sh` files only (review of #48)
-- [ ] No check keeps `CLAUDE.md` and `.github/copilot-instructions.md` identical (none found in the review of #48): add a `cmp` step to `lint`
-- [ ] `api-handshake.bats` leaves one `sleep 30` per run behind (it ends by itself after 30 s): stop it in the suite's teardown
+- [x] CI lints no `tests/bats/unit/*.bash` helper: the shellcheck glob is `tests/bats/*.sh`, the shfmt list does not name them, and pre-commit matches `.sh` files only (review of #48). Done (branch `ci/review-48-followups`): both CI steps lint what `git ls-files -- '*.sh' '*.bash'` lists, held there by `workflows.bats`; pre-commit matches `.bash`
+- [x] No check keeps `CLAUDE.md` and `.github/copilot-instructions.md` identical (none found in the review of #48). Done: `tests/bats/ci/agent-contract.bats` (lint job's bats step) diffs them
+- [x] `api-handshake.bats` leaves one `sleep 30` per run behind (it ends by itself after 30 s). Done in the shared helper, not the suite: `serve` starts socat under `setsid`, `stop_servers` signals each listener's process group
