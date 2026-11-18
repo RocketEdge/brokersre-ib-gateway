@@ -13,8 +13,10 @@ Next step.
   the stand-in and fails when it has a child process.
 - **Result:** both new tests failed on the old stand-ins (a `sleep 600` child) and pass;
   `relay.bats` 60 of 60 and `start-xvfb.bats` 15 of 15 over three runs each; the whole unit
-  suite, run as CI runs it, 541 of 541, and a process list taken 12 s after it ended showed
-  nothing but PID 1 (before: 1 `sleep 600` per `relay.bats` run, 4 per `start-xvfb.bats` run).
+  suite 541 of 541, with bats as PID 1 as in CI (the review sampled the processes throughout:
+  no orphan) and under a bash PID 1, where a process list taken 12 s after the suite ended
+  showed nothing but PID 1 (before: 1 `sleep 600` per `relay.bats` run, 4 per
+  `start-xvfb.bats` run).
 - **What did NOT work / root cause:** a test killed the stand-in, by pid (`start()` in
   `start-xvfb.bats`, every test) or by `pkill -f` on its path ("a relay that dies while it is
   wanted" in `relay.bats`). A signal to a bash script never reaches the child it started in
