@@ -250,8 +250,11 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   client's port there stays in TIME_WAIT for 60 s and makes `TCP-LISTEN` fail with "Address
   already in use" even with `reuseaddr` (two CI failures of `vnc-client.bats`, 2026-11-17).
   A suite's own fixed listener or closed port stays below 32768 (`socat-server.bats` scans
-  every unit suite for one inside the range). Poll in a helper with `if x="$(grep ...)"; then`: bats runs tests under errexit, so a bare
-  `x="$(grep ...)"` that finds nothing yet ends the test at the first poll (only `run` lifts it).
+  every unit suite for one inside the range). Poll in a helper with `if x="$(grep ...)"; then`:
+  bats runs tests under errexit, so a bare `x="$(grep ...)"` that finds nothing yet ends the
+  test at the first poll (only `run` lifts it). Never rewrite a script in place while anything
+  may execute it: a write to a file in `execve()` fails with "Text file busy"; write a new
+  file and `mv -f` it onto the name, as `serve` does with `server.sh`.
 - A literal backslash-u sequence in a file written through an editor or agent tool can come out
   as the character it names; assemble such test strings from parts (see `render.bats`).
 - The host that develops this repository may lack `jq`: run `tests/bats/ci` inside the image

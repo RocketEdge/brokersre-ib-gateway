@@ -5,6 +5,34 @@ Next step.
 
 ## Change History
 
+### 2026-11-18 — `serve` replaces its script by rename, never in place
+
+- **What changed:** `serve` in `tests/bats/unit/socat-server.bash` writes each script to a new
+  `mktemp` file in `WORK`, makes it executable and renames it onto `server.sh` (`mv -f`); it
+  rewrote `server.sh` in place. Two tests in `socat-server.bats`; the contract files gain the
+  rule; the follow-up of the review of #47 leaves `tasks/todo.md`. Test-only: nothing under
+  `rootfs/` changed.
+- **Result:** on this kernel a write to a script in `execve()` is refused ("Text file busy"):
+  a tight write loop beside 1 and 8 exec loops had 2,646 of 37,519 and 20,616 of 47,475
+  writes refused in 5 s. The new-inode test (old text intact, the next connection runs the new
+  script) failed every run on `main`; the exec-loop test (8 loops executing `server.sh`, 60
+  `serve` calls) failed 30 of 30 runs on `main` with `server.sh: Text file busy` at the
+  in-place write; both pass 30 of 30 after (about 1.2 s). Stress loops, client churn and a
+  2-CPU cap, `--init`, `timeout` per run, 1500 s deadline: `socat-server.bats` 0 of 58 (+8 busy
+  loops) and 0 of 21 (+16), `vnc-client.bats` 0 of 100 and 0 of 65, `api-handshake.bats` 0 of
+  100 and 0 of 100; processes steady at 17-31, at most 1 zombie. Unit suite 536/536.
+- **What did NOT work / root cause:** no single-shot deterministic red: on kernel 6.18 the
+  write is refused only during the `execve()` itself (a running script, and even a running
+  binary, can be rewritten), so the mechanism test is a bounded loop. A first probe outside
+  bats counted 0 of 600: without errexit `serve` went on after the refused write and returned
+  0. The first stress round hung after about 5 h: its containers ran `sleep infinity` as PID
+  1, which never reaps, and each suite run orphans killed servers (2-12 zombies per run, more
+  with a logging wrapper) until `fork()` failed. CI is not affected: its PID 1 is bats, which
+  reaps (0 zombies sampled over five suites). That this race caused the one unexplained
+  stressed failure of #47 remains unproven; its log was lost.
+- **Next step:** three loops ended at their deadline before 100 runs (counts above).
+  `api-handshake.bats` leaves one `sleep 30` per run, which ends by itself.
+
 ### 2026-11-18 — Review of #47: the held-port test, `stop_servers` without `WORK`, fixed ports
 
 - **What changed:** test 1 of `socat-server.bats` gives its first server `cat >/dev/null`, so
