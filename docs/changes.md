@@ -31,9 +31,9 @@ Next step.
   1, which never reaps, and each suite run orphans killed servers (2-12 zombies per run, more
   with a logging wrapper) until `fork()` failed. CI is not affected: its PID 1 is bats (a bash
   process), which reaps. Started as CI starts them, the three suites left no zombie with parent
-  PID 1 in 179 samples taken every 0.2 s, and orphans adopted by PID 1 were gone by the next
-  sample; the zombies seen (up to 4 at once) were short-lived children of test processes. That
-  this race caused the one unexplained
+  PID 1 in 179 samples taken every 0.2 s, and an orphan adopted by PID 1 that exited was gone
+  by the next sample (seen in one run of 64 samples); the zombies seen (up to 4 at once) were
+  short-lived children of test processes. That this race caused the one unexplained
   stressed failure of #47 remains unproven; its log was lost.
 - **Next step:** three loops ended at their deadline before 100 runs (counts above).
   `api-handshake.bats` leaves one `sleep 30` per run, which ends by itself.
