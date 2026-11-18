@@ -256,7 +256,8 @@ docs/  architecture.md, changes.md, limitations.md, env-vars.md, log-contract.md
   may execute it: a write to a file in `execve()` fails with "Text file busy"; write a new
   file and `mv -f` it onto the name, as `serve` does with `server.sh`. `serve` starts socat
   under `setsid`, and `stop_servers` sends SIGTERM to each listener's whole process group
-  (never the test's own), so what a handler started ends with it: matching on
+  (never the test's own, never a group below 2: in CI bats is PID 1 and `kill -- -1` reaches
+  every process), so what a handler started ends with it: matching on
   `WORK/server.sh` alone left a handler's children running.
 - Lint: CI shellchecks and shfmts every file `git ls-files -- '*.sh' '*.bash'` lists (not
   `.bats`); `tests/bats/ci/workflows.bats` holds the steps to that list. Waive a finding only

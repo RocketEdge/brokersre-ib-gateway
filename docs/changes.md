@@ -14,13 +14,16 @@ Next step.
   lines are the generated installer's script). (2) `tests/bats/ci/agent-contract.bats` fails
   when `CLAUDE.md` and `.github/copilot-instructions.md` differ. (3) `serve` starts socat under
   `setsid`; `stop_servers` sends SIGTERM to each listener's process group (never the test's
-  own), then stops by name what matched in the test's own group.
+  own, never a group below 2), then stops by name what matched in the test's own group; when
+  it cannot read the test's own group it stops by name only and returns 1 (review of #49: in
+  CI bats is PID 1, its group is 1, and `kill -- -1` signals every process it may).
 - **Result:** `workflows.bats` runs the two lint lines with stand-ins and requires exactly the
   67 tracked files: it failed on the old lines (16 files missing: the two helpers, 11 under
   `azure/`, 3 under `sidecar/`) and passes now. All 67 pass shellcheck 0.11.0 (the runner's
   version) and shfmt 3.14.1. The contract test failed on a copy with one added line, printing
   it. The new `stop_servers` test failed on the old helper (a handler's `sleep` still ran) and
-  passes; three runs of `api-handshake.bats`, `vnc-client.bats` and `socat-server.bats` in a
+  passes; the fail-closed test (a stand-in `ps` that hides the test's own group) failed until
+  the guard was added; three runs of `api-handshake.bats`, `vnc-client.bats` and `socat-server.bats` in a
   row left no process behind (the old helper left a `sleep 30` per `api-handshake.bats` run).
 - **What did NOT work / root cause:** matching on `WORK/server.sh` finds the listener and its
   handlers but not what a handler starts: those processes name only their own command. A
@@ -28,7 +31,9 @@ Next step.
   one kill of a process group reaches every member at once. The first version of the guard
   test ran a `sleep` in the test's own group and left it behind itself; it now waits in a
   builtin (`read -t` on a FIFO).
-- **Next step:** none planned. Trade-off: listeners now live in their own session, so a Ctrl-C
+- **Next step:** `relay.bats` and `start-xvfb.bats` leave stub `sleep 600` processes behind
+  (1 and 4 per run; their stub `socat`/`Xvfb` run `sleep 600 & wait`), found in the review of
+  #49 and listed in `tasks/todo.md`. Trade-off: listeners now live in their own session, so a Ctrl-C
   at a terminal no longer signals them directly; they end through `stop_servers` (teardown) or,
   under `tests/bats/run-in-image.sh` and in CI, with the container.
 
