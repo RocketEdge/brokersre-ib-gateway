@@ -15,7 +15,7 @@
 # asks for a rebuild when a finding has a fix.
 # Both images are named directly in a FROM line, once each: Dependabot does not update an
 # image reference that is held in an ARG (GitHub's documentation of the docker ecosystem).
-FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 # The one pin of the Python base; the build and the runtime stage both start from it.
 FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS base
