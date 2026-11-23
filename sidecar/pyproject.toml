@@ -30,7 +30,7 @@ dev = [
   "hypothesis==6.170.15",
   "jsonschema==4.26.0",
   "types-jsonschema==4.26.0.20261006",
-  "ruff==0.17.4",
+  "ruff==0.17.6",
   "black==26.10.1",
   "mypy==2.4.1",
 ]
