@@ -27,7 +27,7 @@ dev = [
   "pytest==9.2.0",
   "pytest-asyncio==1.4.1.post1",
   "pytest-cov==7.1.0",
-  "hypothesis==6.170.15",
+  "hypothesis==6.170.17",
   "jsonschema==4.26.0",
   "types-jsonschema==4.26.0.20261006",
   "ruff==0.17.4",
