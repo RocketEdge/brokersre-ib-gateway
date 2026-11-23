@@ -16,7 +16,7 @@ dependencies = [
   # Outbound notifications (HTTPS webhooks). SMTP and the HTTP server use the standard library.
   "httpx==0.28.1",
   # Configuration and the versioned /status document.
-  "pydantic==2.14.3",
+  "pydantic==2.14.4",
 ]
 
 [project.scripts]
