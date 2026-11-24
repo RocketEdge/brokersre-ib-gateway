@@ -250,7 +250,7 @@ The versions this repository pins (generated from [versions.json](versions.json)
 | IBKR channel | IB Gateway | IBC | Tags |
 |---|---|---|---|
 | stable | 10.50.1h | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `stable`, `10.50`, `10.50.1h` |
-| latest | 10.52.1d | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.52`, `10.52.1d` |
+| latest | 10.53.1a | 3.24.2 (RocketEdge/ibc `3.24.2-rocketedge.1`) | `latest`, `10.53`, `10.53.1a` |
 <!-- versions:end -->
 
 ### Apple silicon and other arm64 hosts
